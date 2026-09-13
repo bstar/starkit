@@ -1,0 +1,27 @@
+# Kanagawa — the standard base16 scheme.
+# Only the sixteen colours are stated; every role is derived from them,
+# so improvements to the derivation reach this theme automatically.
+
+[meta]
+name = "Kanagawa"
+id = "kanagawa"
+author = "rebelot"
+variant = "dark"
+
+[base16]
+base00 = "#1f1f28"
+base01 = "#2a2a37"
+base02 = "#223249"
+base03 = "#363646"
+base04 = "#727169"
+base05 = "#dcd7ba"
+base06 = "#c8c093"
+base07 = "#717c7c"
+base08 = "#c34043"
+base09 = "#ffa066"
+base0A = "#c0a36e"
+base0B = "#76946a"
+base0C = "#6a9589"
+base0D = "#7e9cd8"
+base0E = "#957fb8"
+base0F = "#d27e99"

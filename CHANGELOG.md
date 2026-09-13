@@ -10,6 +10,44 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **A theme file that dresses both applications** (`theme::schema`,
+  `theme::resolve`). The format and the derivation chain: every role is
+  optional and anything omitted is derived from what was given, so an
+  eight-line theme is usable and a two-hundred-line one is exact without two
+  code paths. The core resolves the tables every application has -- the
+  palette, the chrome, the rows, the status line -- and keeps every other
+  table verbatim in `ThemeFile::extra`, handed back by `ThemeFile::table` to
+  whichever application asked for it. That is what lets one file carry
+  STAR/AMP's `[vis]` and STAR/CORD's `[chat]` at once and neither see the
+  other's as an error.
+
+- **Finding a theme, once, for both of them** (`theme::Registry`). Built-in,
+  or a file in the user's themes directory, or the desktop's own scheme, in
+  that order, with a reason string for what it settled on and a fallback
+  rather than a refusal when a config file has a typo in it. Generic over
+  what a theme resolves *to*, via `theme::Resolve`, because the lookup is
+  shared and the roles are not. The sixteen built-in themes come with it.
+
+- **Following the desktop** (`theme::base16`, `theme::system`). A line scanner
+  rather than a YAML dependency -- a scheme file is sixteen `baseXX: value`
+  lines, and Stylix's `palette.json` is the same shape -- and the detection
+  that turns one into a theme file. A file rather than a resolved theme,
+  because each application resolves its own roles out of it.
+
+- **Importing classic Winamp skins** (`theme::wsz`, feature `wsz`). A `.wsz`
+  is a ZIP of bitmaps plus `VISCOLOR.TXT` and `PLEDIT.TXT`, which is where an
+  imported skin's analyzer colours come from. Behind a feature because only
+  one of the two applications imports skins, and it is the only thing here
+  that wants a ZIP reader.
+
+- **Refusing a picture that lies about its size** (`graphics::decode_limited`).
+  The `image` crate's defaults allow any dimensions and cap only the total
+  allocation, at 512 MiB, so a few kilobytes claiming to be 10000x10000 turn
+  into four hundred megabytes before anything notices. The header is checked
+  before the pixels are read. The rest of the graphics module follows; this
+  part came early because the skin importer decodes a bitmap out of a
+  downloaded archive.
+
 - **Colour and the perceptual maths under the theme engine** (`theme::color`).
   `Rgb`, hex parsing, WCAG contrast and luminance, Oklab conversion, mixing,
   ramps, and the two contrast repairs the derivation chain leans on. Blending

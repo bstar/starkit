@@ -1,0 +1,124 @@
+# COSMIC Dark — System76's desktop palette.
+#
+# Derived from the base16 scheme the rest of this desktop uses, but hand-tuned
+# rather than mechanically derived in two places that matter:
+#
+#   * `dim` is #848484, not the scheme's base03 (#5A5A5A). base03 is a border
+#     colour in COSMIC and only reaches 2.50:1 against base00, which is not
+#     readable as text. #848484 clears WCAG AA at 4.61:1 and still reads as
+#     muted next to the #C4C4C4 body colour.
+#   * the selection is tinted toward the cyan accent instead of flat base02,
+#     which is too close to the panel background to see at a glance in a long
+#     playlist.
+#
+# The analyzer ramp is COSMIC's own colours end to end -- green through mint
+# and yellow to coral and red -- rather than the Winamp ramp recoloured.
+
+[meta]
+name = "COSMIC Dark"
+id = "cosmic"
+author = "System76 (palette) / staramp"
+variant = "dark"
+source = "cosmic-dark.yaml"
+
+[app]
+bg     = "#1b1b1b"   # base00
+fg     = "#c4c4c4"   # base05
+dim    = "#848484"   # tuned; see above
+accent = "#49bac8"   # base0D, the COSMIC signature cyan
+ok     = "#7cb987"   # base0B
+warn   = "#ddc74c"   # base0A
+error  = "#f16161"   # base08
+
+[chrome]
+titlebar_active_fg   = "#49bac8"
+titlebar_active_bg   = "#2a2a2a"   # base01
+titlebar_inactive_fg = "#5a5a5a"
+# Left to the derivation: it produces a muted line and a gentle focus tint
+# rather than a full-strength accent outline.
+border               = "#343434"
+divider              = "#2a2a2a"
+
+[panel]
+bg              = "#1b1b1b"
+header_fg       = "#49bac8"
+header_bg       = "#2a2a2a"
+empty_fg        = "#5a5a5a"
+
+[row]
+fg          = "#c4c4c4"
+index_fg    = "#848484"
+duration_fg = "#848484"
+meta_fg     = "#a0a0a0"   # base04
+selected_fg = "#ffffff"
+selected_bg = "#293a3c"   # base00 lifted 22% toward the accent
+cursor_fg   = "#c4c4c4"
+cursor_bg   = "#232b2d"
+playing_fg  = "#49bac8"
+marked_fg   = "#ddc74c"
+missing_fg  = "#f16161"
+virtual_fg  = "#97d5a0"   # base0F, so cue tracks read as their own thing
+
+[marquee]
+fg         = "#49bac8"
+paused_fg  = "#a0a0a0"
+stopped_fg = "#5a5a5a"
+
+[time]
+digit_fg     = "#49bac8"
+colon_fg     = "#49bac8"
+remaining_fg = "#ddc74c"
+
+[seek]
+track_fg  = "#3a3a3a"
+filled_fg = "#49bac8"
+thumb_fg  = "#ffffff"
+label_fg  = "#848484"
+
+[volume]
+track_fg  = "#3a3a3a"
+filled_fg = "#49bac8"   # the signature cyan: a control, not a status
+thumb_fg  = "#ffffff"
+mute_fg   = "#f16161"
+
+[eq]
+slider_track    = "#3a3a3a"
+slider_thumb    = "#ffffff"
+slider_fill_pos = "#49bac8"
+slider_fill_neg = "#ff8985"   # base09
+zero_line       = "#5a5a5a"
+band_label      = "#848484"
+band_value      = "#49bac8"
+band_focused    = "#ffffff"
+preamp_fg       = "#ddc74c"
+enabled_fg      = "#7cb987"
+disabled_fg     = "#5a5a5a"
+
+[transport]
+button_fg          = "#a0a0a0"
+button_active_fg   = "#49bac8"
+button_disabled_fg = "#3a3a3a"
+toggle_on_fg       = "#49bac8"
+toggle_off_fg      = "#5a5a5a"
+
+# Quiet to loud, entirely in COSMIC's palette:
+# base0B green -> base0F mint -> base0A yellow -> base09 coral -> base08 red.
+[vis]
+bg      = "#1b1b1b"
+grid_fg = "#2a2a2a"
+peak_fg = "#ffffff"
+grid    = "dots"
+# COSMIC's own cyan rather than a green-to-red VU: deep teal at the bottom,
+# the signature #49bac8 through the middle, near-white at the top. Five stops;
+# the theme code interpolates them to sixteen.
+ramp = ["#17414a", "#2a7d8a", "#49bac8", "#8fdce8", "#dff7fb"]
+osc = ["#ffffff", "#d2d2d2", "#b2b2b2", "#8e8e8e", "#5a5a5a"]
+
+[status]
+fg           = "#848484"
+bg           = "#202020"
+hint_key_fg  = "#1b1b1b"
+hint_key_bg  = "#49bac8"
+hint_desc_fg = "#848484"
+
+[query]

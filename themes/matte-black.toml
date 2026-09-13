@@ -1,0 +1,17 @@
+# True black for OLED, one accent, nothing else competing for attention.
+[meta]
+name = "Matte Black"
+id = "matte-black"
+variant = "dark"
+
+[app]
+bg     = "#000000"
+fg     = "#b4b4b4"
+dim    = "#7e7e7e"   # #4a4a4a is only 2.0:1 on true black
+accent = "#e5e5e5"
+ok     = "#7a9a7a"
+warn   = "#b8a05a"
+error  = "#b06060"
+
+[vis]
+grid = "off"

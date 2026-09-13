@@ -18,6 +18,8 @@
 pub mod config;
 pub mod digits;
 pub mod fs;
+#[cfg(feature = "image")]
+pub mod graphics;
 pub mod list;
 pub mod logging;
 pub mod mouse;

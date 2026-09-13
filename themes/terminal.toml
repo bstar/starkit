@@ -1,0 +1,15 @@
+# No hex at all beyond the essentials: this theme deliberately stays close to
+# whatever palette the terminal already uses, for tmux, ssh and low-colour
+# contexts where a fixed palette fights the host.
+[meta]
+name = "Terminal"
+id = "terminal"
+variant = "dark"
+
+[app]
+bg     = "#000000"
+fg     = "#c0c0c0"
+accent = "#00c0c0"
+ok     = "#00c000"
+warn   = "#c0c000"
+error  = "#c00000"

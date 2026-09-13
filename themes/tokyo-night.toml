@@ -1,0 +1,27 @@
+# Tokyo Night — the standard base16 scheme.
+# Only the sixteen colours are stated; every role is derived from them,
+# so improvements to the derivation reach this theme automatically.
+
+[meta]
+name = "Tokyo Night"
+id = "tokyo-night"
+author = "Michael Zhang"
+variant = "dark"
+
+[base16]
+base00 = "#1a1b26"
+base01 = "#16161e"
+base02 = "#2f3549"
+base03 = "#444b6a"
+base04 = "#787c99"
+base05 = "#a9b1d6"
+base06 = "#c0caf5"
+base07 = "#cfc9c2"
+base08 = "#f7768e"
+base09 = "#ff9e64"
+base0A = "#e0af68"
+base0B = "#9ece6a"
+base0C = "#7dcfff"
+base0D = "#7aa2f7"
+base0E = "#bb9af7"
+base0F = "#d5d6db"

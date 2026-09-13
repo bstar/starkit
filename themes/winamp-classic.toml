@@ -1,0 +1,77 @@
+# Winamp 2.91 base skin.
+#
+# Text colours are PLEDIT.TXT; the analyzer ramp is VISCOLOR.TXT indices 17
+# down to 2, which is why it runs green at the bottom to red at the top in
+# sixteen hard steps rather than a smooth blend.
+
+[meta]
+name = "Winamp Classic"
+id = "winamp-classic"
+author = "Nullsoft (skin) / staramp"
+variant = "dark"
+source = "base.wsz"
+
+[app]
+bg     = "#000000"
+fg     = "#969696"
+dim    = "#808080"   # lifted from the skin's #5a5a5a: that is 3.04:1 on black
+accent = "#00ff00"
+ok     = "#29ce10"
+warn   = "#d6b521"
+error  = "#ef3110"
+
+[chrome]
+titlebar_active_fg   = "#00ff00"
+titlebar_active_bg   = "#0f0f0f"
+titlebar_inactive_fg = "#3e3e3e"
+# The skin's own green is 15:1 on black, which frames nothing and shouts.
+border               = "#303030"
+divider              = "#2a2a2a"
+
+[row]
+fg          = "#00ff00"
+selected_fg = "#ffffff"
+selected_bg = "#0000c6"
+playing_fg  = "#ffffff"
+index_fg    = "#4a7a4a"
+duration_fg = "#4a7a4a"
+meta_fg     = "#5a8a5a"
+marked_fg   = "#d6b521"
+missing_fg  = "#ef3110"
+virtual_fg  = "#8ab08a"
+
+[time]
+digit_fg     = "#00ff00"
+colon_fg     = "#00ff00"
+remaining_fg = "#d6b521"
+
+[seek]
+track_fg  = "#2a2a2a"
+filled_fg = "#00ff00"
+thumb_fg  = "#ffffff"
+
+[volume]
+track_fg  = "#2a2a2a"
+filled_fg = "#00ff00"
+thumb_fg  = "#ffffff"
+
+[eq]
+slider_track    = "#2a2a2a"
+slider_thumb    = "#ffffff"
+slider_fill_pos = "#39b510"
+slider_fill_neg = "#d66600"
+zero_line       = "#4a4a4a"
+
+# VISCOLOR.TXT, reversed: index 0 here is the bottom LED row.
+[vis]
+bg      = "#000000"
+grid_fg = "#182129"
+peak_fg = "#ffffff"
+grid    = "dots"
+ramp = [
+  "#218c00", "#299400", "#319c08", "#39b510",
+  "#32be10", "#29ce10", "#94de21", "#bdde29",
+  "#d6b521", "#dea518", "#c67b08", "#d67300",
+  "#d66600", "#d65a00", "#ce2910", "#ef3110",
+]
+osc = ["#ffffff", "#d6d6de", "#b5bdbd", "#a0aaaf", "#949ca5"]
