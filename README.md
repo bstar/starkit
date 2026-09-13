@@ -1,7 +1,7 @@
-# starkit
+# STAR/KIT
 
-The terminal-UI foundation shared by [staramp](https://github.com/bstar/staramp),
-a Winamp-feel music player, and [starcord](https://github.com/bstar/starcord),
+The terminal-UI foundation shared by [STAR/AMP](https://github.com/bstar/staramp),
+a Winamp-feel music player, and [STAR/CORD](https://github.com/bstar/starcord),
 a Discord client. Both are terminal applications built on ratatui, both wanted
 the same theme engine, the same picture rendering, the same docked panels and
 the same idea of where a program's files live, and copying the answer between
@@ -35,7 +35,7 @@ applications use exactly one copy of each.
 
 ## Status
 
-Early. The crate is being lifted out of staramp a module at a time, and
+Early. The crate is being lifted out of STAR/AMP a module at a time, and
 `CHANGELOG.md` is the honest account of what has arrived. Versions are 0.x and
 tagged; both applications pin a tag.
 

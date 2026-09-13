@@ -9,9 +9,12 @@ it under another name; everything that reads such a file reads `AGENTS.md`.
 
 ## Extraction in progress
 
-This crate is being lifted out of staramp a module at a time, in an order that
-leaves staramp compiling and passing its tests after every step. Two of the
-rules below -- probing before raw mode, and the `[patch]` recipe -- describe
+This crate is being lifted out of STAR/AMP a module at a time, in an order that
+leaves STAR/AMP compiling and passing its tests after every step. The leaf
+modules, the directory rule, file logging and the whole theme engine have
+landed, and STAR/AMP now runs through all of them; the terminal graphics, the
+docked chrome, the keymap and the layout engine have not. Two of the rules
+below -- probing before raw mode, and the `[patch]` recipe -- describe
 machinery that arrives with the graphics module and with the move from a path
 dependency to a tag. They are written down now because they are the reasons
 those pieces are shaped the way they are, not because they are already load
@@ -19,7 +22,7 @@ bearing. `CHANGELOG.md` says what is actually here.
 
 ## Two consumers, both of them known
 
-Every public item in this crate exists because `staramp` or `starcord` needed
+Every public item in this crate exists because STAR/AMP or STAR/CORD needed
 it, and most of them are called from both. There is no third caller and no
 published API to keep compatible with a stranger, which is the one real
 advantage this arrangement has: **before changing a signature, read both call
@@ -72,14 +75,14 @@ warning rather than corrupting the session.
 The sixteen theme files here are read by both applications. The core resolver
 deserialises the tables it knows -- `meta`, `base16`, `app`, `chrome`, `panel`,
 `row`, `status` -- and keeps everything else in `ThemeFile::extra`, so a file
-may carry `[vis]` for staramp's analyzer and `[chat]` for starcord's message
+may carry `[vis]` for STAR/AMP's analyzer and `[chat]` for STAR/CORD's message
 list at the same time and neither one sees the other's table as an error.
 
 That is a property to preserve. A resolver that rejects unknown tables, or a
 schema that flattens the app tables into the core struct, makes every theme
 file the property of one application.
 
-Resolution is pinned at both ends: `testdata/golden/` here, and staramp's own
+Resolution is pinned at both ends: `testdata/golden/` here, and STAR/AMP's own
 `testdata/theme-golden/`, record what each built-in resolves to role by role. A
 derivation change that is deliberate is a diff of colours in those directories.
 One that is not is a failing test.

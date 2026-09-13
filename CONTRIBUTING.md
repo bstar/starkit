@@ -1,6 +1,6 @@
 # Contributing
 
-This is the library half of two applications, `staramp` and `starcord`. It has
+This is the library half of two applications, STAR/AMP and STAR/CORD. It has
 no users of its own, so the most useful thing to do before writing code is to
 say which of those two needs the change and what it looks like at the call
 site.

@@ -64,7 +64,7 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   application -- `~/.local/<app>`, overridable with `$<APP>_DIR` -- rather than
   three XDG roots, so a whole setup can be backed up or deleted by moving one
   folder. Const-constructible, and it names its own environment variables,
-  because `starcord` honouring `STARAMP_DIR` would be a surprise.
+  because STAR/CORD honouring `STARAMP_DIR` would be a surprise.
 
 - **File logging** (`logging::init`). To `<cache>/<app>.log`, filtered by
   `$<APP>_LOG` or by the `-v` flag, and covering this crate as well as the
