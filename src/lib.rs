@@ -25,6 +25,10 @@ pub mod keymap;
 pub mod list;
 pub mod logging;
 pub mod mouse;
+// An HTTP client is not something a UI library should force on a caller who
+// only wanted a theme engine.
+#[cfg(feature = "net")]
+pub mod net;
 pub mod paths;
 pub mod term;
 pub mod text;
@@ -37,6 +41,10 @@ pub use ratatui;
 pub use image;
 #[cfg(feature = "image")]
 pub use ratatui_image;
+// Re-exported for the same reason as the rest: `net::builder` hands back one of
+// this crate's types, and a caller holding a second copy of it cannot use it.
+#[cfg(feature = "net")]
+pub use ureq;
 
 // Modules that arrived with the layout and text-entry work package. They are
 // appended here rather than sorted in among the rest so that the merge with

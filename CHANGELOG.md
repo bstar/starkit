@@ -67,6 +67,16 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   one of the two applications imports skins, and it is the only thing here
   that wants a ZIP reader.
 
+- **One set of HTTP defaults** (`net`, feature `net`). Blocking, because
+  neither application has an async runtime and a frame never waits on a
+  request. The agent names its caller -- MusicBrainz answers 503 to a client
+  that does not, and a header that silently failed to apply looks exactly like
+  the service being down -- reads statuses rather than having them raised,
+  follows five redirects rather than ten, gives up after fifteen seconds, and
+  refuses plaintext so that an intercepted 302 cannot put a request back on the
+  wire in the clear. `builder` is the same without that last rule, for the one
+  caller that points an agent at a socket of its own.
+
 - **The key table, and the overlay that prints it** (`keymap`). `Binding<A>`
   and `MouseHelp` are the one place a key is described, so the dispatcher and
   the help screen cannot drift; `KeySpec::parse` reads the spellings such a
