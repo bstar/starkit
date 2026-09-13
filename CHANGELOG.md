@@ -8,6 +8,28 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Taking the terminal no longer asks it a question** (`term::init`). ratatui's
+  `Terminal::clear` reads the cursor position back so it can put the cursor
+  where it found it, which means writing `\e[6n` and blocking on an answer. A
+  terminal with nobody behind it -- a tmux pane with no attached client, a bare
+  pty, a CI harness -- never answers, and the application hung before its first
+  frame with nothing on screen to say why: STAR/CORD would only start with its
+  output piped through `cat`, which turns the query into a no-op. The screen is
+  now cleared with an escape of this crate's own and the terminal built
+  afterwards, over the blank screen its own blank back buffer already assumes.
+
+### Added
+
+- **Focus reporting, turned on with everything else** (`term::init`). An
+  application has things to stop doing when its window is not in front --
+  acknowledging messages somebody else is reading, animating a picture nobody
+  can see -- and STAR/CORD was writing the escape for it itself immediately
+  after `init`, which left `restore` not knowing to undo it. A terminal that
+  does not support it sends neither event, so an application that ignores both
+  is where it was.
+
 ## [0.1.0] - 2026-09-13
 
 ### Added
