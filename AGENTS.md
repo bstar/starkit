@@ -7,18 +7,22 @@ both Linux and macOS and the repository is the only thing every session sees.
 This is the only notes file of its kind here. Do not add a second one beside
 it under another name; everything that reads such a file reads `AGENTS.md`.
 
-## Extraction in progress
+## Released by tag, consumed by two applications
 
-This crate is being lifted out of STAR/AMP a module at a time, in an order that
-leaves STAR/AMP compiling and passing its tests after every step. Everything
-STAR/AMP is giving up has now landed here and STAR/AMP runs through all of it:
-the leaf modules, the directory rule, file logging, the theme engine, the
-terminal graphics, the panel chrome, the key table and help overlay, and the
-HTTP defaults, plus the layout engine and text field written here for
-STAR/CORD. What remains of the move is the last step: STAR/AMP depending on a
-tag rather than on this directory, which is when the `[patch]` recipe below
-stops being advice and starts being the only way to try a change from the
-application. `CHANGELOG.md` says what is here.
+This crate was lifted out of STAR/AMP a module at a time and the move is
+finished: the leaf modules, the directory rule, file logging, the theme
+engine, the terminal graphics, the panel chrome, the key table and help
+overlay and the HTTP defaults came from there, and the layout engine, text
+field, wrapper and virtual list were written here for STAR/CORD.
+`CHANGELOG.md` says what is here.
+
+It is not published to crates.io -- there is no third consumer to publish it
+for -- so both applications depend on a **git tag**, and nothing that lands
+here reaches either of them until one is cut. Releasing is `CHANGELOG.md`,
+the version in `Cargo.toml`, a `vX.Y.Z` tag, and then a commit in each
+application that moves its `tag` and its `Cargo.lock` and does nothing else
+("Take starkit 0.Y"). Semver 0.x: an API change is a minor bump, a fix is a
+patch.
 
 ## Two consumers, both of them known
 
@@ -42,20 +46,19 @@ application is a fork, not an issue.
 
 ## Working on it from an application
 
-Once the extraction is finished both applications will depend on a tag rather
-than on this directory, and a local change will not be visible to them until it
-is released. To try one before it is:
+A change here is invisible to an application until it is tagged, which is the
+cost of pinning tags and is worth paying. To try one before it is:
 
 ```toml
-# ../staramp/.cargo/config.toml -- never committed
+# ../staramp/.cargo/config.toml -- untracked, and in .gitignore
 [patch."https://github.com/bstar/starkit"]
 starkit = { path = "../starkit" }
 ```
 
-`.cargo/config.toml` is deliberately not in either application's `.gitignore`
-as an invitation: it is untracked, it is per-checkout, and a committed one
-would point CI at a path that does not exist. Delete it when the change is
-tagged and the application has moved to the new tag.
+`.cargo/` is ignored in both applications rather than merely left untracked: a
+committed one points their CI at a path that does not exist on the runner, and
+the failure it produces names cargo rather than the file. Delete it when the
+change is tagged and the application has moved to the new tag.
 
 ## Probe before raw mode
 
