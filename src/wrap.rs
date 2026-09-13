@@ -269,6 +269,110 @@ pub fn wrap(text: &str, width: u16) -> Vec<Row> {
     rows
 }
 
+/// A run's share of one row: which run it came from, and which of its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Piece {
+    /// Index into the `runs` that were wrapped.
+    pub run: usize,
+    /// Bytes of *that run*, break space and newline included, exactly as
+    /// [`Row::range`] includes them.
+    pub range: Range<usize>,
+}
+
+impl Piece {
+    pub fn slice<'a>(&self, runs: &[&'a str]) -> &'a str {
+        &runs[self.run][self.range.clone()]
+    }
+}
+
+/// One row of wrapped runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunRow {
+    /// In order, left to right. A row crossing a run boundary has one piece
+    /// per run it touches; a run long enough to wrap has a piece on each row.
+    pub pieces: Vec<Piece>,
+    /// Display columns of the drawn part of the row, as [`Row::width`].
+    pub width: u16,
+}
+
+impl RunRow {
+    /// The pieces to draw: these pieces, with the trailing newline and the
+    /// spaces a break was taken at removed from the end, and anything left
+    /// empty dropped.
+    ///
+    /// The difference matters here in a way it does not for plain text. A
+    /// break space carries the style of the run it came from, and a styled
+    /// space is visible: a trailing cell of inline-code background, or of
+    /// selection, past the last word of the row.
+    pub fn drawn(&self, runs: &[&str]) -> Vec<Piece> {
+        let mut out = self.pieces.clone();
+        while let Some(last) = out.last_mut() {
+            let text = &runs[last.run][last.range.clone()];
+            let keep = text.trim_end_matches('\n').trim_end_matches(' ').len();
+            last.range.end = last.range.start + keep;
+            if !last.range.is_empty() {
+                break;
+            }
+            out.pop();
+        }
+        out
+    }
+}
+
+/// Wrap a line that is already cut into styled runs.
+///
+/// The same wrapping as [`wrap`] -- the same rules, the same cluster
+/// measurement, literally the same code -- reported per run, for a caller
+/// whose text arrives as a list of spans it has to hand back as a list of
+/// spans. Without it the caller writes the cluster loop a second time, and the
+/// second one disagrees with the first about a family emoji in a way that
+/// shows up as a message list whose scrollbar is the wrong length.
+///
+/// A run boundary is not a break opportunity: the runs are concatenated and
+/// wrapped as one string, so a word made of a bold half and a plain half wraps
+/// as a word. Which also means a cluster that spans a boundary -- a letter in
+/// one run and its accent in the next -- is never split *between rows*, though
+/// it is split between pieces on the same row, because that is what the caller
+/// asked for by styling the two halves differently.
+///
+/// The style itself is not a parameter. It plays no part in where a line
+/// breaks, and a caller holding `Vec<Span>` or `Vec<(String, Style)>` has
+/// neither of them as a slice of pairs anyway; it passes the strings and
+/// indexes its own styles by [`Piece::run`].
+pub fn wrap_runs(runs: &[&str], width: u16) -> Vec<RunRow> {
+    let mut joined = String::with_capacity(runs.iter().map(|r| r.len()).sum());
+    // Where each run starts in `joined`, so a row's range can be cut back up
+    // into the runs it crosses.
+    let mut starts = Vec::with_capacity(runs.len() + 1);
+    for r in runs {
+        starts.push(joined.len());
+        joined.push_str(r);
+    }
+    starts.push(joined.len());
+
+    wrap(&joined, width)
+        .into_iter()
+        .map(|row| {
+            let mut pieces = Vec::new();
+            for (i, r) in runs.iter().enumerate() {
+                let (rs, re) = (starts[i], starts[i] + r.len());
+                let start = row.range.start.max(rs);
+                let end = row.range.end.min(re);
+                if start < end {
+                    pieces.push(Piece {
+                        run: i,
+                        range: start - rs..end - rs,
+                    });
+                }
+            }
+            RunRow {
+                pieces,
+                width: row.width,
+            }
+        })
+        .collect()
+}
+
 /// How many rows `text` occupies at `width`.
 pub fn height(text: &str, width: u16) -> u16 {
     wrap(text, width).len().min(u16::MAX as usize) as u16
@@ -586,6 +690,171 @@ mod tests {
         back.reverse();
         assert_eq!(fwd, back);
         assert_eq!(fwd.len(), 4, "three clusters");
+    }
+
+    // -- runs --------------------------------------------------------------
+
+    /// The drawn text of every row, run by run.
+    fn drawn_runs(runs: &[&str], rows: &[RunRow]) -> Vec<Vec<String>> {
+        rows.iter()
+            .map(|r| {
+                r.drawn(runs)
+                    .iter()
+                    .map(|p| p.slice(runs).to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The one thing a caller cannot do for itself: a word whose halves are
+    /// styled differently is still a word.
+    #[test]
+    fn a_run_boundary_in_the_middle_of_a_word_is_not_a_break() {
+        let runs = ["hel", "lo there"];
+        let rows = wrap_runs(&runs, 5);
+        assert_eq!(
+            drawn_runs(&runs, &rows),
+            vec![vec!["hel", "lo"], vec!["there"]]
+        );
+    }
+
+    #[test]
+    fn a_row_that_crosses_runs_has_a_piece_of_each() {
+        let runs = ["bold ", "plain ", "italic"];
+        let rows = wrap_runs(&runs, 40);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pieces.len(), 3);
+        assert_eq!(rows[0].width, 17);
+        // And a run long enough to wrap has a piece on every row it reaches.
+        let runs = ["a ", "one two three four"];
+        let rows = wrap_runs(&runs, 9);
+        assert_eq!(
+            drawn_runs(&runs, &rows),
+            vec![vec!["a ", "one two"], vec!["three"], vec!["four"]],
+            "the space inside a row is drawn; only a break space at the end is not"
+        );
+    }
+
+    /// The break space belongs to the run it came from, and a styled space at
+    /// the end of a row is a visible cell of the wrong colour.
+    #[test]
+    fn the_break_space_is_covered_but_not_drawn() {
+        let runs = ["the quick ", "brown fox"];
+        let rows = wrap_runs(&runs, 10);
+        assert_eq!(
+            rows[0].pieces,
+            vec![Piece {
+                run: 0,
+                range: 0..10
+            }]
+        );
+        assert_eq!(
+            rows[0].drawn(&runs),
+            vec![Piece {
+                run: 0,
+                range: 0..9
+            }]
+        );
+        assert_eq!(rows[0].width, 9);
+
+        // A row whose last piece is nothing but the break space loses it
+        // whole rather than drawing an empty span.
+        let runs = ["a ", " ", "b"];
+        let rows = wrap_runs(&runs, 1);
+        assert_eq!(drawn_runs(&runs, &rows), vec![vec!["a"], vec!["b"]]);
+    }
+
+    #[test]
+    fn wrapping_runs_agrees_with_wrapping_the_text_they_spell() {
+        let runs = [
+            "a\u{301}\u{1f468}\u{200d}\u{1f469} ",
+            "\u{541b}\u{306e}\u{540d}\u{306f}",
+            " supercalifragilistic",
+        ];
+        let joined: String = runs.concat();
+        for width in 1u16..30 {
+            let rows = wrap_runs(&runs, width);
+            let plain = wrap(&joined, width);
+            assert_eq!(rows.len(), plain.len(), "at {width}");
+            for (r, p) in rows.iter().zip(&plain) {
+                assert_eq!(r.width, p.width, "at {width}");
+                let text: String = r.pieces.iter().map(|piece| piece.slice(&runs)).collect();
+                assert_eq!(text, p.slice(&joined), "at {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_run_is_not_a_row_of_its_own() {
+        let runs = ["", "hello", ""];
+        let rows = wrap_runs(&runs, 20);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].pieces,
+            vec![Piece {
+                run: 1,
+                range: 0..5
+            }]
+        );
+        assert!(
+            wrap_runs(&[], 20).len() == 1,
+            "and nothing at all is one empty row"
+        );
+        assert!(
+            wrap_runs(&["a"], 0)[0].pieces.is_empty(),
+            "no width, no pieces"
+        );
+    }
+
+    fn check_run_invariants(runs: &[&str], width: u16) {
+        let rows = wrap_runs(runs, width);
+        assert!(!rows.is_empty());
+
+        // Every byte of every run, exactly once, in order.
+        let mut at: Vec<usize> = vec![0; runs.len()];
+        let mut last_run = 0usize;
+        for row in &rows {
+            for p in &row.pieces {
+                assert!(!p.range.is_empty(), "an empty piece was kept");
+                assert!(p.run >= last_run, "runs came back out of order");
+                assert_eq!(p.range.start, at[p.run], "run {} does not tile", p.run);
+                let text = runs[p.run];
+                assert!(text.is_char_boundary(p.range.start));
+                assert!(text.is_char_boundary(p.range.end));
+                at[p.run] = p.range.end;
+                last_run = p.run;
+            }
+        }
+        for (i, r) in runs.iter().enumerate() {
+            assert_eq!(at[i], r.len(), "run {i} is not covered");
+        }
+
+        for row in &rows {
+            let drawn: String = row
+                .drawn(runs)
+                .iter()
+                .map(|p| p.slice(runs).to_string())
+                .collect();
+            assert_eq!(row.width, width_of(&drawn), "wrong width for {drawn:?}");
+            assert!(
+                row.width <= width || clusters(&drawn).count() == 1,
+                "row {drawn:?} is {} wide at width {width}",
+                row.width
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn styled_runs_tile_and_fit_the_same_way(
+            runs in proptest::collection::vec("(?s).{0,30}", 0..6),
+            width in 1u16..24,
+        ) {
+            let runs: Vec<&str> = runs.iter().map(String::as_str).collect();
+            check_run_invariants(&runs, width);
+        }
     }
 
     fn check_invariants(text: &str, width: u16) {

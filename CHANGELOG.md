@@ -30,6 +30,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **Wrapping text that is already styled** (`wrap::wrap_runs`). The same
+  wrapping as `wrap`, over a line that arrives as a list of runs and has to
+  leave as one: which bytes of which run are on each row. STAR/CORD was
+  writing the cluster loop a second time to produce `Vec<Span>`, and a second
+  copy of it is a copy that disagrees with the first about a family emoji --
+  which shows up as a message list whose heights and whose drawing are
+  measuring different things. A run boundary is not a break opportunity, so a
+  word with a bold half and a plain half wraps as a word, and the break space
+  is covered by a piece but left out of the drawn ones: a styled space at the
+  end of a row is a visible cell of the wrong colour.
+
 - **Two more directories both applications had written out by hand**
   (`Paths::session_file`, `Paths::media_cache_dir`). `<base>/session.toml` for
   what was open when the application was last closed -- data rather than
