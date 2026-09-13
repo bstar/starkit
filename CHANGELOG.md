@@ -67,9 +67,11 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   because `starcord` honouring `STARAMP_DIR` would be a surprise.
 
 - **File logging** (`logging::init`). To `<cache>/<app>.log`, filtered by
-  `$<APP>_LOG` or by the `-v` flag. Never stdout: it corrupts the alternate
-  screen, and a TUI that scribbles on itself when something goes wrong is worse
-  than one that says nothing.
+  `$<APP>_LOG` or by the `-v` flag, and covering this crate as well as the
+  application: half of what an application does now happens in here, and a
+  default filter naming only the application turns all of it off. Never
+  stdout: it corrupts the alternate screen, and a TUI that scribbles on itself
+  when something goes wrong is worse than one that says nothing.
 
 - **Writes that cannot be half-done** (`fs::write_atomic`, `fs::write_private`).
   Temporary file in the same directory, then a rename. Everything either
