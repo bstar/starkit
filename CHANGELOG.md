@@ -67,13 +67,37 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   one of the two applications imports skins, and it is the only thing here
   that wants a ZIP reader.
 
+- **Pictures on a terminal that will have them** (`graphics`, feature `image`).
+  Capability probing, the four modes (`auto`, `kitty`, `blocks`, `off`), the
+  cell measurement a font zoom invalidates, and the half-block and `░`
+  fallbacks for everything else. `Graphics::probe` must run before raw mode,
+  since the terminal's reply arrives on stdin; `term::init` now records that it
+  ran and probing afterwards asserts in a debug build and degrades to no
+  pictures in a release one, rather than reading the user's keystrokes as the
+  terminal's answer.
+
+- **One cache for every encoded picture** (`graphics::ImageCache`). Keyed by
+  what the picture *is* rather than by any name the application knows it by --
+  keying a cover on its track served the second cover of an album as the first
+  -- and by its placement in cells *and* in pixels, which are two different
+  facts: four cells of seven pixels and two of fourteen are both twenty-eight,
+  and a protocol placed over cells it was not built for leaves the rest showing
+  whatever the terminal had there. Least-recently-used, because what is on the
+  other side of it is the terminal's own memory, with `forget`, `forget_all`
+  and a `forget_unused` for a view that knows what it just drew.
+
+- **Shapes drawn as pixels rather than as glyphs** (`graphics::raster`). A
+  polygon scan-converter that anti-aliases by supersampling the same shape test
+  that decides the fill, so an edge cannot disagree with its interior. A
+  terminal program cannot ship a font: a text icon is drawn by whatever typeface
+  the terminal fell back to, and two machines set to different fonts draw two
+  different rows of buttons from the same bytes.
+
 - **Refusing a picture that lies about its size** (`graphics::decode_limited`).
   The `image` crate's defaults allow any dimensions and cap only the total
   allocation, at 512 MiB, so a few kilobytes claiming to be 10000x10000 turn
   into four hundred megabytes before anything notices. The header is checked
-  before the pixels are read. The rest of the graphics module follows; this
-  part came early because the skin importer decodes a bitmap out of a
-  downloaded archive.
+  before the pixels are read.
 
 - **Colour and the perceptual maths under the theme engine** (`theme::color`).
   `Rgb`, hex parsing, WCAG contrast and luminance, Oklab conversion, mixing,

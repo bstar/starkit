@@ -6,6 +6,7 @@
 //! the difference between a bug report and a bad afternoon.
 
 use std::io::{self, Stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use crossterm::execute;
@@ -17,9 +18,25 @@ use ratatui::Terminal;
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// Whether the application currently owns the keyboard.
+///
+/// Read by `graphics::Graphics::probe`, which writes a capability query to the
+/// terminal and reads the reply off stdin. Once raw mode is on, that reply
+/// arrives interleaved with the user's keystrokes -- the probe reports whatever
+/// they typed as the terminal's answer, and the keys they meant to press are
+/// eaten. The ordering cannot be expressed in a type across a crate boundary,
+/// so it is recorded here instead and asserted there.
+static ENTERED: AtomicBool = AtomicBool::new(false);
+
+/// Has the terminal been taken over since the last [`restore`]?
+pub fn entered() -> bool {
+    ENTERED.load(Ordering::SeqCst)
+}
+
 pub fn init() -> Result<Tui> {
     install_panic_hook();
     enable_raw_mode()?;
+    ENTERED.store(true, Ordering::SeqCst);
     let mut out = io::stdout();
     execute!(
         out,
@@ -34,6 +51,11 @@ pub fn init() -> Result<Tui> {
 }
 
 pub fn restore() -> Result<()> {
+    // Cleared first, so that an application which drops back to the ordinary
+    // screen -- to run an external viewer, or an editor -- may probe again,
+    // and so that a failure below does not leave the flag saying the keyboard
+    // is still owned.
+    ENTERED.store(false, Ordering::SeqCst);
     let mut out = io::stdout();
     execute!(
         out,
