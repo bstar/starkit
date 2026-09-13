@@ -15,6 +15,17 @@
 //! two versions carrying the same number, which sends the reader looking for a
 //! problem that is not there.
 
+pub mod config;
+pub mod digits;
+pub mod fs;
+pub mod list;
+pub mod logging;
+pub mod mouse;
+pub mod paths;
+pub mod term;
+pub mod text;
+pub mod theme;
+
 pub use crossterm;
 pub use ratatui;
 
