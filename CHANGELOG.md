@@ -10,6 +10,33 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **A layout tree for docked panels** (`dock`). One `layout` call per frame
+  answers where every panel is, and both drawing and mouse handling read that
+  answer; nothing else computes a rect. Splits, fixed and flexible sizes,
+  minimums, seams that drag, hidden panels, focus order, and a config shape
+  that round-trips through TOML. Placed rects always tile the area exactly;
+  what does not fit is reported, not overlapped.
+
+- **A text field** (`input`). One line or several, a cursor that steps by
+  cluster so a family emoji is one backspace, the readline keys, bracketed
+  paste, and a `render` that says where the terminal's own cursor goes. Any
+  key it does not know is reported as such, so an application's `alt+` panel
+  keys keep working while the field has focus.
+
+- **Wrapping that reports where it cut** (`wrap`). Byte ranges per row,
+  measured per cluster with `unicode-width`, so a message list can know how
+  tall a message is before deciding what is on screen and which byte is
+  under the pointer. With a bounded cache keyed by text and width.
+
+- **A bottom-anchored virtual list** (`vlist`). Variable-height items,
+  stick-to-end that lets go on the first upward scroll and returns when the
+  end comes back into view, hit-testing that inverts the layout.
+
+- **Animated GIF frames** (`anim`, feature `gif`). Decoded with caps on
+  pixels and frames checked before anything is allocated, a 20 ms floor on
+  frame delay, and the time until the next frame for a redraw loop to sleep
+  on.
+
 - **A theme file that dresses both applications** (`theme::schema`,
   `theme::resolve`). The format and the derivation chain: every role is
   optional and anything omitted is derived from what was given, so an

@@ -453,21 +453,9 @@ fn byte_at_column(text: &str, row: &Row, col: u16) -> usize {
     at
 }
 
-/// Keep `cursor` inside a window of `height` rows starting at `scroll`.
-///
-/// The same arithmetic as `list::clamp_scroll`, in terms of rows rather than
-/// items; it is three lines and importing it would tie a text field to a list
-/// widget for no reason.
+/// The list rule, in the field's row units.
 fn clamp_scroll(cursor: u16, scroll: u16, height: u16) -> u16 {
-    if height == 0 {
-        0
-    } else if cursor < scroll {
-        cursor
-    } else if cursor >= scroll + height {
-        cursor + 1 - height
-    } else {
-        scroll
-    }
+    crate::list::clamp_scroll(cursor as usize, scroll as usize, height as usize) as u16
 }
 
 #[cfg(test)]
