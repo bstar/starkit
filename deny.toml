@@ -33,6 +33,12 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
+    # ureq's TLS stack behind the `net` feature: ring and rustls-webpki are
+    # ISC, and webpki-roots ships Mozilla's root store under CDLA-Permissive.
+    # A check run without `--all-features` never sees them, which is how they
+    # went missing once; CI checks with every feature on.
+    "CDLA-Permissive-2.0",
+    "ISC",
     "MIT",
     "Unicode-3.0",
     "Unlicense",
