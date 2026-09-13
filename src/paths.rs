@@ -83,6 +83,16 @@ impl Paths {
         Ok(self.base_dir()?.join("cache"))
     }
 
+    /// Downloaded pictures: avatars, emoji, attachments, cover art.
+    ///
+    /// A directory of its own under the cache rather than the cache itself, so
+    /// that a user clearing space, or a support answer saying to, can name the
+    /// bytes that came off somebody else's server without taking the log and
+    /// whatever else lives there with them.
+    pub fn media_cache_dir(&self) -> Result<PathBuf> {
+        Ok(self.cache_dir()?.join("media"))
+    }
+
     pub fn log_dir(&self) -> Result<PathBuf> {
         self.cache_dir()
     }
@@ -95,6 +105,18 @@ impl Paths {
     /// that pasting a config file into a bug report cannot leak one.
     pub fn credentials_file(&self) -> Result<PathBuf> {
         Ok(self.data_dir()?.join("credentials.toml"))
+    }
+
+    /// Where the application was when it was last closed: the last thing
+    /// open, unsent drafts, scroll positions.
+    ///
+    /// Data rather than config, because nobody typed it, and next to the
+    /// credentials rather than in the cache, because losing it loses work. It
+    /// is not a secret and it is not harmless either -- it names every channel
+    /// or playlist the user reads -- so it goes in the directory that is 0700
+    /// rather than the one a bug report gets pasted from.
+    pub fn session_file(&self) -> Result<PathBuf> {
+        Ok(self.data_dir()?.join("session.toml"))
     }
 
     /// Volatile per-user state: sockets, and nothing that should survive a
@@ -298,6 +320,29 @@ mod tests {
         assert!(P.cache_dir().unwrap().starts_with(&base));
         assert!(P.log_dir().unwrap().starts_with(&base));
         assert!(P.credentials_file().unwrap().starts_with(&base));
+        assert!(P.session_file().unwrap().starts_with(&base));
+        assert!(P.media_cache_dir().unwrap().starts_with(&base));
+    }
+
+    /// Where the two new ones land, exactly, because both applications had
+    /// written the same two paths out by hand before this and a shared one
+    /// that pointed somewhere else would orphan what is already on disk.
+    #[test]
+    fn the_session_is_kept_with_the_data_and_the_pictures_with_the_cache() {
+        if home_dir().is_none() {
+            return;
+        }
+        assert_eq!(
+            P.session_file().unwrap(),
+            P.data_dir().unwrap().join("session.toml")
+        );
+        assert_eq!(
+            P.media_cache_dir().unwrap(),
+            P.cache_dir().unwrap().join("media")
+        );
+        // Not in the cache: clearing space must not lose a draft.
+        let session = P.session_file().unwrap();
+        assert!(!session.starts_with(P.cache_dir().unwrap()));
     }
 
     #[test]

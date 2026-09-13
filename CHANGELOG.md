@@ -30,6 +30,15 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **Two more directories both applications had written out by hand**
+  (`Paths::session_file`, `Paths::media_cache_dir`). `<base>/session.toml` for
+  what was open when the application was last closed -- data rather than
+  config, because nobody typed it, and 0700 rather than 0644, because it names
+  everything the user reads -- and `<cache>/media` for the pictures that came
+  off somebody else's server, in a directory of its own so that clearing them
+  does not take the log with it. STAR/CORD kept a whole copy of `paths.rs` for
+  these two; it can now be the thin wrapper the others are.
+
 - **Which settings row is under the pointer** (`chrome::settings::hit`). The
   overlay could be scrolled and chosen from with the keyboard but not clicked,
   because the arithmetic that says where a row was drawn lived inside the
