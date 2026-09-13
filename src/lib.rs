@@ -26,4 +26,5 @@ pub use ratatui_image;
 // Modules that arrived with the layout and text-entry work package. They are
 // appended here rather than sorted in among the rest so that the merge with
 // whatever else was landing at the same time is a single hunk.
+pub mod vlist;
 pub mod wrap;
