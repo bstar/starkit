@@ -10,15 +10,15 @@ it under another name; everything that reads such a file reads `AGENTS.md`.
 ## Extraction in progress
 
 This crate is being lifted out of STAR/AMP a module at a time, in an order that
-leaves STAR/AMP compiling and passing its tests after every step. The leaf
-modules, the directory rule, file logging and the whole theme engine have
-landed, and STAR/AMP now runs through all of them; the terminal graphics, the
-docked chrome, the keymap and the layout engine have not. Two of the rules
-below -- probing before raw mode, and the `[patch]` recipe -- describe
-machinery that arrives with the graphics module and with the move from a path
-dependency to a tag. They are written down now because they are the reasons
-those pieces are shaped the way they are, not because they are already load
-bearing. `CHANGELOG.md` says what is actually here.
+leaves STAR/AMP compiling and passing its tests after every step. Everything
+STAR/AMP is giving up has now landed here and STAR/AMP runs through all of it:
+the leaf modules, the directory rule, file logging, the theme engine, the
+terminal graphics, the panel chrome, the key table and help overlay, and the
+HTTP defaults, plus the layout engine and text field written here for
+STAR/CORD. What remains of the move is the last step: STAR/AMP depending on a
+tag rather than on this directory, which is when the `[patch]` recipe below
+stops being advice and starts being the only way to try a change from the
+application. `CHANGELOG.md` says what is here.
 
 ## Two consumers, both of them known
 
