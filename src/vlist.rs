@@ -431,11 +431,11 @@ mod tests {
     fn zero_height_items_do_not_stall_the_walk() {
         // A message whose height has not been measured yet is zero rows; the
         // walk must step over it rather than filling the viewport with it.
-        let sparse = |i: usize| if i % 2 == 0 { 0 } else { 1 };
+        let sparse = |i: usize| u16::from(!i.is_multiple_of(2));
         let l = VirtualList::at(0);
         let v = l.visible(VIEW, sparse, 40);
         assert_eq!(v.len(), 10);
-        assert!(v.iter().all(|x| x.index % 2 == 1));
+        assert!(v.iter().all(|x| !x.index.is_multiple_of(2)));
     }
 
     #[test]
