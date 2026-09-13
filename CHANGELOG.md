@@ -10,6 +10,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed
 
+- **A key arrives spelled the way the table writes it** (`Keymap::resolve`).
+  `KeySpec::parse` already normalises what is written -- `shift+tab` is
+  `BackTab`, `shift+d` is `D` -- but the arriving event was matched as the
+  terminal happened to send it, so a table was correct in one terminal and
+  silently wrong in the next, and STAR/CORD had a `normalise` of its own in
+  front of every lookup. `resolve` now does it, and resolves presses only: a
+  terminal that reports releases sent every action twice.
+
 - **Taking the terminal no longer asks it a question** (`term::init`). ratatui's
   `Terminal::clear` reads the cursor position back so it can put the cursor
   where it found it, which means writing `\e[6n` and blocking on an answer. A
@@ -21,6 +29,19 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   afterwards, over the blank screen its own blank back buffer already assumes.
 
 ### Added
+
+- **A binding on the slash key, written in the column that prints it**
+  (`keymap::alternatives`). The column separates alternatives on `/` and `,`,
+  which left the one key every client binds to search unwritable in it:
+  STAR/CORD kept a one-entry `UNSPELLABLE` table beside its bindings and
+  checked it before the keymap. A separator with nothing on one side of it is
+  now the key rather than a separator, so `"ctrl+f / /"` is two spellings of
+  search and the help overlay prints what is actually bound.
+
+- **The two columns the help overlay lays out** (`keymap::KEYS_COLUMN`,
+  `keymap::GESTURE_COLUMN`). STAR/CORD generates `docs/keys-and-mouse.md` from
+  the same table the overlay draws, and a copy of the number in the generator
+  is a document that drifts from the screen it documents.
 
 - **Putting the cursor somewhere, and putting a string where it is**
   (`TextInput::set_cursor`, `TextInput::insert_str`). Accepting an
