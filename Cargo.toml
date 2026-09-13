@@ -1,0 +1,108 @@
+[package]
+name = "starkit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "The terminal-UI foundation shared by staramp and starcord"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bstar/starkit"
+keywords = ["tui", "ratatui", "terminal", "theme"]
+categories = ["command-line-interface"]
+
+# A library and nothing else. Stated rather than inferred, because the two
+# things that reach for a `[[bin]]` here -- a demo and a theme dumper -- both
+# belong in whichever application wants them.
+[lib]
+name = "starkit"
+path = "src/lib.rs"
+
+[features]
+# Pictures are on by default because both applications draw them and a
+# terminal that cannot is detected at runtime, not at compile time. Turning
+# them off is for a build that must not link an image decoder at all.
+default = ["image"]
+image = ["dep:ratatui-image", "dep:image"]
+# Animated GIFs are starcord's; staramp has no use for them and should not
+# carry the decoder.
+gif = ["image", "image/gif"]
+# Winamp skin import is staramp's, and it is the only thing that needs a ZIP
+# reader or a BMP decoder.
+wsz = ["dep:zip", "image", "image/bmp"]
+# An HTTP client is not something a UI library should force on a caller who
+# only wanted a theme engine.
+net = ["dep:ureq"]
+
+[dependencies]
+# TUI. crossterm as a direct dependency, not only via ratatui's re-export,
+# because raw mode, the alternate screen, mouse capture, bracketed paste and
+# the panic hook that undoes all of it are this crate's job.
+#
+# Both are re-exported from `lib.rs`. A ratatui `Widget` implemented against a
+# different copy of ratatui than the application's does not type-check, and the
+# error when that happens names two identical versions and explains nothing --
+# so there is exactly one copy and it comes from here.
+ratatui = "0.30"
+crossterm = "0.29"
+
+# Terminal graphics. No default features: the default set pulls in every
+# backend, and crossterm is the only one that can share this crate's terminal.
+ratatui-image = { version = "11.0.6", default-features = false, features = [
+    "crossterm",
+], optional = true }
+# Decoders, chosen rather than defaulted: PNG and JPEG cover album art, avatars
+# and attachments; GIF and BMP arrive through the `gif` and `wsz` features
+# where they are actually wanted.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+], optional = true }
+
+# Winamp .wsz skins are plain ZIP archives of BMPs plus two text files.
+zip = { version = "2", default-features = false, features = [
+    "deflate",
+], optional = true }
+
+# Avatar, artwork and emoji fetches. Blocking, because both applications do
+# their networking on threads of their own rather than in an async runtime.
+ureq = { version = "3", optional = true }
+
+# Config and theme files. A real parser: the reference implementation this
+# borrows its look from hand-rolls a line scanner and silently ignores anything
+# it does not recognise.
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+
+# Errors that cross a crate boundary carry context rather than a bare io::Error
+# naming a path the caller never chose.
+anyhow = "1"
+
+# Logging -- file only. Never stdout: it corrupts the alternate screen, and a
+# TUI that scribbles on itself when something goes wrong is worse than one that
+# says nothing.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Marquees, truncation and wrapping break badly on CJK and emoji without real
+# width measurement, and every one of those strings is somebody else's text.
+unicode-width = "0.2"
+
+[dev-dependencies]
+# Temporary directories for the code that writes files, so the tests never
+# touch a real config.
+tempfile = "3"
+
+# Adversarial input for the parsers, generated rather than imagined. Everything
+# here that parses reads a file somebody else wrote -- a config, a theme, a
+# skin -- and a hand-written test only covers the malformed input its author
+# thought of.
+#
+# `fork` and `timeout` are what make a case that hangs or overflows the stack
+# report itself instead of taking the test binary down with it.
+proptest = { version = "1", default-features = false, features = [
+    "std",
+    "bit-set",
+    "fork",
+    "timeout",
+] }

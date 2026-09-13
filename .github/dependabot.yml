@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Actions only. The cargo ecosystem is deliberately left out: a bump here
+  # lands in both applications at once, and which version of a shared
+  # dependency they end up unifying on is a decision to make while looking at
+  # all three repositories rather than one a bot makes on a schedule.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

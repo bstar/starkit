@@ -1,0 +1,61 @@
+# cargo-deny: what the dependency tree is allowed to contain.
+#
+# Two questions, both of which someone has to answer eventually and neither of
+# which anyone answers by hand: is a dependency carrying a known vulnerability,
+# and is one carrying a licence this project cannot ship under. It matters more
+# here than in an application, because everything in this tree lands in both of
+# the applications that depend on it.
+
+[advisories]
+# Vulnerabilities and yanked releases stop the build. Those are ours to act on
+# however deep in the tree they are: the fix is a version bump, and if there
+# is not one yet that is worth knowing today rather than at release.
+yanked = "deny"
+
+# Unmaintained crates only when we depend on one directly.
+#
+# A crate we chose and that has since been abandoned is a decision to revisit.
+# One three levels down is its parent's decision, not ours, and cannot be fixed
+# here; failing the build on it would mean carrying a permanent ignore, which
+# is an exception nobody revisits.
+unmaintained = "workspace"
+
+[licenses]
+# Everything in the tree today, and nothing else. Adding a dependency under a
+# licence not on this list is meant to stop CI and be a decision.
+#
+# The list is longer than it looks: most of it is the permissive family in its
+# various spellings.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# A crate offering a choice takes the first of these it can satisfy, so a
+# dual-licensed dependency resolves to the permissive half rather than to
+# whatever its manifest happens to list first.
+[licenses.private]
+ignore = true
+
+[bans]
+# Duplicate versions of one crate are ordinary in a tree this size and are the
+# resolver's business, not a licence question.
+#
+# The duplicate that would matter -- two copies of ratatui or of image reaching
+# an application through different paths -- cannot happen from here, because
+# both applications take theirs from this crate's re-exports.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+# Nothing from a git URL or a private registry: everything comes from
+# crates.io, so a compromised or vanished repository cannot reach a build.
+unknown-registry = "deny"
+unknown-git = "deny"

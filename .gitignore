@@ -1,0 +1,11 @@
+/target
+/result
+/result-*
+.direnv/
+
+# Editor and desktop cruft, so a contributor's tools do not land in a PR.
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
