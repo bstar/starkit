@@ -79,6 +79,11 @@ struct Entry {
     /// allocator puts at that address next. `None` for a picture the
     /// application rasterised on the spot, whose identity is its recipe rather
     /// than its address.
+    ///
+    /// Never read, and that is the point: it is here to hold the allocation,
+    /// not to be looked at. Said out loud because this crate is built with
+    /// `-A dead_code` and the applications that depend on it are not.
+    #[allow(dead_code)]
     image: Option<Arc<image::RgbaImage>>,
     protocol: Protocol,
     /// When this was last handed out, on the cache's own clock.
