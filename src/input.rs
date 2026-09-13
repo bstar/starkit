@@ -112,6 +112,26 @@ impl TextInput {
         self.multiline
     }
 
+    /// Put the cursor at a byte offset.
+    ///
+    /// Clamped to the end of the text, and rounded *down* to a character
+    /// boundary: the field's own invariant is that `&text[..cursor]` never
+    /// panics, and a caller computing an offset from a string it built itself
+    /// -- the prefix plus the completion it just inserted -- can be one byte
+    /// out without having done anything wrong.
+    ///
+    /// This is the other half of [`TextInput::insert_str`], and the pair is
+    /// what makes accepting an autocomplete two calls rather than a rebuilt
+    /// string and a walk back over the tail with arrow keys.
+    pub fn set_cursor(&mut self, byte: usize) {
+        let mut at = byte.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
+        self.cursor = at;
+        self.goal = None;
+    }
+
     /// Replace the text, putting the cursor at the end -- which is where it
     /// belongs when a draft is restored or a message is opened for editing.
     pub fn set_text(&mut self, text: impl Into<String>) {
@@ -149,19 +169,14 @@ impl TextInput {
     ///
     /// `\r` goes: a paste from a Windows clipboard or an email carries them,
     /// and a lone `\r` in a terminal buffer moves the cursor to the start of
-    /// the line rather than printing. In a one-line field newlines become
-    /// spaces, because the alternative is silently dropping half of what was
-    /// pasted.
+    /// the line rather than printing. Everything else is
+    /// [`TextInput::insert_str`], newlines in a one-line field included.
     pub fn paste(&mut self, s: &str) {
-        let mut clean = String::with_capacity(s.len());
-        for c in s.chars() {
-            match c {
-                '\r' => {}
-                '\n' if !self.multiline => clean.push(' '),
-                c => clean.push(c),
-            }
+        if s.contains('\r') {
+            self.insert_str(&s.replace('\r', ""));
+        } else {
+            self.insert_str(s);
         }
-        self.insert_str(&clean);
     }
 
     /// Handle a key. See [`Edit`] for what the answer means.
@@ -310,8 +325,19 @@ impl TextInput {
         self.insert_str(c.encode_utf8(&mut b));
     }
 
-    fn insert_str(&mut self, s: &str) {
+    /// Insert text at the cursor and leave the cursor after it.
+    ///
+    /// What a completion, an emoji chosen from a picker, or a paste all end
+    /// up calling. Two things happen to what is given: a newline in a one-line
+    /// field becomes a space, because the alternative is silently dropping
+    /// half of what was inserted, and the character limit turns away whatever
+    /// is over it.
+    pub fn insert_str(&mut self, s: &str) {
         if s.is_empty() {
+            return;
+        }
+        if !self.multiline && s.contains('\n') {
+            self.insert_str(&s.replace('\n', " "));
             return;
         }
         if let Some(max) = self.max_chars {
@@ -746,6 +772,86 @@ mod tests {
         assert_eq!(i.text(), "字字字字");
         typed(&mut i, "x");
         assert_eq!(i.text(), "字字字字");
+    }
+
+    #[test]
+    fn the_cursor_can_be_put_anywhere_a_character_starts() {
+        let mut i = TextInput::single().with_text(HARD);
+        let starts: Vec<usize> = HARD.char_indices().map(|(b, _)| b).collect();
+        for &b in &starts {
+            i.set_cursor(b);
+            assert_eq!(i.cursor(), b, "a character boundary moved");
+        }
+        i.set_cursor(HARD.len());
+        assert_eq!(i.cursor(), HARD.len());
+        i.set_cursor(HARD.len() + 100);
+        assert_eq!(i.cursor(), HARD.len(), "past the end is the end");
+    }
+
+    /// An offset into the middle of a character goes to the start of it. The
+    /// alternative is a panic in `&text[..cursor]` a frame later, in a caller
+    /// that did the arithmetic on a string it built itself.
+    #[test]
+    fn a_byte_inside_a_character_rounds_back_to_its_start() {
+        let mut i = TextInput::single().with_text(HARD);
+        for b in 0..=HARD.len() {
+            i.set_cursor(b);
+            let at = i.cursor();
+            assert!(HARD.is_char_boundary(at), "{b} landed inside a character");
+            assert!(at <= b, "{b} rounded forwards to {at}");
+        }
+    }
+
+    #[test]
+    fn inserting_a_string_leaves_the_cursor_after_it() {
+        // ASCII, then two columns of CJK, then a family that is one cluster
+        // and eleven bytes.
+        let mut i = TextInput::single().with_text("ac");
+        i.set_cursor(1);
+        i.insert_str("b");
+        assert_eq!((i.text(), i.cursor()), ("abc", 2));
+
+        let mut i = TextInput::multiline();
+        i.insert_str("字字");
+        assert_eq!((i.text(), i.cursor()), ("字字", 6));
+        i.set_cursor(3);
+        i.insert_str("\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}");
+        assert_eq!(i.cursor(), 3 + 18);
+        assert!(i.text().is_char_boundary(i.cursor()));
+
+        // A one-line field holds no newlines, wherever they came from.
+        let mut i = TextInput::single();
+        i.insert_str("one\ntwo");
+        assert_eq!(i.text(), "one two");
+        let mut i = TextInput::multiline();
+        i.insert_str("one\ntwo");
+        assert_eq!(i.text(), "one\ntwo");
+    }
+
+    /// What accepting an autocomplete looks like at the call site: replace the
+    /// typed query with what was chosen, and put the cursor after it.
+    #[test]
+    fn accepting_a_completion_is_two_calls_and_no_arrow_keys() {
+        let mut i = TextInput::multiline().with_text("hey @ali");
+        let start = 4; // the `@`
+        let mut text = i.text().to_string();
+        text.replace_range(start..i.cursor(), "@alice ");
+        i.set_text(text);
+        i.set_cursor(start + "@alice ".len());
+        assert_eq!(i.text(), "hey @alice ");
+        assert_eq!(i.cursor(), i.text().len());
+
+        // And with something after the cursor to be kept.
+        let mut i = TextInput::multiline().with_text("hey @ali there");
+        i.set_cursor(8);
+        let mut text = i.text().to_string();
+        text.replace_range(4..i.cursor(), "@alice");
+        i.set_text(text);
+        i.set_cursor(4 + "@alice".len());
+        assert_eq!(i.text(), "hey @alice there");
+        assert_eq!(i.cursor(), 10);
+        typed(&mut i, "!");
+        assert_eq!(i.text(), "hey @alice! there");
     }
 
     #[test]

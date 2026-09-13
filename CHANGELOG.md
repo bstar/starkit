@@ -22,6 +22,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **Putting the cursor somewhere, and putting a string where it is**
+  (`TextInput::set_cursor`, `TextInput::insert_str`). Accepting an
+  autocomplete is replacing the typed query with what was chosen and leaving
+  the caret after it, and there was no way to say the second half: STAR/CORD
+  rebuilt the string, called `set_text`, which parks the caret at the end, and
+  then walked it back over the tail one synthetic `Left` key at a time.
+  `set_cursor` clamps to the end and rounds down to a character boundary, so
+  arithmetic on a string the caller built itself cannot land inside one;
+  `insert_str` is the insertion `paste` was already doing privately, minus the
+  clipboard's carriage returns.
+
 - **Focus reporting, turned on with everything else** (`term::init`). An
   application has things to stop doing when its window is not in front --
   acknowledging messages somebody else is reading, animating a picture nobody
