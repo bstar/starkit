@@ -67,6 +67,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   one of the two applications imports skins, and it is the only thing here
   that wants a ZIP reader.
 
+- **The parts of a panel that are not its contents** (`chrome`). The border
+  decoration that makes four corners read as one frame, the row of action words
+  at the top, and the settings overlay a panel opens to change itself. The
+  header is generic over a `Word` the application owns, because which words a
+  panel offers is the application's business and the width of them is all this
+  needs to know. Words are dropped from the left as a panel narrows rather than
+  the header vanishing whole: losing the way to close a panel because it got
+  narrow is worse than losing the way to reorder it. One function places the
+  words and both the renderer and the mouse read it, so a word that was never
+  drawn cannot be clicked.
+
 - **Pictures on a terminal that will have them** (`graphics`, feature `image`).
   Capability probing, the four modes (`auto`, `kitty`, `blocks`, `off`), the
   cell measurement a font zoom invalidates, and the half-block and `░`

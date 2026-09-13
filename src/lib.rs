@@ -15,6 +15,7 @@
 //! two versions carrying the same number, which sends the reader looking for a
 //! problem that is not there.
 
+pub mod chrome;
 pub mod config;
 pub mod digits;
 pub mod fs;
