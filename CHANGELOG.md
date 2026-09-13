@@ -8,6 +8,8 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-13
+
 ### Added
 
 - **A layout tree for docked panels** (`dock`). One `layout` call per frame
