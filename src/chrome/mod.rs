@@ -15,7 +15,7 @@ pub mod settings;
 
 /// A built-in theme, resolved through the core, for the tests in this module.
 #[cfg(test)]
-fn test_theme(id: &str) -> crate::theme::Theme {
+pub(crate) fn test_theme(id: &str) -> crate::theme::Theme {
     use crate::theme::ThemeFile;
     let b = crate::theme::BUILTINS
         .iter()

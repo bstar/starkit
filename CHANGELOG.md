@@ -67,6 +67,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   one of the two applications imports skins, and it is the only thing here
   that wants a ZIP reader.
 
+- **The key table, and the overlay that prints it** (`keymap`). `Binding<A>`
+  and `MouseHelp` are the one place a key is described, so the dispatcher and
+  the help screen cannot drift; `KeySpec::parse` reads the spellings such a
+  table already writes for the reader (`ctrl+s`, `alt+1`, `space`, `?`, `F1`,
+  `shift+left`), and `Keymap<A>` answers a key press from the table for an
+  application whose dispatch is flat. A column may also describe a chord or a
+  range, and those are dropped rather than refused: it is written for a person,
+  and some of what a person reads is a summary. `HelpView` draws the two
+  columns, group headings and all, and says in its title whether there is more
+  below.
+
 - **The parts of a panel that are not its contents** (`chrome`). The border
   decoration that makes four corners read as one frame, the row of action words
   at the top, and the settings overlay a panel opens to change itself. The
