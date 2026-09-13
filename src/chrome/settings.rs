@@ -75,6 +75,27 @@ pub fn clamp_scroll(cursor: usize, scroll: usize, height: usize) -> usize {
     crate::list::clamp_scroll(cursor, scroll, height)
 }
 
+/// Which row is at a point, given the same `rows` and `scroll` the overlay was
+/// drawn with.
+///
+/// The inverse of the loop in `render`, and beside it for the reason every
+/// panel in both applications keeps its geometry in one function: a row that
+/// scrolled off the top is still under the pointer's arithmetic if the mouse
+/// side subtracts a differently sized heading. `None` for a click on the
+/// frame, on the heading, or past the last row -- an overlay swallows the
+/// click either way, but it does not act on it.
+pub fn hit(area: Rect, rows: usize, scroll: usize, x: u16, y: u16) -> Option<usize> {
+    if rows == 0 {
+        return None;
+    }
+    let list = list_rect(area, rows);
+    if x < list.x || x >= list.x + list.width || y < list.y || y >= list.y + list.height {
+        return None;
+    }
+    let index = scroll + usize::from(y - list.y);
+    (index < rows).then_some(index)
+}
+
 pub struct SettingsView<'a> {
     pub theme: &'a Theme,
     /// What kind of list this is, across the top of the frame.
@@ -260,6 +281,44 @@ mod tests {
             ))
         );
         assert_ne!(buf[(list.x, list.y)].style().bg, selected);
+    }
+
+    /// Every row the overlay drew is under the pointer where it was drawn, and
+    /// nothing else is. Checked against the drawing rather than against the
+    /// arithmetic, which is the only way the two can be said to agree.
+    #[test]
+    fn a_click_lands_on_the_row_that_was_drawn_there() {
+        let rows = rows();
+        let area = Rect::new(0, 0, 60, 14);
+        let list = list_rect(area, rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            let y = list.y + i as u16;
+            assert_eq!(hit(area, rows.len(), 0, list.x, y), Some(i));
+            let drawn = &draw(&rows, 0, 60, 14)[usize::from(y)];
+            assert!(drawn.contains(&row.label), "row {i} is not at {y}: {drawn}");
+        }
+        // The frame, the heading, and the empty rows below the last one.
+        assert_eq!(hit(area, rows.len(), 0, list.x, list.y - 1), None);
+        assert_eq!(hit(area, rows.len(), 0, list.x, area.y), None);
+        assert_eq!(
+            hit(area, rows.len(), 0, list.x, list.y + rows.len() as u16),
+            None
+        );
+        // And across, outside the box.
+        assert_eq!(hit(area, rows.len(), 0, 0, list.y), None);
+        assert_eq!(hit(area, rows.len(), 0, area.width - 1, list.y), None);
+        assert_eq!(hit(area, 0, 0, list.x, list.y), None, "nothing to change");
+    }
+
+    /// A scrolled list hits the row that is on screen, not the one that would
+    /// have been there before it scrolled.
+    #[test]
+    fn scrolling_moves_what_is_under_the_pointer() {
+        let area = Rect::new(0, 0, 60, 8);
+        let list = list_rect(area, 20);
+        assert_eq!(hit(area, 20, 7, list.x, list.y), Some(7));
+        assert_eq!(hit(area, 20, 7, list.x, list.y + 1), Some(8));
+        assert_eq!(hit(area, 20, 19, list.x, list.y + 1), None, "past the end");
     }
 
     #[test]

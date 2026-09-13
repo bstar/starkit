@@ -30,6 +30,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **Which settings row is under the pointer** (`chrome::settings::hit`). The
+  overlay could be scrolled and chosen from with the keyboard but not clicked,
+  because the arithmetic that says where a row was drawn lived inside the
+  widget's render loop. It is now a function beside `rect` and `list_rect`,
+  which is where both applications keep geometry that drawing and the mouse
+  have to agree on.
+
 - **A binding on the slash key, written in the column that prints it**
   (`keymap::alternatives`). The column separates alternatives on `/` and `,`,
   which left the one key every client binds to search unwritable in it:
