@@ -30,6 +30,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **Re-anchoring a list that grew at the front** (`VirtualList::prepended`).
+  A page of history loaded above the view moves every index along, and a view
+  that does not move with them jumps back by a page at the moment somebody is
+  reading. The anchor is an index, so the answer was always
+  `scroll_to(anchor() + n)`; that is now written down as the supported way to
+  do it, and `prepended` is the same call with the row *within* the top item
+  kept, which matters on a message taller than the viewport.
+
 - **Wrapping text that is already styled** (`wrap::wrap_runs`). The same
   wrapping as `wrap`, over a line that arrives as a list of runs and has to
   leave as one: which bytes of which run are on each row. STAR/CORD was

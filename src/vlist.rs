@@ -86,10 +86,37 @@ impl VirtualList {
     }
 
     /// Put `index` at the top of the viewport.
+    ///
+    /// This is also how a list that grew at the *front* is re-anchored:
+    /// the anchor is an index, so inserting `n` items before it means
+    /// `scroll_to(anchor() + n)`, and the same item stays at the top. It is
+    /// the supported way to do it -- there is no anchor by identity, and
+    /// there is not going to be one, because the caller has the identity and
+    /// this does not. [`VirtualList::prepended`] is that call with the row
+    /// within the item kept.
     pub fn scroll_to(&mut self, index: usize) {
         self.anchor = index;
         self.offset = 0;
         self.stick_to_end = false;
+    }
+
+    /// `n` older items arrived at the front: keep the reader where they were.
+    ///
+    /// A page of history loaded above the view moves every index along by
+    /// `n`, and a view that did not move with them jumps back by a page at
+    /// the exact moment somebody is reading. Nothing to do while stuck to the
+    /// end, where the position is counted from the other side of the list and
+    /// nothing has moved.
+    ///
+    /// `scroll_to(anchor() + n)`, except that it keeps the row *within* the
+    /// top item, which `scroll_to` resets. The distinction shows on a message
+    /// taller than the viewport, where losing it scrolls to the top of the
+    /// message the reader was half way down.
+    pub fn prepended(&mut self, n: usize) {
+        if n == 0 || self.stick_to_end {
+            return;
+        }
+        self.anchor += n;
     }
 
     /// The items on screen, in order, with the rows each of them gets.
@@ -284,6 +311,44 @@ mod tests {
 
     fn flat(_: usize) -> u16 {
         2
+    }
+
+    /// Older messages arrive above the view and nothing on screen moves.
+    #[test]
+    fn a_page_loaded_at_the_front_does_not_move_the_view() {
+        // Ten older items go in front, so item i afterwards is what item
+        // i - 10 was.
+        let before = mixed;
+        let after = |i: usize| mixed(i.wrapping_sub(10));
+
+        let mut l = VirtualList::at(12);
+        l.scroll_rows(1, VIEW, before, 30);
+        let was = l.visible(VIEW, before, 30);
+        let (anchor, offset) = (l.anchor(), l.offset());
+
+        l.prepended(10);
+        assert_eq!(l.anchor(), anchor + 10);
+        assert_eq!(l.offset(), offset, "the row within the item is kept");
+
+        let now = l.visible(VIEW, after, 40);
+        assert_eq!(now.len(), was.len());
+        for (a, b) in was.iter().zip(&now) {
+            assert_eq!(a.index + 10, b.index, "the same items, renumbered");
+            assert_eq!(a.area, b.area, "in the same rows");
+            assert_eq!(a.skip, b.skip);
+        }
+    }
+
+    #[test]
+    fn a_prepend_does_nothing_to_a_list_that_is_stuck_to_the_end() {
+        let mut l = VirtualList::new();
+        l.prepended(10);
+        assert!(l.is_at_end(), "the end is still the end");
+        assert_eq!(l.anchor(), 0);
+        // And nothing at all is nothing.
+        let mut l = VirtualList::at(4);
+        l.prepended(0);
+        assert_eq!(l.anchor(), 4);
     }
 
     #[test]
