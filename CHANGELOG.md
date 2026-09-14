@@ -8,6 +8,18 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-13
+
+### Fixed
+
+- **The terminal no longer drops out of raw mode under tmux.** The picture
+  probe is not asked inside a multiplexer under `auto`. tmux relays the
+  query only with `allow-passthrough` on, and when nobody answers, the
+  library's reader thread outlives the probe and later restores the cooked
+  terminal mode it had saved -- after the application has entered raw mode,
+  which left the screen frozen with keystrokes echoing. Half blocks inside
+  tmux by default; `graphics = "kitty"` still asks through it on purpose.
+
 ## [0.2.0] - 2026-09-13
 
 ### Added

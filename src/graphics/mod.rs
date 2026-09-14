@@ -173,6 +173,12 @@ impl Graphics {
             //
             // So the question is not "can this terminal draw pixels" but "is
             // anyone listening", and the environment is read for that.
+            Mode::Auto | Mode::Off | Mode::Blocks if behind_multiplexer() => {
+                tracing::info!(
+                    "graphics: inside tmux, drawing half blocks; set graphics = \"kitty\" to ask through it"
+                );
+                None
+            }
             Mode::Auto | Mode::Off | Mode::Blocks if !looks_capable() => {
                 tracing::debug!("graphics: nothing in the environment suggests a protocol");
                 None
@@ -631,13 +637,28 @@ fn looks_capable() -> bool {
     || var("GHOSTTY_RESOURCES_DIR").is_ok()
     || var("WEZTERM_EXECUTABLE").is_ok()
     || var("KONSOLE_VERSION").is_ok()
-    // Inside a multiplexer the outer terminal is invisible from here, so
-    // ask: the passthrough support is the whole reason the query exists.
-    || var("TMUX").is_ok()
-    // And over ssh, where the outer terminal is invisible for the same
-    // reason and `TERM` has very likely been flattened on the way.
+    // Over ssh the outer terminal is invisible from here and `TERM` has very
+    // likely been flattened on the way, so ask: the terminal at the far end
+    // answers the query itself, and it answers quickly.
     || var("SSH_TTY").is_ok()
     || var("SSH_CONNECTION").is_ok()
+}
+
+/// Whether a multiplexer sits between this process and the terminal.
+///
+/// Inside tmux the query is not asked at all under `auto`, and that is a
+/// safety rule rather than a capability judgement. tmux only relays the
+/// query when `allow-passthrough` is on, and a query nobody relays is one
+/// nobody answers. The library that asks it does so on a thread that puts
+/// the terminal into raw mode itself and puts it *back* when it finishes --
+/// and when the answer never comes, that thread outlives the probe, sits on
+/// stdin until the person types something, and then restores the cooked
+/// mode it saved: after the application has taken the terminal. The screen
+/// stops updating and keystrokes echo. Measured in tmux with the query
+/// timing out every time; never without it. A person who has turned
+/// passthrough on can still say `graphics = "kitty"` and get the query.
+fn behind_multiplexer() -> bool {
+    std::env::var("TMUX").is_ok()
 }
 
 /// Throw away whatever the terminal said back.
