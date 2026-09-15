@@ -120,7 +120,7 @@ a yes/no question through `chrome::confirm`.
 This is what `chrome::frame` existing at all bought back from starcord and
 starfold's byte-identical `panels::frame` and staramp's nine hand-drawn
 variants: a panel that builds its own `Block` instead is not a variation on
-the look, it is a fork of it, and the next theming or corner-gradient change
+the look, it is a fork of it, and the next theming or border-colour change
 will not reach it.
 
 ## `-A dead_code`, and why

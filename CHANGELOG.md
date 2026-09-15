@@ -16,9 +16,9 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   frames by hand with four different treatments of the title, the corners
   and the background. The double border, the uppercased title with its
   `— detail`, an optional badge at the right end of the top border, a
-  footer of key hints on the bottom border, the corner gradient and the
-  header words are now drawn from one struct, which hands back the body a
-  panel draws its own contents into. A title that does not fit drops its
+  footer of key hints on the bottom border, and the header words are now
+  drawn from one struct, which hands back the body a panel draws its own
+  contents into. A title that does not fit drops its
   detail before it drops itself, and a panel with no header words reserves
   no header row rather than leaving a blank one. `chrome::rgb`,
   `chrome::empty` and `text::fit` came out with it, lifted from the same
@@ -82,16 +82,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Changed
 
-- **Breaking:** `frame::tint` now fills a recoloured border cell with
-  `panel_bg`, matching the block it decorates, rather than `bg`, which is
-  what a panel used to be filled with before it had a background of its
-  own.
 - **Breaking:** `SettingsView` has a new required `footer: &str` field, and
   its cursor row is drawn with `row_cursor_*` rather than `row_selected_*`.
 - **Breaking:** `HelpView`'s title no longer says how much more there is to
   scroll -- "more below" and "the end" moved to the bottom-border footer
   the overlay draws -- and the title itself is now uppercased with the
   overlay's `═ ` lead, matching every other panel.
+- **Breaking:** The corner gradient is gone. Every panel frame is one border
+  colour all the way round -- `border` or `border_focused` -- rather than
+  four corners lifted to a different weight and fading back into the edges
+  either side. `frame::render_corners` is removed; no consumer called it
+  directly, since all three draw their frames through `chrome::frame`.
 
 ## [0.2.1] - 2026-09-13
 
