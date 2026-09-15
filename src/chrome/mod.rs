@@ -9,6 +9,7 @@
 //! An application's own theme derefs to it, so the call sites read the same as
 //! they did when this was theirs.
 
+pub mod confirm;
 pub mod frame;
 pub mod header;
 pub mod overlay;
