@@ -11,17 +11,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
 use crate::text::truncate;
-use crate::theme::color::Rgb;
 use crate::theme::Theme;
 
-fn rgb(c: Rgb) -> Color {
-    Color::Rgb(c.r, c.g, c.b)
-}
+use super::rgb;
 
 /// One line: a setting and where it stands, or an action with nothing to show.
 #[derive(Debug, Clone, PartialEq)]
@@ -196,6 +193,7 @@ impl<'a> Widget for SettingsView<'a> {
 mod tests {
     use super::super::test_theme;
     use super::*;
+    use ratatui::style::Color;
 
     fn rows() -> Vec<Row> {
         vec![

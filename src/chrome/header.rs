@@ -23,12 +23,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 
-use crate::theme::color::Rgb;
 use crate::theme::Theme;
 
-fn rgb(c: Rgb) -> ratatui::style::Color {
-    ratatui::style::Color::Rgb(c.r, c.g, c.b)
-}
+use super::rgb;
 
 /// One action a panel's header offers.
 ///

@@ -20,6 +20,34 @@ pub fn marquee(s: &str, width: usize, offset: usize) -> String {
     chars.iter().cycle().skip(start).take(width).collect()
 }
 
+/// Cut and pad a row to exactly `width` display columns.
+///
+/// By display width, never by character count. Titles, channel names and the
+/// people in a chat all routinely contain emoji, and an emoji is two columns;
+/// a row measured in characters is a row one cell wider than the panel it is
+/// in, which writes over the border and leaves it there until something else
+/// redraws it. That is the artefact this function exists to prevent, and it
+/// is why no panel formats a row with `{:width$}`.
+pub fn fit(text: &str, width: u16) -> String {
+    let mut out = String::with_capacity(usize::from(width) + 4);
+    let mut used = 0u16;
+    for (_, cluster) in crate::wrap::clusters(text) {
+        let w = crate::wrap::width_of(cluster);
+        if used + w > width {
+            break;
+        }
+        out.push_str(cluster);
+        used += w;
+    }
+    // A double-width cluster at the edge leaves one column over; a space is
+    // what fills it, because a half-drawn emoji is not a thing a terminal can
+    // show.
+    for _ in used..width {
+        out.push(' ');
+    }
+    out
+}
+
 /// Truncate to a display width, with an ellipsis.
 pub fn truncate(s: &str, width: usize) -> String {
     use unicode_width::UnicodeWidthStr;
@@ -87,5 +115,32 @@ mod tests {
     fn zero_width_produces_nothing_rather_than_panicking() {
         assert_eq!(truncate("anything", 0), "");
         assert_eq!(marquee("anything", 0, 3), "");
+    }
+
+    #[test]
+    fn fit_pads_short_text_with_spaces() {
+        assert_eq!(fit("hi", 5), "hi   ");
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(fit("hi", 5).width(), 5);
+    }
+
+    #[test]
+    fn fit_cuts_by_display_width() {
+        use unicode_width::UnicodeWidthStr;
+        let s = "君の名は。星を追う子ども";
+        for w in [4u16, 7, 10, 13] {
+            let f = fit(s, w);
+            assert_eq!(f.width(), w as usize, "width {w}: {f:?}");
+        }
+    }
+
+    #[test]
+    fn fit_drops_an_emoji_that_would_straddle_the_edge() {
+        // "a🎧" is 1 + 2 = 3 columns; asking for 2 cannot show the emoji
+        // half-drawn, so it is dropped and the column is padded instead.
+        let f = fit("a\u{1f3a7}", 2);
+        assert_eq!(f, "a ");
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(f.width(), 2);
     }
 }
