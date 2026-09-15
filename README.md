@@ -1,17 +1,18 @@
 # STAR/KIT
 
 The terminal-UI foundation shared by [STAR/AMP](https://github.com/bstar/staramp),
-a Winamp-feel music player, and [STAR/CORD](https://github.com/bstar/starcord),
-a Discord client. Both are terminal applications built on ratatui, both wanted
-the same theme engine, the same picture rendering, the same docked panels and
-the same idea of where a program's files live, and copying the answer between
-them would have meant maintaining two of everything.
+a Winamp-feel music player, [STAR/CORD](https://github.com/bstar/starcord), a
+Discord client, and [STAR/FOLD](https://github.com/bstar/starfold), a file
+manager. All three are terminal applications built on ratatui, all three
+wanted the same theme engine, the same picture rendering, the same docked
+panels and the same idea of where a program's files live, and copying the
+answer between them would have meant maintaining three of everything.
 
 **This is not a general TUI framework.** Every item in it came out of one of
-those two applications, and the API is whatever the two of them needed rather
-than whatever a third might. That is a deliberate limit rather than an
-unfinished state: a library with two known call sites can be changed by reading
-both of them, and that property is worth more here than generality.
+those three applications, and the API is whatever they needed rather than
+whatever a fourth might. That is a deliberate limit rather than an unfinished
+state: a library with three known call sites can be changed by reading all of
+them, and that property is worth more here than generality.
 
 ## What is in it
 
@@ -25,19 +26,23 @@ both of them, and that property is worth more here than generality.
   and rectangle, and a raster path for drawing vector shapes into cells.
 - **Layout** — a dockable panel tree, a virtualised list, a text-wrapping pass
   that reports where every span landed, and a text input.
+- **Panel chrome** — the double-bordered frame every panel draws
+  (`chrome::frame`), a scrollbar for its lists (`chrome::scrollbar`), the
+  overlay box a full-screen dialog draws through (`chrome::overlay`), and a
+  yes/no confirmation dialog built on it (`chrome::confirm`).
 - **The dull necessities** — one directory for an application's files, file
   logging that never touches stdout, atomic and private writes, terminal setup
   with a panic hook that restores it, a key-binding table and the help view
   that draws it.
 
-`ratatui`, `crossterm`, `ratatui-image` and `image` are re-exported, so both
-applications use exactly one copy of each.
+`ratatui`, `crossterm`, `ratatui-image` and `image` are re-exported, so all
+three applications use exactly one copy of each.
 
 ## Status
 
 Early. The crate is being lifted out of STAR/AMP a module at a time, and
 `CHANGELOG.md` is the honest account of what has arrived. Versions are 0.x and
-tagged; both applications pin a tag.
+tagged; all three applications pin a tag.
 
 ## Licence
 
