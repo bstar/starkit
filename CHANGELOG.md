@@ -38,6 +38,26 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   starcord's chat and staramp's playlist each drew their own version of
   this and every other list in the three applications drew nothing.
 
+- **A scrollbar the mouse can drag** (`chrome::scrollbar`: `grab`, `drag`,
+  `Grab`, `index_at`, `virtual_extent`, `Scrollbars`; `list::cursor_into_view`).
+  Only starcord's chat dragged, and it did its own hit-testing against
+  `fraction_at` and kept its own held-thumb state; staramp's playlist and
+  every list in starfold had a bar to look at and nothing to grab. `grab`
+  and `drag` are the arithmetic -- a press either takes hold of the row
+  under the pointer or, off the thumb, jumps it so its middle lands there,
+  and a drag afterwards is the exact inverse of the sizing in `thumb`, run
+  through the same geometry so the mouse and the drawing never disagree.
+  `Scrollbars` is the part that turns that into three event handlers: it
+  keeps the bars drawn each frame and the one grab a button-down is holding,
+  across frames and even across a frame that redraws without that bar, until
+  `release` lets go. The one thing a caller cannot skip is feeding the
+  `above` a drag returns back into the next frame's `record` or `draw` for
+  that bar -- a list that instead re-derives its scroll from a cursor every
+  frame needs `cursor_into_view` to move the cursor into the new viewport
+  too, or the next frame snaps the thumb straight back to where the cursor
+  still is. `index_at` and `virtual_extent` are what a variable-height list
+  needs to turn a dragged `above` back into `VirtualList::scroll_to`.
+
 - **The overlay a full-screen dialog draws through** (`chrome::overlay`:
   `rect`, `inner`, `Overlay`, `render`). Clear, then the same frame a
   docked panel draws, always focused, its title uppercased -- one shape

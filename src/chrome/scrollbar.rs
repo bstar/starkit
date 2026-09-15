@@ -63,6 +63,59 @@ pub struct Thumb {
     pub len: u16,
 }
 
+/// The part of [`thumb`]'s arithmetic that does not depend on `above`: how
+/// long the thumb is, how much track it has to travel over, and how much
+/// content that travel stands for. [`grab`] and [`drag`] go through this too,
+/// so the row the mouse lands on and the row [`render`] draws the thumb on
+/// are never computed two different ways.
+struct Geometry {
+    len: u16,
+    room: u16,
+    /// Rows of content that are not the viewport -- `total - track` -- and so
+    /// the range `above` moves over. Always positive: `None` below covers the
+    /// only case where it would not be.
+    scrolled: u64,
+}
+
+/// `None` when there is nothing to scroll -- the content fits in the track,
+/// or there is no track to draw on.
+fn geometry(track: u16, total: u32) -> Option<Geometry> {
+    if track == 0 || u64::from(total) <= u64::from(track) {
+        return None;
+    }
+    let track64 = u64::from(track);
+    let total64 = u64::from(total);
+    let max_len = std::cmp::max(1, track / THUMB_MAX_DIV);
+    let len = ((track64 * track64) / total64).clamp(1, u64::from(max_len)) as u16;
+    let room = track - len;
+    // total > track was just checked, so this is strictly positive.
+    let scrolled = total64 - track64;
+    Some(Geometry {
+        len,
+        room,
+        scrolled,
+    })
+}
+
+/// A track position turned back into an `above`: the inverse of the `start`
+/// half of [`thumb`]'s arithmetic. Shared by [`grab`]'s off-thumb jump and
+/// [`drag`], so a jump and the drag that follows it agree on where it landed.
+fn above_for(start: u16, room: u16, scrolled: u64) -> u32 {
+    if room == 0 {
+        // Only one position exists; nothing to round towards.
+        return 0;
+    }
+    ((u64::from(start) * scrolled + u64::from(room) / 2) / u64::from(room)) as u32
+}
+
+/// Where a thumb held at `grip` rows below its top would sit if the pointer
+/// were at `y`, clamped to the track -- dragging past either end pins the
+/// thumb to it rather than losing the grab.
+fn start_for(track: Rect, room: u16, grip: u16, y: u16) -> u16 {
+    let raw = i32::from(y) - i32::from(track.y) - i32::from(grip);
+    raw.clamp(0, i32::from(room)) as u16
+}
+
 /// The pure geometry: how long a thumb is and where it sits, given how many
 /// rows the track has, how many rows the content has, and how many of those
 /// rows are above the viewport.
@@ -71,25 +124,15 @@ pub struct Thumb {
 /// or there is no track to draw on -- which callers take as "do not draw a
 /// scrollbar" rather than a zero-length one.
 pub fn thumb(track: u16, total: u32, above: u32) -> Option<Thumb> {
-    if track == 0 || u64::from(total) <= u64::from(track) {
-        return None;
-    }
-    let track64 = u64::from(track);
-    let total64 = u64::from(total);
-    let max_len = std::cmp::max(1, track / THUMB_MAX_DIV);
-    let len = ((track64 * track64) / total64).clamp(1, u64::from(max_len)) as u16;
-
-    let room = track - len;
-    // total > track was just checked, so this is strictly positive.
-    let scrolled = total64 - track64;
-    let above = std::cmp::min(u64::from(above), scrolled);
+    let g = geometry(track, total)?;
+    let above = std::cmp::min(u64::from(above), g.scrolled);
     // Rounded to the nearest row rather than truncated, so that `above ==
     // scrolled` (the view scrolled all the way) lands the thumb flush with
     // the end of the track instead of one short of it.
-    let start = ((above * u64::from(room) + scrolled / 2) / scrolled) as u16;
-    let start = start.min(room);
+    let start = ((above * u64::from(g.room) + g.scrolled / 2) / g.scrolled) as u16;
+    let start = start.min(g.room);
 
-    Some(Thumb { start, len })
+    Some(Thumb { start, len: g.len })
 }
 
 /// A fixed-row list: `len` items, each one row, scrolled so that `scroll` of
@@ -98,20 +141,24 @@ pub fn rows(scroll: usize, len: usize, height: u16) -> Option<Thumb> {
     thumb(height, len as u32, scroll as u32)
 }
 
-/// A variable-height list scrolled through [`crate::vlist::VirtualList`].
+/// The `(total, above)` a variable-height list scrolled through
+/// [`crate::vlist::VirtualList`] would hand to [`thumb`], exposed on its own
+/// so a caller can record them for [`Scrollbars`] without recomputing them
+/// from a second walk of `heights`.
 ///
 /// `heights` is indexed the same way the list itself is walked -- item `i`'s
-/// row count, whatever produced the rows `list.visible` handed back. `total`
-/// and `above` are derived from it exactly as starcord's chat panel used to
-/// compute them by hand: `above` is the rows of every item before the first
-/// visible one, plus that item's own `skip` for the case where the viewport
-/// starts partway through it.
-pub fn virtual_list(
+/// row count, whatever produced the rows `list.visible` handed back. `above`
+/// is the rows of every item before the first visible one, plus that item's
+/// own `skip` for the case where the viewport starts partway through it --
+/// exactly as starcord's chat panel used to compute it by hand.
+///
+/// `None` for an empty list, which has no rows to measure.
+pub fn virtual_extent(
     list: &crate::vlist::VirtualList,
     body: Rect,
     heights: &[u16],
     len: usize,
-) -> Option<Thumb> {
+) -> Option<(u32, u32)> {
     if len == 0 {
         return None;
     }
@@ -126,7 +173,37 @@ pub fn virtual_list(
         .map(|h| u32::from(*h))
         .sum::<u32>()
         + u32::from(skip);
-    thumb(body.height, total, above)
+    Some((total, above))
+}
+
+/// A variable-height list scrolled through [`crate::vlist::VirtualList`].
+/// See [`virtual_extent`] for how `total` and `above` are derived.
+pub fn virtual_list(
+    list: &crate::vlist::VirtualList,
+    body: Rect,
+    heights: &[u16],
+    len: usize,
+) -> Option<Thumb> {
+    virtual_extent(list, body, heights, len)
+        .and_then(|(total, above)| thumb(body.height, total, above))
+}
+
+/// The index of the item, counted from the top of `heights`, that contains
+/// row `above` -- the inverse of summing heights, for a caller that has
+/// dragged the thumb to a new `above` and needs `VirtualList::scroll_to` to
+/// follow it. `heights.len() - 1` at most, so a position past the last item
+/// (past-the-end `above` values are common; [`thumb`] clamps them rather
+/// than rejecting them) lands on the last item rather than off the end.
+/// `0` for an empty slice, which has no item to land on.
+pub fn index_at(heights: &[u16], above: u32) -> usize {
+    let mut seen: u32 = 0;
+    for (i, h) in heights.iter().enumerate() {
+        seen += u32::from(*h);
+        if above < seen {
+            return i;
+        }
+    }
+    heights.len().saturating_sub(1)
 }
 
 /// The one-column track on a panel's right border: the last column of
@@ -191,6 +268,187 @@ pub fn fraction_at(track: Rect, y: u16) -> f32 {
     let bottom = track.y + track.height - 1;
     let y = y.clamp(top, bottom);
     f32::from(y - top) / f32::from(bottom - top)
+}
+
+/// A thumb the pointer has taken hold of: what a later [`drag`] needs to
+/// answer, kept around for however many frames the button stays down. `track`
+/// and `total` are the ones the press landed on, fixed for the life of the
+/// grab even if the list they describe changes shape mid-drag; `grip` is how
+/// many rows below the thumb's top the press landed, so the thumb does not
+/// jump to be centred under the pointer the moment it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grab {
+    track: Rect,
+    total: u32,
+    grip: u16,
+}
+
+/// A left press at `(x, y)` against a bar drawn on `track` for content
+/// `total` rows tall scrolled `above` rows.
+///
+/// `None` unless `(x, y)` is on the track's column within its rows and there
+/// is a thumb to take hold of -- content that fits needs no scrollbar and
+/// gives the mouse nothing to grab either. Otherwise, some `(grab, above)`:
+/// a press on the thumb takes hold of the row under the pointer and leaves
+/// the position where it was; a press beside it jumps the thumb so its
+/// middle lands under the pointer -- `grip` becomes half the thumb's length
+/// -- and `above` is that jump applied now, in the same call, rather than
+/// waiting for the drag that will usually follow immediately after.
+pub fn grab(track: Rect, total: u32, above: u32, x: u16, y: u16) -> Option<(Grab, u32)> {
+    if x < track.x || x >= track.x + track.width || y < track.y || y >= track.y + track.height {
+        return None;
+    }
+    let g = geometry(track.height, total)?;
+    let t = thumb(track.height, total, above)?;
+    let row = y - track.y;
+
+    if row >= t.start && row < t.start + t.len {
+        let grip = row - t.start;
+        return Some((Grab { track, total, grip }, above));
+    }
+
+    let grip = t.len / 2;
+    let start = start_for(track, g.room, grip, y);
+    let above = above_for(start, g.room, g.scrolled);
+    Some((Grab { track, total, grip }, above))
+}
+
+/// The pointer at row `y` while holding `g`: the `above` the content should
+/// show. The inverse of the `start` half of [`thumb`]'s arithmetic -- a drag
+/// past either end of the track pins to that end rather than losing the
+/// grab, which is what lets a reader fling the thumb to the top or bottom
+/// without lining the pointer up with the track's exact last row.
+pub fn drag(g: &Grab, y: u16) -> u32 {
+    let Some(geo) = geometry(g.track.height, g.total) else {
+        return 0;
+    };
+    let start = start_for(g.track, geo.room, g.grip, y);
+    above_for(start, geo.room, geo.scrolled)
+}
+
+/// The bars drawn this frame, and the one the pointer is holding, keyed by
+/// whatever the caller uses to name its lists -- an enum of panel ids, an
+/// index, whatever is already at hand when a bar is drawn. One `Scrollbars`
+/// per application: call [`Scrollbars::begin_frame`] at the start of every
+/// draw, [`Scrollbars::record`] or [`Scrollbars::draw`] once per bar as it is
+/// drawn, and the three mouse methods as events arrive. The held grab
+/// survives across frames -- and across a frame where its bar was not
+/// drawn at all, a list scrolled out of view mid-drag -- until
+/// [`Scrollbars::release`] lets it go.
+///
+/// The one rule a caller has to keep: the `above` a call here hands back is
+/// what that same bar must be recorded with next frame. [`Scrollbars::press`]
+/// and [`Scrollbars::drag`] return the position to *apply*, not merely to
+/// note, and the next [`Scrollbars::record`] or [`Scrollbars::draw`] for that
+/// key is where the caller reports it applied. A list that re-derives its
+/// scroll from something else every frame -- a selected row, say -- rather
+/// than moving that along with the drag, will show the thumb follow the
+/// pointer and then snap back the moment the frame redraws; such a caller
+/// must move the thing its scroll is derived from, or only re-derive it on
+/// keyboard moves and trust the drag the rest of the time. A cursor-driven
+/// list that scrolls through [`crate::list::clamp_scroll`] does this with
+/// [`crate::list::cursor_into_view`]: `scroll = above; cursor =
+/// cursor_into_view(cursor, scroll, height, len)` moves the cursor into
+/// whatever the drag just set, so the next frame's `clamp_scroll` leaves it
+/// there instead of pulling it back.
+pub struct Scrollbars<K: Copy + Eq> {
+    drawn: Vec<Bar<K>>,
+    held: Option<(K, Grab)>,
+}
+
+struct Bar<K> {
+    key: K,
+    track: Rect,
+    total: u32,
+    above: u32,
+}
+
+impl<K: Copy + Eq> Default for Scrollbars<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K: Copy + Eq> Scrollbars<K> {
+    pub fn new() -> Self {
+        Self {
+            drawn: Vec::new(),
+            held: None,
+        }
+    }
+
+    /// Forget last frame's bars. `held` survives -- a grab outlives the
+    /// frame it started on, and does not need its bar re-recorded to keep
+    /// answering [`Scrollbars::drag`].
+    pub fn begin_frame(&mut self) {
+        self.drawn.clear();
+    }
+
+    /// Remember a bar somebody else drew, or is about to draw with its own
+    /// call to [`render`], so the mouse methods know it is there.
+    pub fn record(&mut self, key: K, track: Rect, total: u32, above: u32) {
+        self.drawn.push(Bar {
+            key,
+            track,
+            total,
+            above,
+        });
+    }
+
+    /// Record and draw in one call: [`thumb`] of `track.height`, `total` and
+    /// `above`, rendered on `track`.
+    pub fn draw(
+        &mut self,
+        key: K,
+        track: Rect,
+        buf: &mut Buffer,
+        t: &Theme,
+        total: u32,
+        above: u32,
+    ) {
+        self.record(key, track, total, above);
+        render(track, buf, t, thumb(track.height, total, above));
+    }
+
+    /// The track recorded for `key` this frame, if any.
+    pub fn track_of(&self, key: K) -> Option<Rect> {
+        self.drawn.iter().find(|b| b.key == key).map(|b| b.track)
+    }
+
+    /// A left press. `Some((key, above))` when it landed on a bar recorded
+    /// this frame: that bar's grab is now held, and `above` is the position
+    /// to apply -- unchanged if the press was on the thumb, the jumped-to
+    /// position otherwise. `None` when it landed on none of them, meaning
+    /// the press is not this scrollbar's to answer.
+    pub fn press(&mut self, x: u16, y: u16) -> Option<(K, u32)> {
+        for bar in &self.drawn {
+            if let Some((g, above)) = grab(bar.track, bar.total, bar.above, x, y) {
+                let key = bar.key;
+                self.held = Some((key, g));
+                return Some((key, above));
+            }
+        }
+        None
+    }
+
+    /// A drag event while holding a grab: the key it belongs to and the
+    /// `above` to apply. `None` when nothing is held, so a drag that starts
+    /// outside any bar's thumb is silently not this scrollbar's concern.
+    pub fn drag(&mut self, y: u16) -> Option<(K, u32)> {
+        let (key, g) = self.held.as_ref()?;
+        Some((*key, drag(g, y)))
+    }
+
+    /// The button came up. Whether something was held, so a caller can tell
+    /// a released drag from a click that never touched a bar.
+    pub fn release(&mut self) -> bool {
+        self.held.take().is_some()
+    }
+
+    /// The key of the bar currently held, if any.
+    pub fn held(&self) -> Option<K> {
+        self.held.as_ref().map(|(k, _)| *k)
+    }
 }
 
 #[cfg(test)]
@@ -370,5 +628,178 @@ mod tests {
             rows(first, len, body.height),
             "stuck to the end"
         );
+    }
+
+    #[test]
+    fn virtual_list_matches_virtual_extent() {
+        let heights = vec![3u16, 1, 2, 4, 1, 5, 2];
+        let len = heights.len();
+        let body = Rect::new(0, 0, 10, 6);
+        for anchor in [0usize, 2, 4, 6] {
+            let list = VirtualList::at(anchor);
+            let expected = virtual_extent(&list, body, &heights, len)
+                .and_then(|(total, above)| thumb(body.height, total, above));
+            assert_eq!(
+                virtual_list(&list, body, &heights, len),
+                expected,
+                "anchor {anchor}"
+            );
+        }
+        assert_eq!(virtual_extent(&VirtualList::new(), body, &heights, 0), None);
+        assert_eq!(virtual_list(&VirtualList::new(), body, &heights, 0), None);
+    }
+
+    #[test]
+    fn a_press_on_the_thumb_keeps_the_position_and_a_press_beside_it_jumps() {
+        // track 20 rows, total 100, above 0 -- thumb is len 4 at start 0.
+        let track = Rect::new(5, 2, 1, 20);
+
+        let (on_thumb, above) = grab(track, 100, 0, 5, 2).expect("row 0 is on the thumb");
+        assert_eq!(above, 0, "a press on the thumb does not move the position");
+        assert_eq!(
+            drag(&on_thumb, 2),
+            0,
+            "dragging it back to where it was grabbed stays put"
+        );
+
+        let (beside, jumped) =
+            grab(track, 100, 0, 5, 21).expect("the last track row is on the bar");
+        assert!(
+            jumped > 50,
+            "a press near the bottom of the track should jump close to the end, got {jumped}"
+        );
+
+        assert_eq!(
+            drag(&beside, 2),
+            0,
+            "dragging the jumped-to grab up to the top reaches the start"
+        );
+    }
+
+    #[test]
+    fn dragging_to_the_ends_reaches_the_ends() {
+        let track = Rect::new(0, 5, 1, 20);
+        let (g, _) = grab(track, 100, 0, 0, 5).expect("the top row is on the thumb");
+
+        assert_eq!(
+            drag(&g, 200),
+            100 - 20,
+            "a drag below the track pins to the end"
+        );
+        assert_eq!(drag(&g, 0), 0, "a drag above the track pins to the start");
+    }
+
+    #[test]
+    fn drag_is_the_inverse_of_thumb() {
+        for (track, total, above) in [
+            (20u16, 100u32, 30u32),
+            (7, 50, 10),
+            (50, 500, 200),
+            (3, 10, 4),
+        ] {
+            let geo = geometry(track, total).unwrap();
+            let track_rect = Rect::new(2, 3, 1, track);
+            let t = thumb(track, total, above).unwrap();
+            let y = track_rect.y + t.start;
+
+            let (g, unchanged) = grab(track_rect, total, above, track_rect.x, y)
+                .unwrap_or_else(|| panic!("track {track} total {total} above {above}: the thumb's own top missed the thumb"));
+            assert_eq!(
+                unchanged, above,
+                "track {track} total {total}: a press on the thumb moves the position"
+            );
+
+            let back = drag(&g, y);
+            // The finest a drag can distinguish is one row of track, which
+            // stands for this many rows of content.
+            let granularity = if geo.room == 0 {
+                1
+            } else {
+                geo.scrolled.div_ceil(u64::from(geo.room))
+            } as i64;
+            assert!(
+                (i64::from(back) - i64::from(above)).abs() <= granularity,
+                "track {track} total {total} above {above}: drag back gave {back}"
+            );
+            assert_eq!(
+                thumb(track, total, back).unwrap().start,
+                t.start,
+                "track {track} total {total} above {above}: the same row does not land back on the same start"
+            );
+        }
+    }
+
+    #[test]
+    fn a_press_off_the_track_is_none() {
+        let track = Rect::new(5, 2, 1, 20);
+        assert_eq!(grab(track, 100, 0, 4, 5), None, "wrong column");
+        assert_eq!(grab(track, 100, 0, 6, 5), None, "wrong column");
+        assert_eq!(grab(track, 100, 0, 5, 1), None, "above the track");
+        assert_eq!(grab(track, 100, 0, 5, 22), None, "below the track");
+        // A track with nothing to scroll has no thumb to take hold of either.
+        assert_eq!(grab(track, 10, 0, 5, 5), None, "content fits, no thumb");
+    }
+
+    #[test]
+    fn index_at_finds_the_item_containing_the_row() {
+        let heights = [3u16, 1, 2];
+        assert_eq!(index_at(&heights, 0), 0);
+        assert_eq!(index_at(&heights, 1), 0);
+        assert_eq!(index_at(&heights, 2), 0);
+        assert_eq!(index_at(&heights, 3), 1);
+        assert_eq!(index_at(&heights, 4), 2);
+        assert_eq!(index_at(&heights, 5), 2);
+        assert_eq!(
+            index_at(&heights, 99),
+            2,
+            "past the end lands on the last item"
+        );
+        assert_eq!(index_at(&[], 0), 0, "nothing to land on");
+    }
+
+    #[test]
+    fn the_registry_holds_across_frames_and_lets_go_on_release() {
+        let mut bars: Scrollbars<&str> = Scrollbars::new();
+        bars.begin_frame();
+        bars.record("first", Rect::new(0, 0, 1, 10), 50, 0);
+        bars.record("second", Rect::new(2, 0, 1, 10), 50, 0);
+
+        // Second bar's thumb: track 10, total 50, above 0 -- press its row 0.
+        let pressed = bars.press(2, 0);
+        assert_eq!(pressed.map(|(k, _)| k), Some("second"));
+        assert_eq!(bars.held(), Some("second"));
+
+        bars.begin_frame();
+        // No bars recorded this frame -- the grab still answers.
+        let dragged = bars.drag(9);
+        assert_eq!(dragged.map(|(k, _)| k), Some("second"));
+
+        assert!(bars.release());
+        assert_eq!(bars.held(), None);
+        assert_eq!(bars.drag(9), None, "nothing held after release");
+    }
+
+    #[test]
+    fn a_frame_without_the_bar_still_answers_the_held_drag() {
+        let mut bars: Scrollbars<u8> = Scrollbars::new();
+        bars.begin_frame();
+        let track = Rect::new(0, 0, 1, 20);
+        bars.draw(
+            1,
+            track,
+            &mut Buffer::empty(track),
+            &super::super::test_theme("cosmic"),
+            100,
+            0,
+        );
+
+        let (key, above) = bars.press(0, 0).expect("row 0 is the thumb's top");
+        assert_eq!(key, 1);
+        assert_eq!(above, 0);
+
+        bars.begin_frame(); // the caller drew nothing this time
+        let (key, above) = bars.drag(19).expect("the grab is still held");
+        assert_eq!(key, 1);
+        assert_eq!(above, 100 - 20);
     }
 }
