@@ -15,12 +15,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::chrome::overlay::{self, Anchor, Overlay};
+use crate::chrome::rgb;
 use crate::theme::Theme;
 
 /// One action, the keys that reach it, and how it is described.
@@ -315,6 +317,13 @@ pub const KEYS_COLUMN: usize = 14;
 /// The same, for the gestures, which are phrases rather than keys.
 pub const GESTURE_COLUMN: usize = 21;
 
+/// Where the help overlay lands, so a caller that needs the box before it has
+/// drawn anything -- starfold used to re-derive this 80x38 centring by hand,
+/// since it was not exported -- asks here instead.
+pub fn help_rect(area: Rect) -> Rect {
+    overlay::rect(area, (40, 80), 38, 8, Anchor::Centre)
+}
+
 /// Every binding and every gesture, in two columns over the whole screen.
 ///
 /// Two columns because the key list alone is longer than most terminals are
@@ -325,27 +334,29 @@ pub struct HelpView<'a, A: Copy + 'static> {
     pub bindings: &'a [Binding<A>],
     pub mouse: &'a [MouseHelp],
     pub scroll: u16,
-    /// The word on the border. The overlay adds its own "more below" and "the
-    /// end" to it.
+    /// The word on the border. The footer carries the scroll state instead --
+    /// "more below" and "the end" read as an instruction, and an instruction
+    /// belongs beside the other key hints rather than mixed into a name.
     pub title: &'a str,
+}
+
+impl<A: Copy + 'static> HelpView<'_, A> {
+    /// The box [`Widget::render`] draws into, for a caller -- a mouse hit
+    /// test, a caller sizing something else around it -- that needs the rect
+    /// without a `HelpView` to render. A free function as well as this
+    /// associated one, so a call site with `A` already pinned down can use
+    /// whichever reads better.
+    pub fn rect(area: Rect) -> Rect {
+        help_rect(area)
+    }
 }
 
 impl<A: Copy + 'static> Widget for HelpView<'_, A> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let t = self.theme;
-        let fg = Color::Rgb(t.fg.r, t.fg.g, t.fg.b);
-        let key = Color::Rgb(t.accent.r, t.accent.g, t.accent.b);
-        let head = Color::Rgb(t.warn.r, t.warn.g, t.warn.b);
-
-        let w = area.width.min(80);
-        let h = area.height.min(38);
-        let rect = Rect {
-            x: area.x + (area.width - w) / 2,
-            y: area.y + (area.height - h) / 2,
-            width: w,
-            height: h,
-        };
-        Clear.render(rect, buf);
+        let fg = rgb(t.fg);
+        let key = rgb(t.accent);
+        let head = rgb(t.warn);
 
         let heading = |g: &str| {
             Line::from(Span::styled(
@@ -380,39 +391,31 @@ impl<A: Copy + 'static> Widget for HelpView<'_, A> {
             mouse.push(entry(m.gesture, m.label, GESTURE_COLUMN));
         }
 
+        let r = help_rect(area);
+
         // Clamped here rather than where the key is handled, because only the
         // draw knows how tall the box came out and how many lines went in it.
-        let inner_h = h.saturating_sub(2);
+        let inner_h = overlay::inner(r).height;
         let over = (keys.len() as u16).saturating_sub(inner_h);
         let at = self.scroll.min(over);
-        let title = if over == 0 {
-            format!(" {} ", self.title)
+        let footer = if over == 0 {
+            "esc close".to_string()
         } else if at == over {
-            format!(" {} \u{2014} the end ", self.title)
+            "the end \u{b7} esc close".to_string()
         } else {
-            format!(" {} \u{2014} more below ", self.title)
+            "more below \u{b7} esc close".to_string()
         };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Rgb(
-                t.border_focused.r,
-                t.border_focused.g,
-                t.border_focused.b,
-            )))
-            // Styled rather than inherited: an untitled `title` takes the
-            // block's border colour, which is chrome and reads as chrome. The
-            // other overlays all name themselves in `header_fg`, and this is
-            // the one you open when you cannot find something.
-            .title(Span::styled(
-                title,
-                Style::default()
-                    .fg(Color::Rgb(t.header_fg.r, t.header_fg.g, t.header_fg.b))
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .style(Style::default().bg(Color::Rgb(t.bg.r, t.bg.g, t.bg.b)));
-        let inner = block.inner(rect);
-        block.render(rect, buf);
+
+        let inner = overlay::render(
+            r,
+            buf,
+            &Overlay {
+                theme: t,
+                title: self.title,
+                detail: None,
+                footer: Some(&footer),
+            },
+        );
 
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -827,5 +830,67 @@ mod tests {
             }
             .render(area, &mut buf);
         }
+    }
+
+    /// The rect `render` draws in is the one a caller can ask for up front --
+    /// checked on the glyphs, since that is what a reader (and a mouse hit
+    /// test built on the same rect) actually sees.
+    #[test]
+    fn rect_is_the_box_render_draws_in() {
+        let theme = crate::chrome::test_theme("cosmic");
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        HelpView {
+            theme: &theme,
+            bindings: TABLE,
+            mouse: &[],
+            scroll: 0,
+            title: "HELP",
+        }
+        .render(area, &mut buf);
+
+        let r = HelpView::<Act>::rect(area);
+        assert_eq!(r, help_rect(area));
+        assert_eq!(buf[(r.x, r.y)].symbol(), "\u{2554}");
+        assert_eq!(
+            buf[(r.x + r.width - 1, r.y + r.height - 1)].symbol(),
+            "\u{255d}"
+        );
+    }
+
+    /// The scroll state used to live in the title; it now lives in the
+    /// footer, on the bottom border rather than the top.
+    #[test]
+    fn the_scroll_state_is_on_the_bottom_border() {
+        let theme = crate::chrome::test_theme("cosmic");
+        let draw = |h: u16, scroll: u16| {
+            let area = Rect::new(0, 0, 100, h);
+            let mut buf = Buffer::empty(area);
+            HelpView {
+                theme: &theme,
+                bindings: TABLE,
+                mouse: &[],
+                scroll,
+                title: "HELP",
+            }
+            .render(area, &mut buf);
+            let r = help_rect(area);
+            let top: String = (r.x..r.x + r.width)
+                .map(|x| buf[(x, r.y)].symbol().to_string())
+                .collect();
+            let bottom: String = (r.x..r.x + r.width)
+                .map(|x| buf[(x, r.y + r.height - 1)].symbol().to_string())
+                .collect();
+            (top, bottom)
+        };
+
+        let (top, bottom) = draw(10, 0);
+        assert!(!top.contains("more below"), "{top:?}");
+        assert!(bottom.contains("more below"), "{bottom:?}");
+        assert!(bottom.contains("esc close"), "{bottom:?}");
+
+        let (top, bottom) = draw(10, 999);
+        assert!(!top.contains("the end"), "{top:?}");
+        assert!(bottom.contains("the end"), "{bottom:?}");
     }
 }

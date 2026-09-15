@@ -12,12 +12,12 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+use ratatui::widgets::Widget;
 
 use crate::text::truncate;
 use crate::theme::Theme;
 
+use super::overlay::{self, Anchor, Overlay};
 use super::rgb;
 
 /// One line: a setting and where it stands, or an action with nothing to show.
@@ -47,14 +47,7 @@ impl Row {
 
 /// Where the overlay lands, so a click can be tested against it.
 pub fn rect(area: Rect, rows: usize) -> Rect {
-    let w = area.width.saturating_sub(4).clamp(24, 52);
-    let h = area.height.saturating_sub(4).min(rows as u16 + 4).max(6);
-    Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
-    }
+    overlay::rect(area, (24, 52), rows as u16 + 4, 6, Anchor::Centre)
 }
 
 /// The rows themselves, inside the frame and below the heading.
@@ -102,33 +95,27 @@ pub struct SettingsView<'a> {
     pub rows: &'a [Row],
     pub cursor: usize,
     pub scroll: usize,
+    /// Bottom border hint, e.g. `"enter change \u{b7} esc close"`. A caller's
+    /// verb rather than one baked in here: starcord's right-click menu reuses
+    /// this widget and used to inherit "enter change" whether or not enter
+    /// was the key that did anything.
+    pub footer: &'a str,
 }
 
 impl<'a> Widget for SettingsView<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let t = self.theme;
         let r = rect(area, self.rows.len());
-        Clear.render(r, buf);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Double)
-            .border_style(Style::default().fg(rgb(t.border_focused)))
-            .title(Span::styled(
-                format!("{}{} ", super::frame::TITLE_LEAD, self.heading),
-                Style::default().fg(rgb(t.header_fg)),
-            ))
-            .title_bottom(
-                Line::from(Span::styled(
-                    " enter change \u{b7} esc close ",
-                    Style::default().fg(rgb(t.dim)),
-                ))
-                .right_aligned(),
-            )
-            .style(Style::default().bg(rgb(t.panel_bg)));
-        let inner = block.inner(r);
-        block.render(r, buf);
-        super::frame::render_corners(r, buf, t, true);
+        let inner = overlay::render(
+            r,
+            buf,
+            &Overlay {
+                theme: t,
+                title: self.heading,
+                detail: None,
+                footer: Some(self.footer),
+            },
+        );
 
         if inner.height == 0 || inner.width == 0 {
             return;
@@ -161,8 +148,8 @@ impl<'a> Widget for SettingsView<'a> {
             let selected = i == self.cursor;
             let style = if selected {
                 Style::default()
-                    .fg(rgb(t.row_selected_fg))
-                    .bg(rgb(t.row_selected_bg))
+                    .fg(rgb(t.row_cursor_fg))
+                    .bg(rgb(t.row_cursor_bg))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(rgb(t.row_fg))
@@ -214,6 +201,7 @@ mod tests {
             rows,
             cursor,
             scroll: 0,
+            footer: "enter change \u{b7} esc close",
         }
         .render(area, &mut buf);
         (0..h)
@@ -253,7 +241,10 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_row_is_a_bar_across_the_list() {
+    fn the_cursor_row_uses_the_cursor_role() {
+        // `row_selected` is the louder role staramp reserves for the playing
+        // track; every list here draws the row the cursor is on with
+        // `row_cursor` instead.
         let theme = test_theme("cosmic");
         let area = Rect::new(0, 0, 60, 14);
         let mut buf = Buffer::empty(area);
@@ -265,20 +256,48 @@ mod tests {
             rows: &rows,
             cursor: 1,
             scroll: 0,
+            footer: "enter change \u{b7} esc close",
         }
         .render(area, &mut buf);
 
         let list = list_rect(area, rows.len());
-        let selected = buf[(list.x, list.y + 1)].style().bg;
+        let cursor = buf[(list.x, list.y + 1)].style().bg;
         assert_eq!(
-            selected,
+            cursor,
             Some(Color::Rgb(
-                theme.row_selected_bg.r,
-                theme.row_selected_bg.g,
-                theme.row_selected_bg.b
+                theme.row_cursor_bg.r,
+                theme.row_cursor_bg.g,
+                theme.row_cursor_bg.b
             ))
         );
-        assert_ne!(buf[(list.x, list.y)].style().bg, selected);
+        assert_ne!(buf[(list.x, list.y)].style().bg, cursor);
+    }
+
+    #[test]
+    fn the_footer_is_the_one_the_caller_gave() {
+        // starcord's right-click menu reuses this widget and used to inherit
+        // "enter change" whether or not enter was the key that did anything.
+        let theme = test_theme("cosmic");
+        let area = Rect::new(0, 0, 60, 14);
+        let mut buf = Buffer::empty(area);
+        let rows = rows();
+        SettingsView {
+            theme: &theme,
+            heading: "SETTINGS",
+            title: "album",
+            rows: &rows,
+            cursor: 0,
+            scroll: 0,
+            footer: "y toggle \u{b7} esc close",
+        }
+        .render(area, &mut buf);
+
+        let r = rect(area, rows.len());
+        let bottom: String = (0..area.width)
+            .map(|x| buf[(x, r.y + r.height - 1)].symbol().to_string())
+            .collect();
+        assert!(bottom.contains("y toggle"), "{bottom:?}");
+        assert!(!bottom.contains("enter change"), "{bottom:?}");
     }
 
     /// Every row the overlay drew is under the pointer where it was drawn, and

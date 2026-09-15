@@ -11,6 +11,7 @@
 
 pub mod frame;
 pub mod header;
+pub mod overlay;
 pub mod scrollbar;
 pub mod settings;
 
