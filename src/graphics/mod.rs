@@ -371,6 +371,21 @@ impl Graphics {
         (f.width > 0 && f.height > 0).then(|| f.height as f32 / f.width as f32)
     }
 
+    /// How big a terminal cell is, in pixels: width, then height.
+    ///
+    /// [`cell_aspect`](Self::cell_aspect) is the ratio and this is the
+    /// measurement it comes from, under the same condition -- `None` when
+    /// nothing has measured a cell, because there is then no honest number to
+    /// give. An application that only fits a picture to a rectangle wants the
+    /// ratio; one that decides how many *pixels* a rectangle holds, to scale a
+    /// picture to exactly that before handing it over, needs the measurement
+    /// itself. [`Resize::Fit`] never upsizes, so growing a small picture is
+    /// the caller's own work, and it cannot be done without this.
+    pub fn cell_size(&self) -> Option<(u16, u16)> {
+        let f = self.picker.as_ref()?.font_size();
+        (f.width > 0 && f.height > 0).then_some((f.width, f.height))
+    }
+
     /// What is actually in use, for the help overlay.
     pub fn name(&self) -> &'static str {
         match self.picker.as_ref().map(|p| p.protocol_type()) {
@@ -763,6 +778,26 @@ mod tests {
             .is_none());
         assert!(!g.pictures_available());
         assert_eq!(g.name(), "off");
+    }
+
+    /// The ratio and the measurement have to agree, and both have to be
+    /// absent together: an application that grows a picture to fill a
+    /// rectangle asks for the measurement and falls back to the same guess
+    /// `cell_aspect` invites when there is none.
+    #[test]
+    fn the_cell_size_is_the_measurement_the_aspect_is_taken_from() {
+        let mut g = Graphics::disabled();
+        assert!(g.cell_size().is_none(), "nothing has measured a cell");
+        assert!(g.cell_aspect().is_none());
+
+        #[allow(deprecated)]
+        let picker = Picker::from_fontsize(FontSize {
+            width: 7,
+            height: 16,
+        });
+        g.picker = Some(picker);
+        assert_eq!(g.cell_size(), Some((7, 16)));
+        assert_eq!(g.cell_aspect(), Some(16.0 / 7.0));
     }
 
     #[test]
