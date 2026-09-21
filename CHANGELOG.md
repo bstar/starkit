@@ -10,6 +10,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- **A `webp` feature.** The `image` decoder for WebP, which is what news
+  sites serve now, behind its own feature the way GIF and BMP are, so only
+  an application that draws pictures out of web pages carries it.
+
 - **How big a cell is, not just how tall** (`Graphics::cell_size`). The
   companion to `cell_aspect`: the measurement the ratio is taken from, in
   pixels, under the same condition -- `None` when nothing has measured one.

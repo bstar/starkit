@@ -29,6 +29,9 @@ gif = ["image", "image/gif"]
 # Winamp skin import is staramp's, and it is the only thing that needs a ZIP
 # reader or a BMP decoder.
 wsz = ["dep:zip", "image", "image/bmp"]
+# WebP is what news sites serve now; starwire draws the pictures inside an
+# article, and the other applications have no reason to carry the decoder.
+webp = ["image", "image/webp"]
 # An HTTP client is not something a UI library should force on a caller who
 # only wanted a theme engine.
 net = ["dep:ureq"]
@@ -51,8 +54,8 @@ ratatui-image = { version = "11.0.6", default-features = false, features = [
     "crossterm",
 ], optional = true }
 # Decoders, chosen rather than defaulted: PNG and JPEG cover album art, avatars
-# and attachments; GIF and BMP arrive through the `gif` and `wsz` features
-# where they are actually wanted.
+# and attachments; GIF, BMP and WebP arrive through the `gif`, `wsz` and
+# `webp` features where they are actually wanted.
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
