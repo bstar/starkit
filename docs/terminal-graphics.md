@@ -267,7 +267,9 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Fractional-cell highlight backgrounds | real 1850×1998 browser PNG has uniform pixels throughout a 97-cell highlighted row; integer boundaries remove antialiasing seams |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
-| Ghostty 1.3.1 Linux | graphical view, actions menu, keyboard input, session reattachment and font zoom; X11/software Mesa test |
+| Shared standalone Kitty example | actual image sky/ridge pixels, keyboard navigation, X11 pointer selection, menu/font resize and clean exit |
+| Ghostty 1.3.1 Linux | X11 and native Wayland graphical pixels, keyboard/marks/menu/font zoom and clean exit; software Mesa |
+| Ghostty native Wayland graphical SSH | real SSH to a controller without a display environment; marked 64 MiB and quoted/Unicode file copies checksum-verified; clean local/remote exit |
 | Cell fallback | real tmux displays the same controller; PTY test copies a file with Electron and display servers unavailable |
 
 The screenshot latency probe compares actual captured pixels, while including
@@ -285,11 +287,23 @@ Background rectangles now share integer pixel boundaries; text retains its
 authoritative cell positions. `scripts/test-fractional-background.py` checks every
 pixel in the blank highlighted row of an actual offscreen PNG.
 
+A separate native Wayland Ghostty 1.3.1 test verified navigation/marks, menu
+pixels, font zoom with a new geometry generation, and clean frontend/controller
+exit. The same terminal also ran the complete graphical SSH frontend against a
+private loopback SSH server. The remote controller had neither `DISPLAY` nor
+`WAYLAND_DISPLAY`; marked copies of a 64 MiB file and a quoted/Unicode filename
+matched SHA-256 checksums. Both local and remote session processes exited cleanly.
+This verifies that platform and local SSH topology, not arbitrary WAN conditions.
+
 Linux/macOS controller builds and the offscreen sample have CI jobs.
 
 The interactive smoke test (`scripts/test-kitty-interactive.py`) captures the
 actual Kitty window, compares pixels after navigation/menu/font zoom, and checks
 normal session cleanup. It passed on the local Linux desktop with Kitty 0.49.2.
+The example includes a generated image independent of local files; the test
+checks its sky and ridge colors in actual Kitty screenshots. On Linux,
+`--pointer-xdotool` injects a real X11 click and verifies selection pixels change;
+this pointer path runs in Linux CI.
 The test requires a live Electron process, so a passing cell fallback is not
 accepted as graphical proof. Linux Xvfb passed on shared-code commit `6534ffd`
 ([CI run](https://github.com/bstar/starkit/actions/runs/36934302120)); its screenshots

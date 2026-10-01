@@ -8,6 +8,29 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+/// A generated preview keeps the shared example independent of local files.
+pub fn preview(rect: Rect) -> Component {
+    static PNG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let png = PNG.get_or_init(|| {
+        let image = starkit::image::RgbaImage::from_fn(80, 48, |x, y| {
+            let ridge = 18 + x.abs_diff(40) / 3;
+            let color = if y >= ridge {
+                [166, 227, 161, 255]
+            } else {
+                [137, 180, 250, 255]
+            };
+            starkit::image::Rgba(color)
+        });
+        starkit::terminal_graphics::assets::encode_png(&image)
+            .expect("fixed demo surface is within PNG limits")
+    });
+    Component::Image {
+        rect,
+        id: "shared-demo-preview".into(),
+        png: Some(png.clone()),
+    }
+}
 pub fn handles() -> bool {
     std::env::args()
         .nth(1)
@@ -178,13 +201,26 @@ impl Controller for Demo {
             secret: false,
         });
         let top = self.cursor.saturating_sub(10);
+        let preview_width = if v.columns >= 65 && v.rows >= 20 {
+            22
+        } else {
+            0
+        };
+        if preview_width != 0 {
+            scene.components.push(preview(Rect {
+                x: v.columns - 20,
+                y: 8,
+                width: 16,
+                height: 8.min(v.rows.saturating_sub(12)),
+            }));
+        }
         for y in 8..v.rows.saturating_sub(4) {
             let index = top + usize::from(y - 8);
             scene.components.push(Component::ListRow {
                 rect: Rect {
                     x: 3,
                     y,
-                    width: v.columns.saturating_sub(6),
+                    width: v.columns.saturating_sub(6 + preview_width),
                     height: 1,
                 },
                 label: format!("Shared row {index} · {}", self.filter),

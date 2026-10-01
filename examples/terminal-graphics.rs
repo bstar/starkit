@@ -55,12 +55,18 @@ fn main() -> anyhow::Result<()> {
             },
         ],
     };
+    scene.components.push(interactive::preview(Rect {
+        x: 77,
+        y: 7,
+        width: 18,
+        height: 8,
+    }));
     for i in 0..20 {
         scene.components.push(Component::ListRow {
             rect: Rect {
                 x: 4,
                 y: 7 + i,
-                width: 85,
+                width: 70,
                 height: 1,
             },
             label: format!("Shared graphical component {i} · Unicode 日本語"),

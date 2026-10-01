@@ -92,7 +92,7 @@ jobs:
           npm run install-runtime --prefix runtime/terminal-graphics
           node --test runtime/terminal-graphics/capture.test.cjs
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxcb-xkb1 libxkbcommon-x11-0 libgl1-mesa-dri libegl1
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgtk-3-0 libnss3 libasound2t64 libxcb-xkb1 libxkbcommon-x11-0 libgl1-mesa-dri libegl1
       - if: runner.os == 'Linux'
         # Allow Electron's user-namespace sandbox on the disposable CI runner.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -123,7 +123,7 @@ jobs:
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
-            --example "$PWD/target/debug/examples/terminal-graphics" --output kitty-interactive
+            --example "$PWD/target/debug/examples/terminal-graphics" --pointer-xdotool xdotool --output kitty-interactive
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \

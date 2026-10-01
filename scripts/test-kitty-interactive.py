@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--example", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--renderer-failure", action="store_true")
+    parser.add_argument("--pointer-xdotool", help="Verify actual X11 pointer input")
     args = parser.parse_args()
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -34,6 +35,7 @@ def main():
             args.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
             "-o", "allow_remote_control=yes", "-o", "remember_window_size=no",
             "-o", "initial_window_width=100c", "-o", "initial_window_height=40c",
+            *(["-o", "linux_display_server=x11"] if args.pointer_xdotool else []),
             "--title", "STAR-KIT-INTERACTIVE-PROOF", args.example, "--interactive",
         ], stdout=log, stderr=log)
         session_path = None
@@ -80,6 +82,12 @@ def main():
                        for p in window["foreground_processes"]), \
                 "No Electron pixel renderer; the cell fallback does not prove this gate"
             initial = capture("initial")
+            # These colors occur only in the generated image, not panel chrome.
+            colors = Image.frombytes("RGB", initial[0], initial[1]).getcolors(
+                initial[0][0] * initial[0][1])
+            counts = {color: count for count, color in colors}
+            assert counts.get((166, 227, 161), 0) > 100, "Preview ridge did not render"
+            assert counts.get((137, 180, 250), 0) > 100, "Preview sky did not render"
             rc("send-text", "--match", "id:1", "jjjjj ")
             time.sleep(.7)
             selected = capture("selected")
@@ -90,6 +98,22 @@ def main():
             assert menu != selected, "Menu did not change rendered pixels"
             rc("send-text", "--match", "id:1", "\x1b")
             time.sleep(.4)
+            if args.pointer_xdotool:
+                tool = args.pointer_xdotool
+                window_id = subprocess.check_output([
+                    tool, "search", "--onlyvisible", "--pid", str(child.pid),
+                    "--name", "STAR-KIT-INTERACTIVE-PROOF",
+                ], timeout=5).decode().splitlines()[0]
+                before_pointer = capture("before-pointer")
+                subprocess.run([
+                    tool, "windowfocus", "--sync", window_id,
+                    "mousemove", "--window", window_id,
+                    str(initial[0][0] // 8), str(initial[0][1] // 2),
+                    "click", "1",
+                ], check=True, timeout=5)
+                time.sleep(.5)
+                assert capture("pointer") != before_pointer, \
+                    "Pointer selection did not change rendered pixels"
             rc("action", "--match", "id:1", "change_font_size", "current", "+2")
             time.sleep(.7)
             zoomed = capture("zoomed")
@@ -139,6 +163,8 @@ def main():
                 "keyboard_pixels_changed": True, "menu_pixels_changed": True,
                 "font_resize_pixels_changed": True, "clean_exit": True,
                 "renderer_loss_preserved_session": args.renderer_failure,
+                "shared_image_pixels": True,
+                "pointer_pixels_changed": bool(args.pointer_xdotool),
                 "initial_pixels": initial[0], "zoomed_pixels": zoomed[0],
             }, indent=2) + "\n")
             print("Kitty interactive pixel/input/resize/exit proof passed")
