@@ -271,6 +271,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Ghostty 1.3.1 Linux | X11 and native Wayland graphical pixels, keyboard/marks/menu/font zoom and clean exit; software Mesa |
 | Ghostty native Wayland graphical SSH | real SSH to a controller without a display environment; marked 64 MiB and quoted/Unicode file copies checksum-verified; clean local/remote exit |
 | Cell fallback | real tmux displays the same controller; PTY test copies a file with Electron and display servers unavailable |
+| FOLD 60×21 light/dark layout | actual Kitty 420×336 screenshots with Catppuccin Latte and Mocha; navigation/menu pixels, Preview and Operations placement, clean exit |
 
 The screenshot latency probe compares actual captured pixels, while including
 the cost of remote-control input injection and repeated screen captures. It is
