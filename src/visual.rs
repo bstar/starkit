@@ -299,6 +299,39 @@ pub mod desktop {
             .child(label.into())
     }
 }
+/// One end of a filled terminal tab, rasterized only in its padding cells.
+/// The caller must keep text outside this surface; no protocol layering is assumed.
+pub fn rounded_edge(
+    width: u16,
+    height: u16,
+    background: Rgb,
+    surface: Rgb,
+    left: bool,
+) -> Option<image::RgbaImage> {
+    use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+    if width == 0 || height == 0 || width > 512 || height > 512 {
+        return None;
+    }
+    let mut pixels = Pixmap::new(width.into(), height.into())?;
+    pixels.fill(colour(background));
+    let w = f32::from(width);
+    let h = f32::from(height);
+    let mut path = PathBuilder::new();
+    // An ellipse meets a rectangular fill without crossing the text boundary.
+    path.push_oval(Rect::from_xywh(if left { 0. } else { -w }, 0., w * 2., h)?);
+    let mut paint = Paint::default();
+    paint.set_color(colour(surface));
+    paint.anti_alias = true;
+    pixels.fill_path(
+        &path.finish()?,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    image::RgbaImage::from_raw(width.into(), height.into(), pixels.take())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,37 +382,4 @@ mod tests {
         assert_eq!(metrics.samples.len(), 2048);
         assert_eq!(metrics.p95_ms(), 2.);
     }
-}
-
-/// One end of a filled terminal tab, rasterized only in its padding cells.
-/// The caller must keep text outside this surface; no protocol layering is assumed.
-pub fn rounded_edge(
-    width: u16,
-    height: u16,
-    background: Rgb,
-    surface: Rgb,
-    left: bool,
-) -> Option<image::RgbaImage> {
-    use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
-    if width == 0 || height == 0 || width > 512 || height > 512 {
-        return None;
-    }
-    let mut pixels = Pixmap::new(width.into(), height.into())?;
-    pixels.fill(colour(background));
-    let w = f32::from(width);
-    let h = f32::from(height);
-    let mut path = PathBuilder::new();
-    // An ellipse meets a rectangular fill without crossing the text boundary.
-    path.push_oval(Rect::from_xywh(if left { 0. } else { -w }, 0., w * 2., h)?);
-    let mut paint = Paint::default();
-    paint.set_color(colour(surface));
-    paint.anti_alias = true;
-    pixels.fill_path(
-        &path.finish()?,
-        &paint,
-        FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
-    image::RgbaImage::from_raw(width.into(), height.into(), pixels.take())
 }
