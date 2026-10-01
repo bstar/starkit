@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Desktop build libraries
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
@@ -90,7 +90,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Linux desktop libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev libvulkan-dev
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo test --all-features
