@@ -84,12 +84,12 @@ def main():
             counts = {color: count for count, color in colors}
             return counts.get((166, 227, 161), 0) > 100 and counts.get((137, 180, 250), 0) > 100
 
-        def settled_preview(name):
+        def settled_preview(name, after=None):
             deadline = time.monotonic() + 30
             previous = None
             while True:
                 pixels = capture(name)
-                if preview_visible(pixels) and pixels == previous:
+                if preview_visible(pixels) and pixels == previous and pixels != after:
                     return pixels
                 assert time.monotonic() < deadline, "Image pixels did not settle in Kitty"
                 previous = pixels
@@ -122,30 +122,27 @@ def main():
             # Require the generated image in two consecutive real screenshots.
             initial = settled_preview("initial")
             rc("send-text", "--match", "id:1", "jjjjj ")
-            time.sleep(.7)
-            selected = capture("selected")
+            selected = settled_preview("selected", initial)
             assert initial != selected, "Keyboard navigation did not change rendered pixels"
             rc("send-text", "--match", "id:1", "c")
-            time.sleep(.5)
-            menu = capture("menu")
+            menu = settled_preview("menu", selected)
             assert menu != selected, "Menu did not change rendered pixels"
             rc("send-text", "--match", "id:1", "\x1b")
-            time.sleep(.4)
+            closed_menu = settled_preview("closed-menu", menu)
             if args.pointer_xdotool:
                 tool = args.pointer_xdotool
                 window_id = subprocess.check_output([
                     tool, "search", "--onlyvisible", "--pid", str(child.pid),
                     "--name", "STAR-KIT-INTERACTIVE-PROOF",
                 ], timeout=5).decode().splitlines()[0]
-                before_pointer = capture("before-pointer")
+                before_pointer = closed_menu
                 subprocess.run([
                     tool, "windowfocus", "--sync", window_id,
                     "mousemove", "--window", window_id,
                     str(initial[0][0] // 8), str(initial[0][1] // 2),
                     "click", "1",
                 ], check=True, timeout=5)
-                time.sleep(.5)
-                assert capture("pointer") != before_pointer, \
+                assert settled_preview("pointer", before_pointer) != before_pointer, \
                     "Pointer selection did not change rendered pixels"
             previous_generation = presented_generation()
             rc("action", "--match", "id:1", "change_font_size", "current", "+2")
