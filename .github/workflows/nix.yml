@@ -3,7 +3,7 @@ name: nix
 # Documentation-only changes do not rebuild anything.
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/terminal-graphics]
     paths-ignore: &docs
       - '**/*.md'
       - 'docs/**'

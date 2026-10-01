@@ -3,7 +3,7 @@ name: ci
 # Documentation-only changes do not rebuild anything.
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/terminal-graphics]
     paths-ignore: &docs
       - '**/*.md'
       - 'docs/**'
@@ -76,3 +76,32 @@ jobs:
   # --all-targets` in both. It is added once both are published on GitHub;
   # until then it would fail on a repository that does not exist, which teaches
   # everyone to ignore a red tick.
+
+  graphical-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: npm ci --prefix runtime/terminal-graphics
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+      - if: runner.os == 'Linux'
+        # Allow Electron's user-namespace sandbox on the disposable CI runner.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - if: runner.os == 'Linux'
+        run: |
+          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
+          xvfb-run -a cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
+      - if: runner.os == 'macOS'
+        run: |
+          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
+          cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: graphical-smoke-${{ matrix.os }}
+          path: graphical-smoke.png

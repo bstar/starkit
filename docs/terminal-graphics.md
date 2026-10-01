@@ -1,6 +1,7 @@
 # Terminal graphics foundation
 
-Status: design and reference investigation. Implementation has not started.
+Status: implemented experimental backend, with Linux Kitty and headless SSH
+verification. macOS offscreen rendering and controller tests are CI gates.
 This experiment starts at STAR/KIT main `ff7ae1a`; its first consumer starts at
 STAR/FOLD main `6cbee38` (v0.0.2). Both branches are named
 `experiment/terminal-graphics`. The existing GPUI experiment is preserved on
@@ -160,3 +161,97 @@ The browser renderer's remote placement remains an experiment: running it on the
 remote host requires a working headless runtime; running it locally requires the
 scene/input relay. Choose from measured behavior rather than assuming either
 works automatically.
+
+
+## Implemented backend
+
+Enable the optional `terminal-graphics` feature. Default consumers retain their
+existing terminal API and do not install Electron. The shared model contains
+panels, virtual list rows, tabs, menus, dialogs, text fields, meters, images and
+embedded terminal slots, plus styled compatibility spans for established app
+content. Layout and hit regions retain the application's authoritative coordinate
+grid; this is not a separate browser file manager.
+
+The maintained renderer is Electron **43.6.0**, pinned by the optional runtime's
+npm lockfile (and supplied by the Nix `graphical-runtime` package). It creates one
+hidden, sandboxed offscreen BrowserWindow, loads only packaged local content,
+and sends PNG frames through Kitty's in-band graphics protocol. JavaScript has no
+filesystem operation API. Runtime profiles and logs live in a private temporary
+folder and are removed on exit. A missing/failed runtime reports an error after
+restoring the terminal.
+
+Frames are replaced inside synchronized terminal updates: place the new image
+before deleting the previous image. Complete frames are currently used; dirty
+rectangle transport remains a measured optimization opportunity. The local
+renderer keeps only its newest pending scene. Remote scenes include visible rows
+and cached, downsampled PNG assets rather than complete directory listings.
+
+### SSH and session boundary
+
+```text
+Local Kitty ← PNG frames ← local Electron ← local STAR/KIT frontend
+                                               ↕ bounded JSON lines
+                                            SSH stdio relay
+                                               ↕ private Unix socket
+                                    persistent remote Rust controller
+                                               ↕ existing workers
+```
+
+The remote host needs neither Electron nor a display server. SSH authentication
+finishes before raw mode, using a private connection multiplexing socket. Remote
+commands shell-quote executable and directory arguments. Standard SSH host/key
+configuration applies. Sessions use mode 0700 directories and mode 0600 sockets;
+there is no public listener. A bare socket probe cannot replace an attachment.
+One authenticated frontend owns an attachment at a time.
+
+Protocol version 1 limits messages to 16 MiB, scenes to 120,000 cells and viewports
+to 8192 pixels per dimension / 32 million pixels. Input queues and frame/asset
+queues are bounded. Filesystem mutations remain on the application's controller.
+Per-client input IDs survive reattachment; acknowledgements reject duplicates,
+and reconnect never resends a mutation. Acknowledged frame target signatures and
+geometry generations protect pointer input. Progress repaint does not invalidate
+a click; a replaced listing does. Stale releases cancel captured drag actions.
+OSC 72 transfers are acknowledged and apply backpressure independently of scene
+coalescing. Local clipboard effects are applied by the local renderer.
+
+### Running the shared example
+
+```sh
+nix develop .#graphical
+cargo run --example terminal-graphics --features terminal-graphics -- --interactive
+# Without taking over the terminal, capture the component sample:
+cargo run --example terminal-graphics --features terminal-graphics -- sample.png
+# Warm frame benchmark:
+STAR_GRAPHICS_BENCH_FRAMES=100 cargo run --example terminal-graphics --features terminal-graphics -- sample.png
+```
+
+The interactive example includes 100,000 virtual entries, tabs, marks, a text field,
+menus and a persistent controller. Arrow keys/j/k navigate; space marks, typing
+edits the text field, `c` opens a menu, Escape closes it, q ends the controller and
+Ctrl+Q detaches. It does not perform file operations.
+
+### Evidence and remaining promotion gates
+
+Measured on the Linux development machine; these are observations, not guarantees:
+
+| Check | Result |
+| --- | --- |
+| Hidden renderer cold startup | 209–435 ms |
+| 100 warm scene→PNG updates | p95 68.28 ms; sample PNG 120,457 bytes |
+| FOLD 100,000-entry controller+scene updates | p95 1.848 ms; visible rows only; <100 KiB JSON |
+| Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
+| Remote copy through disconnect | checksums verified; same process reattached; repeated paste rejected |
+| Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
+
+The latency figures measure different boundaries: SSH acknowledgements are not
+pixel presentation latency. Full frames travel only from local Electron to local
+Kitty, so the remote link carries scene data and occasional image assets.
+
+Linux/macOS controller builds and the offscreen sample have CI jobs. Promotion
+still requires macOS Kitty interaction, sustained idle CPU/RSS and end-to-end
+pixel latency measurements, and broader terminal compatibility testing. The
+experimental launcher explicitly requires a detected Kitty backend. Unsupported
+terminals and multiplexers should use the ordinary TUI; their graphical support
+is not claimed. PNG text has no native terminal selection or screen-reader text
+stream; application clipboard actions remain available. There is no remote audio
+or video forwarding: player/editor processes run on the application host.

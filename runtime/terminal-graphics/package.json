@@ -1,0 +1,8 @@
+{
+  "name": "starkit-terminal-graphics-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional local offscreen renderer for STAR apps inside Kitty",
+  "license": "MIT",
+  "devDependencies": {"electron": "43.6.0"}
+}

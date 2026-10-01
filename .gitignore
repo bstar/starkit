@@ -2,6 +2,7 @@
 /result
 /result-*
 .direnv/
+node_modules/
 
 # Editor and desktop cruft, so a contributor's tools do not land in a PR.
 .DS_Store
