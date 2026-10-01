@@ -527,13 +527,14 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
             ping = Instant::now();
         }
         let timed_out = last_reply.elapsed() > Duration::from_secs(if connected { 10 } else { 20 });
-        let dead = timed_out
-            || connection
-                .as_mut()
-                .map(|c| c.child.try_wait())
-                .transpose()?
-                .flatten()
-                .is_some();
+        let dead = connection.is_some()
+            && (timed_out
+                || connection
+                    .as_mut()
+                    .map(|c| c.child.try_wait())
+                    .transpose()?
+                    .flatten()
+                    .is_some());
         if dead {
             if epoch.is_none() {
                 fatal = Some("Could not start graphical session. Check the feature-enabled host executable and its session log.".into());
