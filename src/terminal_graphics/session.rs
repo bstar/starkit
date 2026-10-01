@@ -89,11 +89,28 @@ struct Peer {
 }
 impl Peer {
     fn new(socket: UnixStream) -> Result<Self> {
+        struct Setup<'a> {
+            socket: &'a UnixStream,
+            armed: bool,
+        }
+        impl Drop for Setup<'_> {
+            fn drop(&mut self) {
+                if self.armed {
+                    let _ = self.socket.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        }
+        let mut setup = Setup {
+            socket: &socket,
+            armed: true,
+        };
         // Accepted sockets can inherit the listener's nonblocking mode on BSD.
         // Dedicated reader/writer threads require blocking streams everywhere.
         socket.set_nonblocking(false)?;
         let (tx, messages) = bounded(64);
         let mut reader = BufReader::new(socket.try_clone()?);
+        let mut writer = socket.try_clone()?;
+        writer.set_write_timeout(Some(Duration::from_secs(10)))?;
         std::thread::Builder::new()
             .name("star-session-input".into())
             .spawn(move || loop {
@@ -112,8 +129,6 @@ impl Peer {
         let (control, rx) = bounded(64);
         let (frames, frame_rx) = bounded(1);
         let old_frame = frame_rx.clone();
-        let mut writer = socket.try_clone()?;
-        writer.set_write_timeout(Some(Duration::from_secs(10)))?;
         std::thread::Builder::new()
             .name("star-session-output".into())
             .spawn(move || loop {
@@ -126,6 +141,8 @@ impl Peer {
                     return;
                 }
             })?;
+        setup.armed = false;
+        drop(setup);
         Ok(Self {
             socket,
             messages,
@@ -222,7 +239,12 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                 // Liveness probes and abandoned connections must not steal the
                 // active attachment. Promote only a complete protocol handshake.
                 if candidates.len() < 4 {
-                    candidates.push((Peer::new(socket)?, Instant::now()));
+                    match Peer::new(socket) {
+                        Ok(candidate) => candidates.push((candidate, Instant::now())),
+                        Err(error) => {
+                            tracing::debug!(%error, "Discarding connection that closed during session setup")
+                        }
+                    }
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
