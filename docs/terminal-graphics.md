@@ -181,8 +181,12 @@ folder and are removed on exit. A missing/failed runtime reports an error after
 restoring the terminal.
 
 Frames are replaced inside synchronized terminal updates: place the new image
-before deleting the previous image. Complete frames are currently used; dirty
-rectangle transport remains a measured optimization opportunity. The local
+before deleting the previous image. The presenter caches one complete frame:
+identical PNG content and cell geometry reuse the existing placement and send
+zero image payload bytes. Scene acknowledgements still advance input guards.
+Resize and cleanup invalidate the cache; retained encoded data is bounded to
+15 MB. Changed frames still use complete images; dirty rectangle transport
+remains an implementation gate. The local
 renderer keeps only its newest pending scene. Remote scenes include visible rows
 and cached, downsampled PNG assets rather than complete directory listings.
 

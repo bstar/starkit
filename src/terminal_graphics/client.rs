@@ -543,15 +543,14 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                         "Graphical frame presented"
                     );
                     if pixels {
-                        presenter.present(
+                        bytes += presenter.present(
                             &png,
                             size.columns,
                             size.rows,
                             &mut io::stdout().lock(),
-                        )?;
+                        )? as u64;
                     }
                     frames += 1;
-                    bytes += png.len() as u64;
                     shown = Some((revision, generation));
                     if connected {
                         if let Some(c) = &connection {

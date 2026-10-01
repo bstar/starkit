@@ -164,12 +164,14 @@ impl Drop for Renderer {
 pub struct KittyPresenter {
     next: u32,
     previous: Option<u32>,
+    cached: Option<(String, u16, u16)>,
 }
 impl Default for KittyPresenter {
     fn default() -> Self {
         Self {
             next: 0x534b0000,
             previous: None,
+            cached: None,
         }
     }
 }
@@ -180,7 +182,7 @@ impl KittyPresenter {
         columns: u16,
         rows: u16,
         out: &mut impl Write,
-    ) -> io::Result<()> {
+    ) -> io::Result<usize> {
         if png.len() > 15_000_000
             || !png
                 .bytes()
@@ -190,6 +192,15 @@ impl KittyPresenter {
                 io::ErrorKind::InvalidData,
                 "invalid PNG payload",
             ));
+        }
+        if self
+            .cached
+            .as_ref()
+            .is_some_and(|(old, cols, lines)| old == png && *cols == columns && *lines == rows)
+        {
+            // Still acknowledge this scene revision: its input targets may
+            // change even when its pixels do not.
+            return Ok(0);
         }
         self.next = self.next.wrapping_add(1);
         let id = self.next;
@@ -208,13 +219,17 @@ impl KittyPresenter {
             out.write_all(chunk)?;
             out.write_all(b"\x1b\\")?;
         }
-        if let Some(old) = self.previous.replace(id) {
+        if let Some(old) = self.previous {
             write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
         }
         out.write_all(b"\x1b[?2026l")?;
-        out.flush()
+        out.flush()?;
+        self.previous = Some(id);
+        self.cached = Some((png.to_owned(), columns, rows));
+        Ok(png.len())
     }
     pub fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.cached = None;
         if let Some(id) = self.previous.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
         }
@@ -225,6 +240,22 @@ impl KittyPresenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unchanged_pixels_reuse_placement_but_geometry_and_cleanup_invalidate_it() {
+        let mut p = KittyPresenter::default();
+        let mut out = Vec::new();
+        assert_eq!(p.present("AAAA", 80, 24, &mut out).unwrap(), 4);
+        out.clear();
+        assert_eq!(p.present("AAAA", 80, 24, &mut out).unwrap(), 0);
+        assert!(out.is_empty());
+        assert_eq!(p.present("AAAA", 81, 24, &mut out).unwrap(), 4);
+        assert!(!out.is_empty());
+        p.clear(&mut out).unwrap();
+        out.clear();
+        assert_eq!(p.present("AAAA", 81, 24, &mut out).unwrap(), 4);
+        assert!(!out.is_empty());
+    }
+
     #[test]
     fn replaces_before_retiring_and_rejects_escape_injection() {
         let mut p = KittyPresenter::default();
