@@ -22,6 +22,7 @@
 
         # One version, read rather than repeated.
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        visualLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [ fontconfig freetype libxkbcommon wayland libX11 libxcb vulkan-loader ]);
       in
       {
         # There is nothing to install -- this is a library. The package exists
@@ -36,6 +37,9 @@
           version = cargoToml.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.stdenv.cc ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libclang ];
+          LIBCLANG_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${pkgs.libclang.lib}/lib";
+          buildInputs = visualLibs;
 
           cargoBuildFlags = [ "--all-features" ];
           cargoTestFlags = [ "--all-features" ];
@@ -65,7 +69,10 @@
         formatter = pkgs.nixpkgs-fmt;
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
+          buildInputs = visualLibs;
+          LIBCLANG_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${pkgs.libclang.lib}/lib";
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath visualLibs;
+          packages = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libclang ] ++ (with pkgs; [ pkg-config stdenv.cc
             rustc
             cargo
             rustfmt
@@ -74,7 +81,7 @@
             # The licence and advisory gate, so it can be answered here rather
             # than only in CI.
             cargo-deny
-          ];
+          ]);
 
           shellHook = ''
             echo "starkit devshell · rustc $(rustc --version | cut -d' ' -f2)"

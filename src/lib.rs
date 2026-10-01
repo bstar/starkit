@@ -55,3 +55,8 @@ pub mod dock;
 pub mod input;
 pub mod vlist;
 pub mod wrap;
+
+#[cfg(feature = "visual")]
+pub mod visual;
+#[cfg(feature = "desktop")]
+pub use gpui;

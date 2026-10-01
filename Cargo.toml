@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2021"
 rust-version = "1.90"
 description = "The terminal-UI foundation shared by staramp and starcord"
-license = "MIT"
+license = "MIT AND Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/bstar/starkit"
 keywords = ["tui", "ratatui", "terminal", "theme"]
@@ -36,7 +36,13 @@ webp = ["image", "image/webp"]
 # only wanted a theme engine.
 net = ["dep:ureq"]
 
+visual = ["image", "dep:tiny-skia"]
+desktop = ["visual", "dep:gpui", "dep:unicode-segmentation"]
+
 [dependencies]
+unicode-segmentation = { version = "1", optional = true }
+tiny-skia = { version = "0.11", optional = true }
+gpui = { version = "=0.2.2", optional = true }
 # TUI. crossterm as a direct dependency, not only via ratatui's re-export,
 # because raw mode, the alternate screen, mouse capture, bracketed paste and
 # the panic hook that undoes all of it are this crate's job.

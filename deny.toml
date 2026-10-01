@@ -65,3 +65,24 @@ wildcards = "deny"
 # crates.io, so a compromised or vanished repository cannot reach a build.
 unknown-registry = "deny"
 unknown-git = "deny"
+
+# Optional GPUI dependencies. MPL applies to these unchanged library files;
+# no project source is relicensed. CC0 and NCSA are permissive.
+[[licenses.exceptions]]
+name = "cbindgen"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "dwrote"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "option-ext"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+name = "hexf-parse"
+allow = ["CC0-1.0"]
+[[licenses.exceptions]]
+name = "tiny-keccak"
+allow = ["CC0-1.0"]
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+allow = ["NCSA"]
