@@ -240,6 +240,8 @@ impl Metrics {
 }
 #[cfg(feature = "desktop")]
 pub mod desktop {
+    pub mod input;
+    pub mod terminal;
     use super::*;
     use gpui::{div, px, rgb, InteractiveElement, IntoElement, ParentElement, Styled};
     pub fn rgb24(value: Rgb) -> gpui::Rgba {
@@ -252,6 +254,16 @@ pub mod desktop {
             .border_color(rgb24(tokens.border))
             .rounded_lg()
             .p_3()
+    }
+    /// Centered native modal shell. Input and application decisions stay with the caller.
+    pub fn dialog(_tokens: Tokens) -> gpui::Div {
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgba(0x00000088))
     }
     pub fn tab(label: impl Into<gpui::SharedString>, selected: bool, tokens: Tokens) -> gpui::Div {
         div()
@@ -268,7 +280,16 @@ pub mod desktop {
             } else {
                 tokens.foreground
             }))
-            .child(label.into())
+            .max_w(px(280.))
+            .min_w(px(0.))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(label.into()),
+            )
     }
     pub fn meter(fraction: f32, tokens: Tokens) -> impl IntoElement {
         let value = if fraction.is_finite() {

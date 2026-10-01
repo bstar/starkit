@@ -5844,6 +5844,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
  "zip",

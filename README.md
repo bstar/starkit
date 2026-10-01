@@ -55,7 +55,12 @@ The `experiment/graphical-presentation` branch adds opt-in `visual` and
 `visual` supplies theme tokens, seven vector raster icons, a bounded LRU
 surface cache, explicit independent capability flags and render diagnostics.
 `desktop` re-exports exactly GPUI 0.2.2 and supplies native cards, filled tabs,
-menu items and capacity meters. GPUI is Apache-2.0; its transitive license
+menu items, modal shells, capacity meters, styled terminal-cell surfaces, and
+a controlled native text field with selection, clipboard and IME support.
+Call `desktop::input::install_bindings` once; bindings are scoped to the field.
+The field emits edits/submit/cancel/mode events; the application owns validation.
+The input component adapts GPUI’s Apache-2.0 example, with its license retained
+in `LICENSES/GPUI-input-APACHE.txt`. GPUI is Apache-2.0; its transitive license
 exceptions are named in `deny.toml`. No application or filesystem logic lives
 here. STAR/FOLD's experimental branch is the working consumer and demo.
 
