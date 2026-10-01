@@ -272,7 +272,25 @@ The latency figures measure different boundaries: SSH acknowledgements are not
 pixel presentation latency. Full frames travel only from local Electron to local
 Kitty, so the remote link carries scene data and occasional image assets.
 
-Linux/macOS controller builds and the offscreen sample have CI jobs. Promotion
+Linux/macOS controller builds and the offscreen sample have CI jobs.
+
+The interactive smoke test (`scripts/test-kitty-interactive.py`) captures the
+actual Kitty window, compares pixels after navigation/menu/font zoom, and checks
+normal session cleanup. It passed on the local Linux desktop with Kitty 0.49.2.
+The ordinary CI job exercises it under Linux Xvfb. The hosted macOS VM rejects
+Kitty's OpenGL surface with `NSGL: Failed to find a suitable pixel format`, so
+`.github/workflows/kitty-macos.yml` provides the outstanding interactive gate for
+a self-hosted Mac labelled `graphical-desktop`; its offscreen CI remains separate.
+
+A first mixed STAR/FOLD workload verified a 256 MiB copy checksum, then exposed
+Chromium `UnknownVizError` during repeated navigation/menu/theme/font changes.
+That incomplete run does not establish sustained resource stability. The runtime
+now retries only that compositor error up to five captures, with waits of 25,
+50, 75 and 100 ms. Persistent compositor errors and unrelated errors still end
+the graphical attachment; controller sessions survive attachment loss. Recovery
+has deterministic runtime tests and requires a fresh sustained workload proof.
+
+Promotion
 still requires macOS Kitty interaction, longer mixed-workload resource and end-to-end
 mixed-workload latency measurements, and broader terminal compatibility testing. The
 experimental launcher selects pixel presentation when the Kitty image transport
