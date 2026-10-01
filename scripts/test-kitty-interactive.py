@@ -63,9 +63,14 @@ def main():
                 except (subprocess.SubprocessError, IndexError):
                     assert time.monotonic() < deadline, "Kitty remote control startup timed out"
                     time.sleep(.1)
-            # The demo names its session from its frontend process ID.
-            session_path = Path.home() / ".local/starkit/graphical" / f"demo-{window['pid']}.sock"
             time.sleep(3)
+            window = json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]
+            # --hold introduces a Kitty shell parent. Use the actual demo,
+            # not window.pid, to prove creation and removal of its socket.
+            frontend = next(p for p in window["foreground_processes"]
+                            if p["cmdline"] == [args.example, "--interactive"])
+            session_path = Path.home() / ".local/starkit/graphical" / f"demo-{frontend['pid']}.sock"
+            assert session_path.exists(), "Demo controller never created its session"
             initial = capture("initial")
             rc("send-text", "--match", "id:1", "jjjjj ")
             time.sleep(.7)
