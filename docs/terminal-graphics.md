@@ -254,6 +254,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Hidden renderer cold startup | 209–435 ms |
 | 100 warm scene→PNG updates | p95 68.28 ms; sample PNG 120,457 bytes |
 | Kitty API input→observed pixel change (20 navigation inputs) | p95 219.92 ms; includes API and screen-capture overhead; 1859×2099 terminal, 100,000-row example |
+| FOLD Kitty native screenshot API, 30 navigation/preview/menu inputs | median 531.60 ms, p95 539.14 ms; 1820×2048 window; includes API/capture costs and settles preceding preview updates |
 | 100 selected-row updates with dirty regions | browser p95 63.17 ms; region comparison/encoding p95 5.73 ms; mean delta payload 32,985 bytes vs 160,612 complete-frame bytes |
 | FOLD 100,000-entry controller+scene updates | p95 1.848 ms; visible rows only; <100 KiB JSON |
 | Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
@@ -307,8 +308,8 @@ this bounded observation does not establish long-term memory stability. The
 frontend, controller and renderer exited after `q`, and the owned held terminal
 was closed separately.
 
-Promotion still requires macOS Kitty interaction and end-to-end
-mixed-workload latency measurements, and broader terminal compatibility testing. The
+Promotion still requires macOS Kitty interaction and broader terminal
+compatibility testing. The
 experimental launcher selects pixel presentation when the Kitty image transport
 is detected. Otherwise it presents the same persistent controller session as
 terminal cells, without launching Electron. This includes tmux fallback; its
