@@ -81,7 +81,7 @@ impl Renderer {
                         Ok(Some(m)) => m,
                         Ok(None) => break,
                         Err(error) => RenderMessage::Error {
-                            message: error.to_string(),
+                            message: format!("Invalid renderer response: {error}. For npm Electron, download the runtime with install-electron before launching."),
                         },
                     };
                     let error = matches!(message, RenderMessage::Error { .. });

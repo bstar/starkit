@@ -4,5 +4,10 @@
   "private": true,
   "description": "Optional local offscreen renderer for STAR apps inside Kitty",
   "license": "MIT",
-  "devDependencies": {"electron": "43.6.0"}
+  "devDependencies": {
+    "electron": "43.6.0"
+  },
+  "scripts": {
+    "install-runtime": "node node_modules/electron/install.js"
+  }
 }

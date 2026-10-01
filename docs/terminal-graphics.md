@@ -255,3 +255,14 @@ terminals and multiplexers should use the ordinary TUI; their graphical support
 is not claimed. PNG text has no native terminal selection or screen-reader text
 stream; application clipboard actions remain available. There is no remote audio
 or video forwarding: player/editor processes run on the application host.
+
+
+For a non-Nix local runtime (Node >=22.12.0), download Electron before opening
+its protocol pipe. Electron 43's npm launcher downloads lazily and prints a
+status line on first use; that output is not a renderer message.
+
+```sh
+npm ci --prefix runtime/terminal-graphics
+npm run install-runtime --prefix runtime/terminal-graphics
+export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
+```
