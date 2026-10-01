@@ -53,7 +53,17 @@ async function paint(s){
   for(const c of s.components){
     if(c.kind==='terminal')continue;
     let node=document.createElement(c.kind==='image'?'img':'div');node.className='surface';rect(node,c.rect,cw,ch);
-    if(['panel','menu','dialog'].includes(c.kind)){node.classList.add('panel');if(c.active)node.classList.add('active');if(c.kind==='menu')node.style.boxShadow='0 5px 16px #0004';}
+    if(['panel','menu','dialog'].includes(c.kind)){
+      node.classList.add('panel');if(c.active)node.classList.add('active');
+      if(c.kind!=='panel'){
+        // Preserve graphical rows underneath while replaying the controller's
+        // opaque modal content above them. Filename text never becomes HTML.
+        const content=document.createElement('canvas');content.width=Math.round(c.rect.width*cw);content.height=Math.round(c.rect.height*ch);
+        content.getContext('2d').drawImage(canvas,c.rect.x*cw,c.rect.y*ch,c.rect.width*cw,c.rect.height*ch,0,0,content.width,content.height);
+        node.append(content);
+      }
+      if(c.kind==='menu')node.style.boxShadow='0 5px 16px #0004';
+    }
     if(c.kind==='list_row'){
       node.classList.add('row');if(c.selected)node.classList.add('selected');
       node.style.background=c.background;node.style.color=c.foreground;node.style.fontSize=`${font}px`;
