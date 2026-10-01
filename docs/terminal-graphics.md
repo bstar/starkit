@@ -241,6 +241,8 @@ Measured on the Linux development machine; these are observations, not guarantee
 | FOLD 100,000-entry controller+scene updates | p95 1.848 ms; visible rows only; <100 KiB JSON |
 | Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
 | Remote copy through disconnect | checksums verified; same process reattached; repeated paste rejected |
+| Quiet full-size local sample (3 seconds) | 1.67% aggregate CPU; 451 MiB aggregate PSS; controller 19 MiB RSS |
+| Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
 
 The latency figures measure different boundaries: SSH acknowledgements are not
@@ -266,3 +268,12 @@ npm ci --prefix runtime/terminal-graphics
 npm run install-runtime --prefix runtime/terminal-graphics
 export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
 ```
+
+
+For software rendering, set `STAR_GRAPHICS_SOFTWARE=1`. On Linux,
+`STAR_GRAPHICS_PLATFORM=x11` or `wayland` explicitly chooses the display backend;
+CI uses Xvfb with X11 and software rendering. A local display server is still
+required; the SSH application host does not run this renderer. Chromium's memory
+cost remains material: the short local PSS sample includes renderer, frontend and
+controller processes. Sustained measurements and a renderer sharing strategy
+across multiple STAR apps remain promotion work.

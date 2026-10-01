@@ -3,6 +3,7 @@ const {app, BrowserWindow, ipcMain} = require('electron');
 const path = require('node:path');
 app.setName('STAR/KIT graphical renderer');
 app.setPath('userData', path.join(__dirname, 'profile'));
+if (process.env.STAR_GRAPHICS_SOFTWARE === '1') app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('force-device-scale-factor', '1');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');

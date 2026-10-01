@@ -98,6 +98,8 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
+          export STAR_GRAPHICS_SOFTWARE=1
+          export STAR_GRAPHICS_PLATFORM=x11
           xvfb-run -a cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
       - if: runner.os == 'macOS'
         run: |

@@ -53,7 +53,14 @@ impl Renderer {
         let executable =
             std::env::var_os("STAR_GRAPHICS_ELECTRON").unwrap_or_else(|| "electron".into());
         let log = fs::File::create(directory.join("renderer.log"))?;
-        let child = Command::new(executable)
+        let mut command = Command::new(executable);
+        #[cfg(target_os = "linux")]
+        if let Ok(platform) = std::env::var("STAR_GRAPHICS_PLATFORM") {
+            if matches!(platform.as_str(), "x11" | "wayland") {
+                command.arg(format!("--ozone-platform={platform}"));
+            }
+        }
+        let child = command
             .arg(directory.join("main.cjs"))
             .env_remove("ELECTRON_RUN_AS_NODE")
             .stdin(Stdio::piped())
