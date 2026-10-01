@@ -79,6 +79,39 @@ pub fn list(root: &Path) -> Result<Vec<String>> {
     Ok(sessions)
 }
 
+#[derive(Default)]
+struct PresentationBudget {
+    enabled: bool,
+    outstanding: Option<(u64, u64, Instant, usize)>,
+}
+impl PresentationBudget {
+    fn ready(&self, generation: u64) -> bool {
+        !self.enabled
+            || self
+                .outstanding
+                .is_none_or(|(_, old, _, _)| old != generation)
+    }
+    fn sent(&mut self, revision: u64, generation: u64, bytes: usize) {
+        if self.enabled {
+            self.outstanding = Some((revision, generation, Instant::now(), bytes));
+        }
+    }
+    fn presented(&mut self, revision: u64, generation: u64) {
+        if let Some((sent, geometry, started, bytes)) = self.outstanding {
+            if sent == revision && geometry == generation {
+                tracing::debug!(
+                    revision,
+                    generation,
+                    bytes,
+                    delivery_ms = started.elapsed().as_millis(),
+                    "Scene delivery and presentation acknowledged"
+                );
+                self.outstanding = None;
+            }
+        }
+    }
+}
+
 struct Peer {
     socket: UnixStream,
     messages: Receiver<Option<ClientMessage>>,
@@ -87,6 +120,7 @@ struct Peer {
     old_frame: Receiver<ServerMessage>,
     client: Option<String>,
     assets: std::sync::Mutex<HashSet<String>>,
+    presentation: PresentationBudget,
 }
 impl Peer {
     fn new(socket: UnixStream) -> Result<Self> {
@@ -152,13 +186,14 @@ impl Peer {
             old_frame,
             client: None,
             assets: std::sync::Mutex::new(HashSet::new()),
+            presentation: PresentationBudget::default(),
         })
     }
     fn control(&self, message: ServerMessage) -> bool {
         self.control.try_send(message).is_ok()
     }
-    fn scene(&self, scene: &Scene) -> bool {
-        if self.client.is_none() {
+    fn scene(&mut self, scene: &Scene) -> bool {
+        if self.client.is_none() || !self.presentation.ready(scene.viewport.generation) {
             return false;
         }
         let mut scene = scene.clone();
@@ -181,12 +216,29 @@ impl Peer {
                 }
             }
         }
+        let revision = scene.revision;
+        let generation = scene.viewport.generation;
         let message = ServerMessage::Scene { scene };
-        if let Err(crossbeam_channel::TrySendError::Full(message)) = self.frames.try_send(message) {
-            let _ = self.old_frame.try_recv();
-            let _ = self.frames.try_send(message);
+        let bytes = if self.presentation.enabled {
+            match serde_json::to_vec(&message) {
+                Ok(encoded) => encoded.len() + 1,
+                Err(_) => return false,
+            }
+        } else {
+            0
+        };
+        let sent = match self.frames.try_send(message) {
+            Ok(()) => true,
+            Err(crossbeam_channel::TrySendError::Full(message)) => {
+                let _ = self.old_frame.try_recv();
+                self.frames.try_send(message).is_ok()
+            }
+            Err(_) => false,
+        };
+        if sent {
+            self.presentation.sent(revision, generation, bytes);
         }
-        true
+        sent
     }
 }
 impl Drop for Peer {
@@ -338,6 +390,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     viewport = v;
                     controller.attached();
                     if let Some(capabilities) = capabilities {
+                        p.presentation.enabled = capabilities.presentation_ack;
                         controller.capabilities(capabilities);
                     }
                     p.control(ServerMessage::Hello {
@@ -391,6 +444,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     revision,
                     generation,
                 } => {
+                    p.presentation.presented(revision, generation);
                     if let Some((_, _, interaction)) = history
                         .iter()
                         .find(|(r, g, _)| *r == revision && *g == generation)
@@ -411,22 +465,32 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
         if peer.as_ref().is_some_and(|p| p.client.is_some())
-            && (attached || painted.elapsed() >= controller.frame_interval())
+            && ((attached
+                && peer
+                    .as_ref()
+                    .is_some_and(|p| p.presentation.ready(viewport.generation)))
+                || painted.elapsed() >= controller.frame_interval())
         {
             let mut next = controller.scene(viewport);
             painted = Instant::now();
             if !next.same_content(&scene) {
                 next.revision = scene.revision + 1;
                 scene = next;
-                history.push_back((scene.revision, scene.viewport.generation, scene.interaction));
-                while history.len() > 64 {
-                    history.pop_front();
-                }
                 attached = true;
             }
             if attached && peer.as_ref().is_some_and(|p| p.client.is_some()) {
-                if let Some(p) = &peer {
+                if let Some(p) = &mut peer {
                     attached = !p.scene(&scene);
+                    if !attached {
+                        let presented =
+                            (scene.revision, scene.viewport.generation, scene.interaction);
+                        if history.back() != Some(&presented) {
+                            history.push_back(presented);
+                        }
+                        while history.len() > 64 {
+                            history.pop_front();
+                        }
+                    }
                 }
             }
         }
@@ -495,6 +559,63 @@ pub fn relay(socket: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn presentation_budget_preserves_legacy_clients_and_rejects_stale_feedback() {
+        let mut budget = PresentationBudget::default();
+        budget.sent(1, 1, 4096);
+        assert!(budget.ready(1));
+        budget.enabled = true;
+        budget.sent(1, 1, 4096);
+        assert!(!budget.ready(1));
+        budget.presented(2, 1);
+        budget.presented(1, 2);
+        assert!(!budget.ready(1));
+        // Resizing must not wait for a frame the frontend now discards.
+        assert!(budget.ready(2));
+        budget.sent(2, 2, 8192);
+        budget.presented(1, 1);
+        assert!(!budget.ready(2));
+        budget.presented(2, 2);
+        assert!(budget.ready(2));
+    }
+
+    #[test]
+    fn slow_presentation_keeps_only_one_scene_in_flight() {
+        let (client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(client);
+        let mut peer = Peer::new(server).unwrap();
+        peer.client = Some("paced".into());
+        peer.presentation.enabled = true;
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 80, 24)),
+            Viewport {
+                columns: 80,
+                rows: 24,
+                ..Viewport::default()
+            },
+            1,
+        );
+        assert!(peer.scene(&scene));
+        scene.revision = 2;
+        assert!(!peer.scene(&scene));
+        let Some(ServerMessage::Scene { scene: first }) = read_message(&mut reader).unwrap() else {
+            panic!("expected the first scene");
+        };
+        assert_eq!(first.revision, 1);
+        assert!(!peer.scene(&scene));
+        peer.presentation.presented(1, first.viewport.generation);
+        scene.revision = 3;
+        assert!(peer.scene(&scene));
+        let Some(ServerMessage::Scene { scene: next }) = read_message(&mut reader).unwrap() else {
+            panic!("expected the latest scene");
+        };
+        assert_eq!(next.revision, 3);
+        assert!(peer.presentation.outstanding.unwrap().3 > 0);
+    }
+
     #[test]
     fn accepted_nonblocking_stream_waits_for_a_complete_handshake() {
         let (mut client, server) = UnixStream::pair().unwrap();

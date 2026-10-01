@@ -543,10 +543,13 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                         "Graphical frame presented"
                     );
                     if pixels {
-                        bytes += presenter.present(
+                        bytes += presenter.present_regions(
                             &png,
-                            size.columns,
-                            size.rows,
+                            Viewport {
+                                width,
+                                height,
+                                ..size
+                            },
                             &mut io::stdout().lock(),
                         )? as u64;
                     }

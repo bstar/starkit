@@ -180,14 +180,17 @@ filesystem operation API. Runtime profiles and logs live in a private temporary
 folder and are removed on exit. A missing/failed runtime reports an error after
 restoring the terminal.
 
-Frames are replaced inside synchronized terminal updates: place the new image
-before deleting the previous image. The presenter caches one complete frame:
-identical PNG content and cell geometry reuse the existing placement and send
-zero image payload bytes. Scene acknowledgements still advance input guards.
-Resize and cleanup invalidate the cache; retained encoded data is bounded to
-15 MB. Changed frames still use complete images; dirty rectangle transport
-remains an implementation gate. The local
-renderer keeps only its newest pending scene. Remote scenes include visible rows
+Frames use a bounded grid of cell-aligned regions, normally 32 columns × 8 rows
+and at most 256 placements. The frontend compares each self-contained browser
+frame with the pixels actually presented, then uploads only changed regions.
+It places every replacement before retiring old regions inside synchronized
+terminal updates. This remains correct when browser frames are dropped; no
+remote delta base is assumed. Resize replaces the grid and cleanup removes all
+owned placements. Identical frames send zero image payload bytes but still
+advance scene acknowledgements and input guards. Retained decoded pixels are
+bounded to 128 MB and encoded frame data to 15 MB; an oversized region payload
+uses the existing complete-frame path. Decoder limits apply before allocation.
+The local renderer keeps only its newest pending scene. Remote scenes include visible rows
 and cached, downsampled PNG assets rather than complete directory listings.
 
 ### SSH and session boundary
@@ -211,6 +214,13 @@ One authenticated frontend owns an attachment at a time.
 Protocol version 1 limits messages to 16 MiB, scenes to 120,000 cells and viewports
 to 8192 pixels per dimension / 32 million pixels. Input queues and frame/asset
 queues are bounded. Filesystem mutations remain on the application's controller.
+Frontends advertising presentation acknowledgements allow only one scene in
+flight until the terminal write completes. Pending application state continues
+to coalesce, and resize can supersede an obsolete geometry immediately. Actual
+serialized scene bytes and delivery-to-presentation time are logged. This
+feedback paces transport according to observed delivery and rendering costs;
+it is not a measurement of physical network bandwidth. Legacy version-one
+frontends without this capability retain the existing bounded frame queue.
 Per-client input IDs survive reattachment; acknowledgements reject duplicates,
 and reconnect never resends a mutation. Acknowledged frame target signatures and
 geometry generations protect pointer input. Progress repaint does not invalidate
@@ -243,6 +253,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | --- | --- |
 | Hidden renderer cold startup | 209–435 ms |
 | 100 warm scene→PNG updates | p95 68.28 ms; sample PNG 120,457 bytes |
+| 100 selected-row updates with dirty regions | browser p95 63.17 ms; region comparison/encoding p95 5.73 ms; mean delta payload 32,985 bytes vs 160,612 complete-frame bytes |
 | FOLD 100,000-entry controller+scene updates | p95 1.848 ms; visible rows only; <100 KiB JSON |
 | Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
 | Remote copy through disconnect | checksums verified; same process reattached; repeated paste rejected |

@@ -32,6 +32,10 @@ pub struct Capabilities {
     pub pointer_precision: PointerPrecision,
     pub keyboard: bool,
     pub paste: bool,
+    /// This frontend acknowledges scenes after terminal presentation. Older
+    /// version-one clients remain compatible without presentation pacing.
+    #[serde(default)]
+    pub presentation_ack: bool,
 }
 
 impl Capabilities {
@@ -57,6 +61,7 @@ impl Capabilities {
             },
             keyboard: interactive,
             paste: interactive,
+            presentation_ack: interactive,
         }
     }
 }
@@ -73,6 +78,7 @@ mod tests {
             pointer_precision: PointerPrecision::Cells,
             keyboard: true,
             paste: true,
+            presentation_ack: true,
         };
         let report = serde_json::to_value(capabilities).unwrap();
         assert_eq!(report["image_transport"], "kitty");

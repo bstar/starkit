@@ -1,7 +1,7 @@
 //! Shared runtime smoke example; --png captures without taking over the terminal.
 use starkit::terminal_graphics::{
     protocol::*,
-    renderer::{RenderMessage, Renderer},
+    renderer::{KittyPresenter, RenderMessage, Renderer},
 };
 use std::io::Write;
 use std::time::Duration;
@@ -88,6 +88,10 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(1)
         .clamp(1, 1000);
     let mut timings = vec![];
+    let mut presentation_times = vec![];
+    let mut payloads = vec![];
+    let mut presenter = KittyPresenter::default();
+    let mut wire = Vec::new();
     let started = std::time::Instant::now();
     let mut renderer = Renderer::spawn()?;
     renderer.scene(&scene)?;
@@ -111,6 +115,19 @@ fn main() -> anyhow::Result<()> {
                         std::fs::File::create(&output)?.write_all(&bytes)?;
                     }
                     timings.push(sent.elapsed().as_secs_f64() * 1000.0);
+                    let before = std::time::Instant::now();
+                    wire.clear();
+                    let payload = presenter.present_regions(
+                        &png,
+                        Viewport {
+                            width,
+                            height,
+                            ..scene.viewport
+                        },
+                        &mut wire,
+                    )?;
+                    presentation_times.push(before.elapsed().as_secs_f64() * 1000.0);
+                    payloads.push(payload);
                     if index == 0 {
                         println!(
                             "{output}: {width}×{height}, startup {:?}, PNG {} bytes",
@@ -126,9 +143,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
     timings.sort_by(f64::total_cmp);
+    presentation_times.sort_by(f64::total_cmp);
     println!(
         "{iterations} frames; scene-to-frame p95 {:.2} ms",
         timings[(timings.len() - 1) * 95 / 100]
     );
+    println!("region comparison/encoding p95 {:.2} ms; initial payload {} bytes; later mean payload {:.0} bytes",
+        presentation_times[(presentation_times.len() - 1) * 95 / 100],
+        payloads[0],
+        payloads.iter().skip(1).sum::<usize>() as f64 / payloads.len().saturating_sub(1).max(1) as f64);
     Ok(())
 }
