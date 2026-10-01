@@ -37,6 +37,18 @@ pub fn handles() -> bool {
         .is_some_and(|s| s == "--interactive" || s == "--graphical-relay" || s == "--serve")
 }
 pub fn run() -> anyhow::Result<()> {
+    let _log = if std::env::var_os("STAR_KIT_DEMO_DIR").is_some() {
+        Some(starkit::logging::init(
+            &starkit::paths::Paths::new(
+                "star_kit_demo",
+                "STAR_KIT_DEMO_DIR",
+                "STAR_KIT_DEMO_CONFIG_DIR",
+            ),
+            true,
+        )?)
+    } else {
+        None
+    };
     let args = std::env::args().collect::<Vec<_>>();
     let root = std::env::home_dir()
         .ok_or_else(|| anyhow::anyhow!("No user home"))?

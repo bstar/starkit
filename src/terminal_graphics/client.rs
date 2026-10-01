@@ -548,13 +548,6 @@ fn run_impl(
                     height,
                     png,
                 } if generation == size.generation && width > 0 && height > 0 => {
-                    tracing::debug!(
-                        revision,
-                        generation,
-                        width,
-                        height,
-                        "Graphical frame presented"
-                    );
                     if pixels {
                         bytes += presenter.present_regions(
                             &png,
@@ -568,6 +561,13 @@ fn run_impl(
                     }
                     frames += 1;
                     shown = Some((revision, generation));
+                    tracing::debug!(
+                        revision,
+                        generation,
+                        width,
+                        height,
+                        "Graphical frame presented"
+                    );
                     if connected {
                         if let Some(c) = &connection {
                             c.send(ClientMessage::Presented {

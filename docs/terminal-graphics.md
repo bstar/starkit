@@ -303,7 +303,8 @@ normal session cleanup. It passed on the local Linux desktop with Kitty 0.49.2.
 The example includes a generated image independent of local files; the test
 checks its sky and ridge colors in actual Kitty screenshots. On Linux,
 `--pointer-xdotool` injects a real X11 click and verifies selection pixels change;
-this pointer path runs in Linux CI.
+this pointer path runs in Linux CI. Private example logs are saved with artifacts;
+startup and font zoom wait for a presented nonempty scene before further input.
 The test requires a live Electron process, so a passing cell fallback is not
 accepted as graphical proof. Linux Xvfb passed on shared-code commit `6534ffd`
 ([CI run](https://github.com/bstar/starkit/actions/runs/36934302120)); its screenshots

@@ -8,6 +8,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -30,6 +32,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="kit-pixels-") as private:
         address = f"unix:{private}/rc.sock"
+        runtime = Path(private) / "runtime"
         log = (output / "kitty.log").open("w")
         child = subprocess.Popen([
             args.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
@@ -37,7 +40,10 @@ def main():
             "-o", "initial_window_width=100c", "-o", "initial_window_height=40c",
             *(["-o", "linux_display_server=x11"] if args.pointer_xdotool else []),
             "--title", "STAR-KIT-INTERACTIVE-PROOF", args.example, "--interactive",
-        ], stdout=log, stderr=log)
+        ], stdout=log, stderr=log, env={
+            **os.environ, "STAR_KIT_DEMO_DIR": str(runtime),
+            "STAR_KIT_DEMO_LOG": "debug",
+        })
         session_path = None
 
         def rc(*command):
@@ -58,6 +64,37 @@ def main():
                     "Terminal screenshot has no graphical content"
                 return rgb.size, rgb.tobytes()
 
+        def presented_generation():
+            path = runtime / "cache/star_kit_demo.log"
+            if not path.exists():
+                return 0
+            generations = re.findall(
+                r"Graphical frame presented revision=[1-9]\d* generation=(\d+)", path.read_text())
+            return max(map(int, generations), default=0)
+
+        def wait_presented(after=0):
+            deadline = time.monotonic() + 30
+            while presented_generation() <= after:
+                assert time.monotonic() < deadline, "No graphical frame presented; inspect runtime logs"
+                time.sleep(.1)
+
+        def preview_visible(pixels):
+            colors = Image.frombytes("RGB", pixels[0], pixels[1]).getcolors(
+                pixels[0][0] * pixels[0][1])
+            counts = {color: count for count, color in colors}
+            return counts.get((166, 227, 161), 0) > 100 and counts.get((137, 180, 250), 0) > 100
+
+        def settled_preview(name):
+            deadline = time.monotonic() + 30
+            previous = None
+            while True:
+                pixels = capture(name)
+                if preview_visible(pixels) and pixels == previous:
+                    return pixels
+                assert time.monotonic() < deadline, "Image pixels did not settle in Kitty"
+                previous = pixels
+                time.sleep(.15)
+
         try:
             deadline = time.monotonic() + 30
             while True:
@@ -69,7 +106,7 @@ def main():
                 except (subprocess.SubprocessError, IndexError):
                     assert time.monotonic() < deadline, "Kitty remote control startup timed out"
                     time.sleep(.1)
-            time.sleep(3)
+            wait_presented()
             window = json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]
             # --hold introduces a Kitty shell parent. Use the actual demo,
             # not window.pid, to prove creation and removal of its socket.
@@ -81,13 +118,9 @@ def main():
                        and "electron" in " ".join(p["cmdline"]).lower()
                        for p in window["foreground_processes"]), \
                 "No Electron pixel renderer; the cell fallback does not prove this gate"
-            initial = capture("initial")
-            # These colors occur only in the generated image, not panel chrome.
-            colors = Image.frombytes("RGB", initial[0], initial[1]).getcolors(
-                initial[0][0] * initial[0][1])
-            counts = {color: count for count, color in colors}
-            assert counts.get((166, 227, 161), 0) > 100, "Preview ridge did not render"
-            assert counts.get((137, 180, 250), 0) > 100, "Preview sky did not render"
+            # A completed terminal write precedes the terminal's physical paint.
+            # Require the generated image in two consecutive real screenshots.
+            initial = settled_preview("initial")
             rc("send-text", "--match", "id:1", "jjjjj ")
             time.sleep(.7)
             selected = capture("selected")
@@ -114,9 +147,10 @@ def main():
                 time.sleep(.5)
                 assert capture("pointer") != before_pointer, \
                     "Pointer selection did not change rendered pixels"
+            previous_generation = presented_generation()
             rc("action", "--match", "id:1", "change_font_size", "current", "+2")
-            time.sleep(.7)
-            zoomed = capture("zoomed")
+            wait_presented(previous_generation)
+            zoomed = settled_preview("zoomed")
             assert zoomed != selected, "Font resize did not repaint"
             if args.renderer_failure:
                 # Select only the Electron main process owned by this window.
@@ -183,6 +217,8 @@ def main():
                     child.terminate()
                     child.wait(timeout=5)
             log.close()
+            if runtime.exists():
+                shutil.copytree(runtime, output / "runtime", dirs_exist_ok=True)
 
 
 if __name__ == "__main__":
