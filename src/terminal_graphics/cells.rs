@@ -1,5 +1,7 @@
 //! Cell presentation over the same persistent session protocol as pixel mode.
 use std::io::{self, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -229,6 +231,15 @@ impl Cells {
         Ok(())
     }
     pub fn clipboard(&mut self, text: &str) -> Result<()> {
+        if std::env::var_os("TMUX").is_some_and(|value| !value.is_empty()) {
+            // set-clipboard=external intentionally rejects application OSC 52.
+            // An explicit tmux buffer write works with that default policy.
+            return clipboard_command(
+                Command::new("tmux").args(["load-buffer", "-w", "-"]),
+                text,
+                Duration::from_secs(2),
+            );
+        }
         let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
         let mut out = io::stdout().lock();
         write!(out, "\x1b]52;c;{data}\x1b\\")?;
@@ -237,10 +248,82 @@ impl Cells {
     }
 }
 
+fn clipboard_command(command: &mut Command, text: &str, timeout: Duration) -> Result<()> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("piped clipboard input");
+    let payload = text.as_bytes().to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&payload));
+    let started = Instant::now();
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break if status.success() {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Terminal clipboard command failed ({status})"
+                    ))
+                }
+            }
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => break Err(anyhow::anyhow!("Terminal clipboard command timed out")),
+            Err(error) => break Err(error.into()),
+        }
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    let written = writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("Clipboard writer failed"))?;
+    result?;
+    written?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::protocol::{Span, Viewport};
     use super::*;
+
+    #[test]
+    fn clipboard_helper_preserves_text_and_bounds_failure() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        clipboard_command(
+            Command::new("sh").args([
+                "-c",
+                "cat > \"$1\"",
+                "clipboard",
+                file.path().to_str().unwrap(),
+            ]),
+            "one\ntwo 日本語\n",
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            "one\ntwo 日本語\n"
+        );
+        assert!(clipboard_command(
+            Command::new("sh").args(["-c", "exit 3"]),
+            "text",
+            Duration::from_secs(2)
+        )
+        .is_err());
+        let started = Instant::now();
+        assert!(clipboard_command(
+            Command::new("sh").args(["-c", "exec sleep 5"]),
+            "text",
+            Duration::from_millis(50)
+        )
+        .is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn cell_view_keeps_controller_text_and_styles_without_terminal_controls() {

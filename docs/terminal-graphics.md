@@ -212,7 +212,8 @@ and reconnect never resends a mutation. Acknowledged frame target signatures and
 geometry generations protect pointer input. Progress repaint does not invalidate
 a click; a replaced listing does. Stale releases cancel captured drag actions.
 OSC 72 transfers are acknowledged and apply backpressure independently of scene
-coalescing. Local clipboard effects are applied by the local renderer.
+coalescing. Local clipboard effects are applied by the local frontend: Electron in pixel
+mode, OSC 52 in cell mode, or an explicit tmux buffer write inside tmux.
 
 ### Running the shared example
 
@@ -245,6 +246,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Full-size local idle sample (5 minutes, 61 samples) | 1.14% mean aggregate CPU; 469.02–469.07 MiB aggregate PSS; no measured growth |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
+| Cell fallback | real tmux displays the same controller; PTY test copies a file with Electron and display servers unavailable |
 
 The latency figures measure different boundaries: SSH acknowledgements are not
 pixel presentation latency. Full frames travel only from local Electron to local
@@ -253,9 +255,12 @@ Kitty, so the remote link carries scene data and occasional image assets.
 Linux/macOS controller builds and the offscreen sample have CI jobs. Promotion
 still requires macOS Kitty interaction, longer mixed-workload resource and end-to-end
 pixel latency measurements, and broader terminal compatibility testing. The
-experimental launcher explicitly requires a detected Kitty backend. Unsupported
-terminals and multiplexers should use the ordinary TUI; their graphical support
-is not claimed. PNG text has no native terminal selection or screen-reader text
+experimental launcher selects pixel presentation when the Kitty image transport
+is detected. Otherwise it presents the same persistent controller session as
+terminal cells, without launching Electron. This includes tmux fallback; its
+graphical support is not claimed. Image transport, measured/estimated pixel
+geometry, cell pointer precision, keyboard and paste support are negotiated
+separately. No terminal is claimed to provide pixel-precise pointer coordinates. PNG text has no native terminal selection or screen-reader text
 stream; application clipboard actions remain available. There is no remote audio
 or video forwarding: player/editor processes run on the application host.
 
