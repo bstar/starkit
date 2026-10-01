@@ -253,6 +253,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | --- | --- |
 | Hidden renderer cold startup | 209–435 ms |
 | 100 warm scene→PNG updates | p95 68.28 ms; sample PNG 120,457 bytes |
+| Kitty API input→observed pixel change (20 navigation inputs) | p95 219.92 ms; includes API and screen-capture overhead; 1859×2099 terminal, 100,000-row example |
 | 100 selected-row updates with dirty regions | browser p95 63.17 ms; region comparison/encoding p95 5.73 ms; mean delta payload 32,985 bytes vs 160,612 complete-frame bytes |
 | FOLD 100,000-entry controller+scene updates | p95 1.848 ms; visible rows only; <100 KiB JSON |
 | Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
@@ -264,13 +265,16 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Ghostty 1.3.1 Linux | graphical view, actions menu, keyboard input, session reattachment and font zoom; X11/software Mesa test |
 | Cell fallback | real tmux displays the same controller; PTY test copies a file with Electron and display servers unavailable |
 
+The screenshot latency probe compares actual captured pixels, while including
+the cost of remote-control input injection and repeated screen captures. It is
+an observation of this large terminal, not a guarantee or a pure display latency.
 The latency figures measure different boundaries: SSH acknowledgements are not
 pixel presentation latency. Full frames travel only from local Electron to local
 Kitty, so the remote link carries scene data and occasional image assets.
 
 Linux/macOS controller builds and the offscreen sample have CI jobs. Promotion
 still requires macOS Kitty interaction, longer mixed-workload resource and end-to-end
-pixel latency measurements, and broader terminal compatibility testing. The
+mixed-workload latency measurements, and broader terminal compatibility testing. The
 experimental launcher selects pixel presentation when the Kitty image transport
 is detected. Otherwise it presents the same persistent controller session as
 terminal cells, without launching Electron. This includes tmux fallback; its
