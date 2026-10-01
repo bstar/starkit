@@ -27,7 +27,7 @@ def main():
         address = f"unix:{private}/rc.sock"
         log = (output / "kitty.log").open("w")
         child = subprocess.Popen([
-            args.kitty, "--config", "/dev/null", "--listen-on", address,
+            args.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
             "-o", "allow_remote_control=yes", "-o", "remember_window_size=no",
             "-o", "initial_window_width=100c", "-o", "initial_window_height=40c",
             "--title", "STAR-KIT-INTERACTIVE-PROOF", args.example, "--interactive",
@@ -82,14 +82,24 @@ def main():
             zoomed = capture("zoomed")
             assert zoomed != selected, "Font resize did not repaint"
             rc("send-text", "--match", "id:1", "q")
-            child.wait(timeout=15)
+            deadline = time.monotonic() + 15
+            while session_path.exists() and time.monotonic() < deadline:
+                time.sleep(.1)
             assert not session_path.exists(), "Controller session leaked after normal exit"
+            rc("close-window", "--match", "id:1")
+            child.wait(timeout=15)
             (output / "result.json").write_text(json.dumps({
                 "keyboard_pixels_changed": True, "menu_pixels_changed": True,
                 "font_resize_pixels_changed": True, "clean_exit": True,
                 "initial_pixels": initial[0], "zoomed_pixels": zoomed[0],
             }, indent=2) + "\n")
             print("Kitty interactive pixel/input/resize/exit proof passed")
+        except Exception:
+            try:
+                (output / "terminal-error.txt").write_bytes(rc("get-text", "--match", "id:1"))
+            except subprocess.SubprocessError:
+                pass
+            raise
         finally:
             if child.poll() is None:
                 try:
