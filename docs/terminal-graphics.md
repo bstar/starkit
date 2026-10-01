@@ -260,6 +260,9 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Remote copy through disconnect | checksums verified; same process reattached; repeated paste rejected |
 | Quiet full-size local sample (3 seconds) | 1.67% aggregate CPU; 451 MiB aggregate PSS; controller 19 MiB RSS |
 | Full-size local idle sample (5 minutes, 61 samples) | 1.14% mean aggregate CPU; 469.02–469.07 MiB aggregate PSS; no measured growth |
+| FOLD mixed workload (10 minutes, 949 samples) | 256 MiB copy checksum verified, then continuous navigation/preview/menu/theme/font changes; 96.68% aggregate CPU of one core; PSS 618.70–1379.81 MiB, median 954.36 MiB |
+| Renderer loss in actual Kitty | restored terminal; controller survived and retained cursor/marks; controller then closed cleanly |
+| Repaint/resize burst | 96 independently reconstructed frames match all source pixels; bounded placements and complete cleanup |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
 | Ghostty 1.3.1 Linux | graphical view, actions menu, keyboard input, session reattachment and font zoom; X11/software Mesa test |
@@ -277,7 +280,12 @@ Linux/macOS controller builds and the offscreen sample have CI jobs.
 The interactive smoke test (`scripts/test-kitty-interactive.py`) captures the
 actual Kitty window, compares pixels after navigation/menu/font zoom, and checks
 normal session cleanup. It passed on the local Linux desktop with Kitty 0.49.2.
-The ordinary CI job exercises it under Linux Xvfb. The hosted macOS VM rejects
+The test requires a live Electron process, so a passing cell fallback is not
+accepted as graphical proof. Linux Xvfb passed on shared-code commit `6534ffd`
+([CI run](https://github.com/bstar/starkit/actions/runs/36934302120)); its screenshots
+show the browser-rendered menus. Ordinary clients no longer send the OSC 72
+extension query; STAR/FOLD registers an extension-aware input handler and retains
+its terminal drag/drop negotiation. The hosted macOS VM rejects
 Kitty's OpenGL surface with `NSGL: Failed to find a suitable pixel format`, so
 `.github/workflows/kitty-macos.yml` provides the outstanding interactive gate for
 a self-hosted Mac labelled `graphical-desktop`; its offscreen CI remains separate.
@@ -288,10 +296,18 @@ That incomplete run does not establish sustained resource stability. The runtime
 now retries only that compositor error up to five captures, with waits of 25,
 50, 75 and 100 ms. Persistent compositor errors and unrelated errors still end
 the graphical attachment; controller sessions survive attachment loss. Recovery
-has deterministic runtime tests and requires a fresh sustained workload proof.
+has deterministic runtime tests. The fresh workload completed 600.58 seconds
+with 949 samples, 3,781 presented frames and 255,406,512 uploaded image bytes.
+All sampled process memory was readable. The measured family includes the held
+terminal's launcher, frontend, relay/controller and Electron descendants; it
+excludes Kitty itself and the input driver. CPU counters can miss short-lived
+preview subprocesses. The copy completed before the sustained interactive phase,
+so this is not ten minutes of continuous copying. PSS fluctuated substantially;
+this bounded observation does not establish long-term memory stability. The
+frontend, controller and renderer exited after `q`, and the owned held terminal
+was closed separately.
 
-Promotion
-still requires macOS Kitty interaction, longer mixed-workload resource and end-to-end
+Promotion still requires macOS Kitty interaction and end-to-end
 mixed-workload latency measurements, and broader terminal compatibility testing. The
 experimental launcher selects pixel presentation when the Kitty image transport
 is detected. Otherwise it presents the same persistent controller session as
