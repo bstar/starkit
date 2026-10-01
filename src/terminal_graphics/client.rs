@@ -371,6 +371,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                         break;
                     }
                     if epoch.as_ref().is_some_and(|old| old != &e) {
+                        assets.clear();
                         tracing::warn!(
                             "Remote session restarted; previous commands will not be replayed"
                         );
@@ -378,6 +379,18 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                     epoch = Some(e);
                     tracing::debug!("Graphical session handshake received");
                     connected = true;
+                    last_scene = None;
+                    // Geometry may change while the handshake is pending.
+                    // Always request a fresh scene before enabling user input.
+                    id += 1;
+                    if let Some(c) = &connection {
+                        c.send(ClientMessage::Input {
+                            id,
+                            revision: 0,
+                            generation: size.generation,
+                            input: Input::Resize { viewport: size },
+                        })?;
+                    }
                     io::stdout().write_all(b"\x1b]72;t=q:i=1\x1b\\\x1b[c")?;
                     io::stdout().flush()?;
                     shown = None;
@@ -388,7 +401,28 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                     if assets.len() > 8 {
                         assets.clear();
                     }
-                    assets.insert(id, png);
+                    assets.insert(id.clone(), png.clone());
+                    // Control and latest-scene queues are independent. An asset
+                    // can arrive just after the scene that references it.
+                    if let Some(scene) = &mut last_scene {
+                        let mut changed = false;
+                        for component in &mut scene.components {
+                            if let Component::Image {
+                                id: image_id,
+                                png: image,
+                                ..
+                            } = component
+                            {
+                                if *image_id == id {
+                                    *image = Some(png.clone());
+                                    changed = true;
+                                }
+                            }
+                        }
+                        if changed {
+                            renderer.scene(scene)?;
+                        }
+                    }
                 }
                 ServerMessage::Osc72 {
                     id: effect_id,
@@ -519,6 +553,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
             let mut attach = launch.clone();
             attach.attach_only = true;
             attach.directory = None;
+            size.generation += 1;
             match Connection::spawn(&attach, control) {
                 Ok(c) => {
                     c.send(ClientMessage::Hello {
@@ -585,7 +620,11 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                 }
                 _ => {}
             }
-            if connected && last_scene.as_ref().is_some_and(|s| s.revision > 0) {
+            let ready = last_scene.as_ref().is_some_and(|s| s.revision > 0)
+                && shown.is_some_and(|(revision, generation)| {
+                    revision > 0 && generation == size.generation
+                });
+            if connected && (ready || input.as_ref().is_some_and(control_input)) {
                 if let (Some(c), Some(input)) = (&connection, input) {
                     id += 1;
                     let (revision, generation) = shown.unwrap_or((0, size.generation));
@@ -621,9 +660,45 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
     Ok(())
 }
 
+// Geometry and capability negotiation must continue while waiting for a frame.
+// File actions still require an authoritative scene and its displayed geometry.
+fn control_input(input: &Input) -> bool {
+    match input {
+        Input::Resize { .. } => true,
+        Input::Osc72 { text } => text
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .any(|field| matches!(field, "t=q" | "t=a")),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_geometry_and_capabilities_bypass_the_first_frame_guard() {
+        assert!(control_input(&Input::Resize {
+            viewport: Viewport {
+                columns: 80,
+                rows: 24,
+                width: 800,
+                height: 480,
+                generation: 2,
+            }
+        }));
+        assert!(control_input(&Input::Osc72 {
+            text: "t=q;".into()
+        }));
+        assert!(!control_input(&Input::Osc72 {
+            text: "t=M;file".into()
+        }));
+        assert!(!control_input(&Input::Paste {
+            text: "file".into()
+        }));
+    }
     #[test]
     fn remote_paths_are_literal_shell_arguments() {
         assert_eq!(
