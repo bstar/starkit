@@ -89,6 +89,9 @@ struct Peer {
 }
 impl Peer {
     fn new(socket: UnixStream) -> Result<Self> {
+        // Accepted sockets can inherit the listener's nonblocking mode on BSD.
+        // Dedicated reader/writer threads require blocking streams everywhere.
+        socket.set_nonblocking(false)?;
         let (tx, messages) = bounded(64);
         let mut reader = BufReader::new(socket.try_clone()?);
         std::thread::Builder::new()
