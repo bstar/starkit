@@ -71,6 +71,10 @@ def main():
                             if p["cmdline"] == [args.example, "--interactive"])
             session_path = Path.home() / ".local/starkit/graphical" / f"demo-{frontend['pid']}.sock"
             assert session_path.exists(), "Demo controller never created its session"
+            assert any("/main.cjs" in " ".join(p["cmdline"])
+                       and "electron" in " ".join(p["cmdline"]).lower()
+                       for p in window["foreground_processes"]), \
+                "No Electron pixel renderer; the cell fallback does not prove this gate"
             initial = capture("initial")
             rc("send-text", "--match", "id:1", "jjjjj ")
             time.sleep(.7)
