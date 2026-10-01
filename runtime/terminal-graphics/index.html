@@ -41,7 +41,11 @@ async function paint(s){
     const chars=Array.from(new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(p.text),item=>item.segment);let x=p.x;
     for(const c of chars){
       const wide=/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe6f\uff01-\uff60\u{1f300}-\u{1faff}]/u.test(c)?2:1;
-      ctx.fillStyle=p.background;ctx.fillRect(x*cw,p.y*ch,wide*cw,ch);
+      // Shared integer boundaries avoid antialiased gaps between adjacent
+      // opaque backgrounds when the terminal's cell size is fractional.
+      const x0=Math.floor(x*cw),x1=Math.floor((x+wide)*cw);
+      const y0=Math.floor(p.y*ch),y1=Math.floor((p.y+1)*ch);
+      ctx.fillStyle=p.background;ctx.fillRect(x0,y0,x1-x0,y1-y0);
       ctx.fillStyle=p.foreground;ctx.font=`${p.bold?'600':'400'} ${font}px monospace`;
       // Panels use true pixel borders rather than box-drawing glyphs.
       if(!/[╔╗╚╝║═┌┐└┘│─╭╮╰╯]/u.test(c))ctx.fillText(c,x*cw,(p.y+.5)*ch);

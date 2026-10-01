@@ -118,6 +118,8 @@ jobs:
           export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
           export STAR_GRAPHICS_SOFTWARE=1 STAR_GRAPHICS_PLATFORM=x11
           export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-fractional-background.py \
+            --example "$PWD/target/debug/examples/terminal-graphics" --output fractional-background
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
@@ -134,3 +136,4 @@ jobs:
             graphical-smoke.png
             kitty-interactive/
             kitty-renderer-loss/
+            fractional-background/

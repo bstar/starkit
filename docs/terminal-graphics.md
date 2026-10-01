@@ -264,6 +264,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | FOLD mixed workload (10 minutes, 949 samples) | 256 MiB copy checksum verified, then continuous navigation/preview/menu/theme/font changes; 96.68% aggregate CPU of one core; PSS 618.70–1379.81 MiB, median 954.36 MiB |
 | Renderer loss in actual Kitty | restored terminal; controller survived and retained cursor/marks; controller then closed cleanly |
 | Repaint/resize burst | 96 independently reconstructed frames match all source pixels; bounded placements and complete cleanup |
+| Fractional-cell highlight backgrounds | real 1850×1998 browser PNG has uniform pixels throughout a 97-cell highlighted row; integer boundaries remove antialiasing seams |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
 | Ghostty 1.3.1 Linux | graphical view, actions menu, keyboard input, session reattachment and font zoom; X11/software Mesa test |
@@ -275,6 +276,14 @@ an observation of this large terminal, not a guarantee or a pure display latency
 The latency figures measure different boundaries: SSH acknowledgements are not
 pixel presentation latency. Full frames travel only from local Electron to local
 Kitty, so the remote link carries scene data and occasional image assets.
+
+The current region presenter was also exercised in Ghostty 1.3.1 on Linux with
+X11/software Mesa: navigation/marks, menu opening/closing, font zoom to generation
+2, and clean frontend/controller exit passed. A screenshot exposed fractional-cell
+background seams in the shared browser canvas, independent of image transport.
+Background rectangles now share integer pixel boundaries; text retains its
+authoritative cell positions. `scripts/test-fractional-background.py` checks every
+pixel in the blank highlighted row of an actual offscreen PNG.
 
 Linux/macOS controller builds and the offscreen sample have CI jobs.
 
