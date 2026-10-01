@@ -91,7 +91,7 @@ jobs:
           npm ci --prefix runtime/terminal-graphics
           npm run install-runtime --prefix runtime/terminal-graphics
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxcb-xkb1 libxkbcommon-x11-0 libgl1-mesa-dri libegl1
       - if: runner.os == 'Linux'
         # Allow Electron's user-namespace sandbox on the disposable CI runner.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
