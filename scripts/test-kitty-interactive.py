@@ -35,9 +35,13 @@ def main():
         session_path = None
 
         def rc(*command):
-            return subprocess.check_output([
-                args.kitten, "@", "--to", address, *command,
-            ], stderr=subprocess.PIPE, timeout=15)
+            try:
+                return subprocess.check_output([
+                    args.kitten, "@", "--to", address, *command,
+                ], stderr=subprocess.PIPE, timeout=15)
+            except subprocess.CalledProcessError as error:
+                print(error.stderr.decode(errors="replace"), flush=True)
+                raise
 
         def capture(name):
             path = output / f"{name}.png"

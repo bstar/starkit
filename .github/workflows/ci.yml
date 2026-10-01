@@ -90,6 +90,7 @@ jobs:
       - run: |
           npm ci --prefix runtime/terminal-graphics
           npm run install-runtime --prefix runtime/terminal-graphics
+          node --test runtime/terminal-graphics/capture.test.cjs
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxcb-xkb1 libxkbcommon-x11-0 libgl1-mesa-dri libegl1
       - if: runner.os == 'Linux'
@@ -106,6 +107,7 @@ jobs:
           export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
           cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
       - name: Install private Kitty pixel capture runtime
+        if: runner.os == 'Linux'
         run: |
           bash scripts/install-test-kitty.sh "$RUNNER_TEMP/kitty-proof"
           python3 -m venv "$RUNNER_TEMP/kitty-proof/python"
@@ -117,14 +119,6 @@ jobs:
           export STAR_GRAPHICS_SOFTWARE=1 STAR_GRAPHICS_PLATFORM=x11
           export LIBGL_ALWAYS_SOFTWARE=1
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
-            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
-            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
-            --example "$PWD/target/debug/examples/terminal-graphics" --output kitty-interactive
-      - name: Interactive Kitty pixels on macOS
-        if: runner.os == 'macOS'
-        run: |
-          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
-          "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
             --example "$PWD/target/debug/examples/terminal-graphics" --output kitty-interactive

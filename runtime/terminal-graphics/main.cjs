@@ -25,7 +25,7 @@ async function render() {
     });
     window.webContents.send('scene', scene);
     try { await done; } finally { clearTimeout(timeout); }
-    const image = await window.webContents.capturePage(undefined, {stayHidden:true, stayAwake:true});
+    const image = await require('./capture.cjs').capture(window.webContents);
     const png = image.toPNG();
     if (png.length > 11000000) throw Error('Rendered frame exceeds transport limit');
     const size = image.getSize();

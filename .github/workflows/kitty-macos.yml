@@ -1,0 +1,31 @@
+name: interactive-kitty-macos
+# Hosted macOS VMs cannot create Kitty's required OpenGL 3.3 surface (NSGL
+# "Failed to find a suitable pixel format"). This gate needs a real Mac with
+# a logged-in desktop; the ordinary CI matrix still checks macOS offscreen.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  interactive-kitty:
+    runs-on: [self-hosted, macOS, graphical-desktop]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
+      - run: |
+          nix develop -c cargo build --example terminal-graphics --features terminal-graphics
+          nix build .#graphical-runtime --out-link result-kitty-test-runtime
+          bash scripts/install-test-kitty.sh "$RUNNER_TEMP/kitty-proof"
+          python3 -m venv "$RUNNER_TEMP/kitty-proof/python"
+          "$RUNNER_TEMP/kitty-proof/python/bin/pip" install Pillow==11.3.0
+          export STAR_GRAPHICS_ELECTRON="$PWD/result-kitty-test-runtime/bin/electron"
+          "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
+            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
+            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
+            --example "$PWD/target/debug/examples/terminal-graphics" --output kitty-interactive
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: interactive-kitty-macos
+          path: kitty-interactive/

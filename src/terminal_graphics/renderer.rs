@@ -50,6 +50,10 @@ impl Renderer {
         #[cfg(not(unix))]
         fs::create_dir(&directory)?;
         fs::write(directory.join("main.cjs"), super::RUNTIME_MAIN)?;
+        fs::write(
+            directory.join("capture.cjs"),
+            include_str!("../../runtime/terminal-graphics/capture.cjs"),
+        )?;
         fs::write(directory.join("index.html"), super::RUNTIME_HTML)?;
         fs::write(directory.join("preload.cjs"), super::RUNTIME_PRELOAD)?;
         let executable =
