@@ -242,6 +242,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Headless real SSH, 50 ms modeled RTT / 10 Mbps | first listing 254.2 ms; input→ack p95 109.0 ms |
 | Remote copy through disconnect | checksums verified; same process reattached; repeated paste rejected |
 | Quiet full-size local sample (3 seconds) | 1.67% aggregate CPU; 451 MiB aggregate PSS; controller 19 MiB RSS |
+| Full-size local idle sample (5 minutes, 61 samples) | 1.14% mean aggregate CPU; 469.02–469.07 MiB aggregate PSS; no measured growth |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
 
@@ -250,7 +251,7 @@ pixel presentation latency. Full frames travel only from local Electron to local
 Kitty, so the remote link carries scene data and occasional image assets.
 
 Linux/macOS controller builds and the offscreen sample have CI jobs. Promotion
-still requires macOS Kitty interaction, sustained idle CPU/RSS and end-to-end
+still requires macOS Kitty interaction, longer mixed-workload resource and end-to-end
 pixel latency measurements, and broader terminal compatibility testing. The
 experimental launcher explicitly requires a detected Kitty backend. Unsupported
 terminals and multiplexers should use the ordinary TUI; their graphical support
