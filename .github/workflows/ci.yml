@@ -122,6 +122,10 @@ jobs:
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
             --example "$PWD/target/debug/examples/terminal-graphics" --output kitty-interactive
+          xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
+            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
+            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
+            --example "$PWD/target/debug/examples/terminal-graphics" --renderer-failure --output kitty-renderer-loss
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -129,3 +133,4 @@ jobs:
           path: |
             graphical-smoke.png
             kitty-interactive/
+            kitty-renderer-loss/

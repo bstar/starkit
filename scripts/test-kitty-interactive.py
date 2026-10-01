@@ -6,7 +6,10 @@ configured Electron runtime. Run on a desktop or under xvfb-run on Linux.
 """
 import argparse
 import json
+import os
 from pathlib import Path
+import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -20,6 +23,7 @@ def main():
     parser.add_argument("--kitten", required=True)
     parser.add_argument("--example", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--renderer-failure", action="store_true")
     args = parser.parse_args()
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -90,7 +94,41 @@ def main():
             time.sleep(.7)
             zoomed = capture("zoomed")
             assert zoomed != selected, "Font resize did not repaint"
-            rc("send-text", "--match", "id:1", "q")
+            if args.renderer_failure:
+                # Select only the Electron main process owned by this window.
+                renderer = next(p for p in window["foreground_processes"]
+                                if "/main.cjs" in " ".join(p["cmdline"])
+                                and "--type=" not in " ".join(p["cmdline"]))
+                os.kill(renderer["pid"], signal.SIGTERM)
+                deadline = time.monotonic() + 15
+                while json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]["in_alternate_screen"]:
+                    assert time.monotonic() < deadline, "Renderer loss did not restore the terminal"
+                    time.sleep(.1)
+                assert session_path.exists(), "Renderer loss destroyed the controller session"
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.settimeout(5)
+                    connection.connect(str(session_path))
+                    with connection.makefile("rwb", buffering=0) as stream:
+                        def send(message):
+                            stream.write((json.dumps(message) + "\n").encode())
+                        send({"type": "hello", "version": 1, "client": "owned-renderer-loss-proof",
+                              "viewport": {"columns": 100, "rows": 40, "width": 1200,
+                                           "height": 800, "generation": 1}})
+                        while True:
+                            raw = stream.readline(16 * 1024 * 1024 + 1)
+                            assert raw and len(raw) <= 16 * 1024 * 1024, "Invalid controller response"
+                            message = json.loads(raw)
+                            if message["type"] == "scene":
+                                scene = message["scene"]
+                                assert scene["interaction"] == 5, "Navigation state was lost"
+                                assert any(c.get("marked") for c in scene["components"]), "Marks were lost"
+                                send({"type": "input", "id": 1, "revision": scene["revision"],
+                                      "generation": 1, "input": {"kind": "key", "code": "char:q",
+                                                                "modifiers": 0}})
+                                break
+                (output / "renderer-loss.txt").write_bytes(rc("get-text", "--match", "id:1"))
+            else:
+                rc("send-text", "--match", "id:1", "q")
             deadline = time.monotonic() + 15
             while session_path.exists() and time.monotonic() < deadline:
                 time.sleep(.1)
@@ -100,6 +138,7 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "keyboard_pixels_changed": True, "menu_pixels_changed": True,
                 "font_resize_pixels_changed": True, "clean_exit": True,
+                "renderer_loss_preserved_session": args.renderer_failure,
                 "initial_pixels": initial[0], "zoomed_pixels": zoomed[0],
             }, indent=2) + "\n")
             print("Kitty interactive pixel/input/resize/exit proof passed")

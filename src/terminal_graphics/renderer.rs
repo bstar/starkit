@@ -654,6 +654,51 @@ mod tests {
         assert!(images.is_empty());
     }
     #[test]
+    fn repaint_and_resize_burst_reconstructs_every_presented_frame() {
+        let mut presenter = KittyPresenter::default();
+        let mut images = BTreeMap::new();
+        let mut wire = Vec::new();
+        for step in 0..96u32 {
+            let columns = 80 + (step / 8 % 3) as u16 * 8;
+            let rows = 20 + (step / 8 % 2) as u16 * 4;
+            let viewport = super::super::protocol::Viewport {
+                columns,
+                rows,
+                width: u32::from(columns) * 4,
+                height: u32::from(rows) * 8,
+                generation: u64::from(step / 8 + 1),
+            };
+            let mut frame = RgbaImage::from_pixel(
+                viewport.width,
+                viewport.height,
+                crate::image::Rgba([20, 30, 40, 255]),
+            );
+            for pixel in 0..17 {
+                frame.put_pixel(
+                    (step * 19 + pixel * 7) % viewport.width,
+                    (step * 13 + pixel * 11) % viewport.height,
+                    crate::image::Rgba([step as u8, pixel as u8, 200, 255]),
+                );
+            }
+            wire.clear();
+            presenter
+                .present_regions(&encode_frame(&frame), viewport, &mut wire)
+                .unwrap();
+            apply_wire(&wire, &mut images);
+            assert!(images.len() <= 256);
+            let mut composed = RgbaImage::new(viewport.width, viewport.height);
+            for (x, y, image) in images.values() {
+                crate::image::imageops::replace(&mut composed, image, i64::from(*x), i64::from(*y));
+            }
+            assert_eq!(composed, frame, "incorrect pixels at burst step {step}");
+        }
+        wire.clear();
+        presenter.clear(&mut wire).unwrap();
+        apply_wire(&wire, &mut images);
+        assert!(images.is_empty());
+    }
+
+    #[test]
     fn unchanged_pixels_reuse_placement_but_geometry_and_cleanup_invalidate_it() {
         let mut p = KittyPresenter::default();
         let mut out = Vec::new();
