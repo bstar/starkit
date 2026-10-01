@@ -36,7 +36,12 @@ webp = ["image", "image/webp"]
 # only wanted a theme engine.
 net = ["dep:ureq"]
 
+visual = ["image", "dep:tiny-skia"]
+desktop = ["visual", "dep:gpui"]
+
 [dependencies]
+tiny-skia = { version = "0.11", optional = true }
+gpui = { version = "=0.2.2", optional = true }
 # TUI. crossterm as a direct dependency, not only via ratatui's re-export,
 # because raw mode, the alternate screen, mouse capture, bracketed paste and
 # the panic hook that undoes all of it are this crate's job.

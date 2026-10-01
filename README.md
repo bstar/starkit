@@ -47,3 +47,20 @@ tagged; all three applications pin a tag.
 ## Licence
 
 MIT.
+
+## Graphical presentation experiment
+
+The `experiment/graphical-presentation` branch adds opt-in `visual` and
+`desktop` features. Default consumers retain their terminal dependency tree.
+`visual` supplies theme tokens, seven vector raster icons, a bounded LRU
+surface cache, explicit independent capability flags and render diagnostics.
+`desktop` re-exports exactly GPUI 0.2.2 and supplies native cards, filled tabs,
+menu items and capacity meters. GPUI is Apache-2.0; its transitive license
+exceptions are named in `deny.toml`. No application or filesystem logic lives
+here. STAR/FOLD's experimental branch is the working consumer and demo.
+
+Build through Nix: `nix develop -c cargo test --all-features` and
+`nix develop -c cargo test --no-default-features`. macOS uses GPUI runtime Metal
+shader compilation, so a separate Metal compiler is unnecessary; build-time SDK
+headers and libclang are still required. Linux needs the libraries listed in
+the flake and CI. Keep this experiment separate from stable tags.
