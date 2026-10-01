@@ -250,6 +250,7 @@ Measured on the Linux development machine; these are observations, not guarantee
 | Full-size local idle sample (5 minutes, 61 samples) | 1.14% mean aggregate CPU; 469.02–469.07 MiB aggregate PSS; no measured growth |
 | Linux Xvfb software capture / macOS offscreen CI | PNG capture passes with the maintained npm runtime |
 | Real Kitty local presentation | graphical file view rendered in the existing terminal; no visible Electron window |
+| Ghostty 1.3.1 Linux | graphical view, actions menu, keyboard input, session reattachment and font zoom; X11/software Mesa test |
 | Cell fallback | real tmux displays the same controller; PTY test copies a file with Electron and display servers unavailable |
 
 The latency figures measure different boundaries: SSH acknowledgements are not
