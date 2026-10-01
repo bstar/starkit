@@ -286,7 +286,7 @@ pub fn run(launch: Launch) -> Result<()> {
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     if graphics.name() != "kitty" {
-        bail!("Graphical mode requires Kitty graphics. Use ordinary starfold for this terminal.");
+        bail!("Graphical mode requires Kitty graphics. Use the application's ordinary terminal interface for this terminal.");
     }
     let cell = graphics.cell_size().unwrap_or((10, 20));
     let mut size = viewport(1, cell)?;
@@ -492,7 +492,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
             }
             ping = Instant::now();
         }
-        let timed_out = connected && last_reply.elapsed() > Duration::from_secs(10);
+        let timed_out = last_reply.elapsed() > Duration::from_secs(if connected { 10 } else { 20 });
         let dead = timed_out
             || connection
                 .as_mut()
@@ -501,6 +501,10 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                 .flatten()
                 .is_some();
         if dead {
+            if epoch.is_none() {
+                fatal = Some("Could not start graphical session. Check the feature-enabled host executable and its session log.".into());
+                break;
+            }
             connection = None;
             connected = false;
             shown = None;
@@ -523,6 +527,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                         client: client.clone(),
                     })?;
                     connection = Some(c);
+                    last_reply = Instant::now();
                 }
                 Err(error) => tracing::warn!(%error,"session reconnect failed"),
             }

@@ -468,6 +468,26 @@ pub fn relay(socket: &Path) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn accepted_nonblocking_stream_waits_for_a_complete_handshake() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let peer = Peer::new(server).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        write_message(
+            &ClientMessage::Hello {
+                version: VERSION,
+                viewport: Viewport::default(),
+                client: "slow-handshake".into(),
+            },
+            &mut client,
+        )
+        .unwrap();
+        assert!(matches!(
+            peer.messages.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Some(ClientMessage::Hello { .. })
+        ));
+    }
+    #[test]
     fn socket_names_cannot_escape_private_directory() {
         assert!(socket_path(Path::new("/tmp/kit"), "../escape").is_err());
         assert!(socket_path(Path::new("/tmp/kit"), "work_2").is_ok());
