@@ -3,6 +3,8 @@
 //! Application controllers own all commands and IO. This module owns the
 //! transport, rendering process, terminal presentation and reusable scene.
 pub mod assets;
+pub mod capabilities;
+pub mod cells;
 pub mod client;
 pub mod protocol;
 pub mod renderer;

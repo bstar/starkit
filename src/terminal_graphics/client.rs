@@ -1,5 +1,5 @@
 //! Local Kitty presentation and disposable stdio/SSH attachments.
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, IsTerminal as _};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -9,6 +9,44 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use super::protocol::*;
 use super::renderer::{KittyPresenter, RenderMessage, Renderer};
 use crate::crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+
+enum Frontend {
+    Pixels(Renderer),
+    Cells(super::cells::Cells),
+}
+impl Frontend {
+    fn spawn(pixels: bool) -> Result<Self> {
+        if pixels {
+            Ok(Self::Pixels(Renderer::spawn()?))
+        } else {
+            Ok(Self::Cells(super::cells::Cells::default()))
+        }
+    }
+    fn scene(&mut self, scene: &Scene) -> Result<()> {
+        match self {
+            Self::Pixels(r) => r.scene(scene),
+            Self::Cells(r) => r.scene(scene),
+        }
+    }
+    fn clipboard(&mut self, text: &str) -> Result<()> {
+        match self {
+            Self::Pixels(r) => r.clipboard(text),
+            Self::Cells(r) => r.clipboard(text),
+        }
+    }
+    fn output(&self) -> &Receiver<RenderMessage> {
+        match self {
+            Self::Pixels(r) => &r.output,
+            Self::Cells(r) => r.output(),
+        }
+    }
+    fn alive(&mut self) -> Result<bool> {
+        match self {
+            Self::Pixels(r) => r.alive(),
+            Self::Cells(_) => Ok(true),
+        }
+    }
+}
 
 /// The remote command is assembled only from quoted arguments, never user code.
 pub fn shell_quote(value: &str) -> String {
@@ -284,19 +322,26 @@ pub fn run(launch: Launch) -> Result<()> {
 }
 
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
-    let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
-    if graphics.name() != "kitty" {
-        bail!("Graphical mode requires Kitty graphics. Use the application's ordinary terminal interface for this terminal.");
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        bail!("An interactive terminal is required to attach an application session");
     }
+    let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
+    let capabilities = super::capabilities::Capabilities::detected(&graphics);
+    tracing::info!(?capabilities, "Terminal presentation capabilities");
+    let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     let cell = graphics.cell_size().unwrap_or((10, 20));
     let mut size = viewport(1, cell)?;
     // SSH may need a password, key passphrase or host-key confirmation. Finish
     // that interaction before raw mode; the relay then reuses this connection.
     let ssh = authenticate(&launch)?;
     let control = ssh.as_ref().map(|s| s.socket.as_path());
-    eprintln!("Starting STAR graphical renderer in this Kitty terminal…");
+    if pixels {
+        eprintln!("Starting STAR graphical renderer in this Kitty terminal…");
+    } else {
+        eprintln!("Graphics unavailable; using the terminal interface for this session.");
+    }
     let started = Instant::now();
-    let mut renderer = Renderer::spawn()?;
+    let mut renderer = Frontend::spawn(pixels)?;
     let mut connection = Some(Connection::spawn(&launch, control)?);
     let client = format!(
         "{}-{}",
@@ -307,6 +352,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
         .as_ref()
         .expect("connected")
         .send(ClientMessage::Hello {
+            capabilities: Some(capabilities),
             version: VERSION,
             viewport: size,
             client: client.clone(),
@@ -480,7 +526,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                 last_scene = Some(scene);
             }
         }
-        for message in renderer.output.try_iter().collect::<Vec<_>>() {
+        for message in renderer.output().try_iter().collect::<Vec<_>>() {
             match message {
                 RenderMessage::Frame {
                     revision,
@@ -496,7 +542,14 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                         height,
                         "Graphical frame presented"
                     );
-                    presenter.present(&png, size.columns, size.rows, &mut io::stdout().lock())?;
+                    if pixels {
+                        presenter.present(
+                            &png,
+                            size.columns,
+                            size.rows,
+                            &mut io::stdout().lock(),
+                        )?;
+                    }
                     frames += 1;
                     bytes += png.len() as u64;
                     shown = Some((revision, generation));
@@ -558,6 +611,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
             match Connection::spawn(&attach, control) {
                 Ok(c) => {
                     c.send(ClientMessage::Hello {
+                        capabilities: Some(capabilities),
                         version: VERSION,
                         viewport: size,
                         client: client.clone(),

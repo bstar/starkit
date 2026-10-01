@@ -281,6 +281,8 @@ pub enum ClientMessage {
         version: u16,
         viewport: Viewport,
         client: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<super::capabilities::Capabilities>,
     },
     Input {
         id: u64,

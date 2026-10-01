@@ -21,6 +21,7 @@ pub trait Controller {
         Duration::from_millis(33)
     }
     fn attached(&mut self) {}
+    fn capabilities(&mut self, _capabilities: super::capabilities::Capabilities) {}
     fn detached(&mut self) {}
     fn output_pending(&mut self, _pending: bool) {}
     fn scene(&mut self, viewport: Viewport) -> Scene;
@@ -260,6 +261,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                             version,
                             viewport,
                             client,
+                            ..
                         } => {
                             *version == VERSION
                                 && client.len() <= 128
@@ -315,6 +317,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     version,
                     viewport: v,
                     client,
+                    capabilities,
                 } => {
                     if version != VERSION || client.len() > 128 || v.validate().is_err() {
                         p.control(ServerMessage::Error {
@@ -333,6 +336,9 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     clients.entry(client.clone()).or_default();
                     p.client = Some(client);
                     viewport = v;
+                    if let Some(capabilities) = capabilities {
+                        controller.capabilities(capabilities);
+                    }
                     controller.attached();
                     p.control(ServerMessage::Hello {
                         version: VERSION,
@@ -497,6 +503,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         write_message(
             &ClientMessage::Hello {
+                capabilities: None,
                 version: VERSION,
                 viewport: Viewport::default(),
                 client: "slow-handshake".into(),
