@@ -17,7 +17,8 @@ async function render() {
   try {
     const {width, height} = scene.viewport;
     if (width > 8192 || height > 8192 || width * height > 32000000) throw Error('Viewport too large');
-    window.setContentSize(width, height);
+    const [currentWidth, currentHeight] = window.getContentSize();
+    if (currentWidth !== width || currentHeight !== height) window.setContentSize(width, height);
     let timeout;
     const done = new Promise((resolve,reject) => {
       ready = resolve;
@@ -40,7 +41,7 @@ app.whenReady().then(async () => {
     frame:false,paintWhenInitiallyHidden:true,skipTaskbar:true,
     webPreferences:{offscreen:true,contextIsolation:true,nodeIntegration:false,sandbox:true,
       backgroundThrottling:false,preload:path.join(__dirname,'preload.cjs')}});
-  window.webContents.setFrameRate(30);
+  window.webContents.setFrameRate(60);
   window.webContents.setWindowOpenHandler(() => ({action:'deny'}));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('render-process-gone', (_, details) => {

@@ -139,7 +139,7 @@ def main():
                 subprocess.run([
                     tool, "windowfocus", "--sync", window_id,
                     "mousemove", "--window", window_id,
-                    str(initial[0][0] // 8), str(initial[0][1] // 2),
+                    str(initial[0][0] // 8), str(initial[0][1] * 3 // 4),
                     "click", "1",
                 ], check=True, timeout=5)
                 assert settled_preview("pointer", before_pointer) != before_pointer, \

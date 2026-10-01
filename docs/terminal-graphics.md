@@ -240,6 +240,12 @@ cargo run --example terminal-graphics --features terminal-graphics -- sample.png
 STAR_GRAPHICS_BENCH_FRAMES=100 cargo run --example terminal-graphics --features terminal-graphics -- sample.png
 ```
 
+Pixel presentation uses a 150% layout scale by default, giving text and rows
+more space than the terminal cell grid. `STAR_GRAPHICS_SCALE=100` restores the
+original density; values from 100 to 200 are accepted. Small windows retain the
+60×21 layout floor. Terminal cells, pointer coordinates, scrollbar targets and
+OSC 72 desktop drops are mapped separately from the graphical layout grid.
+
 The interactive example includes 100,000 virtual entries, tabs, marks, a text field,
 menus and a persistent controller. Arrow keys/j/k navigate; space marks, typing
 edits the text field, `c` opens a menu, Escape closes it, q ends the controller and

@@ -293,6 +293,50 @@ fn viewport(generation: u64, cell: (u16, u16)) -> Result<Viewport> {
     .validate()?)
 }
 
+fn scaled_viewport(mut viewport: Viewport, percent: u16) -> Viewport {
+    viewport.columns = ((u32::from(viewport.columns) * 100 / u32::from(percent)) as u16)
+        .max(viewport.columns.min(60));
+    viewport.rows =
+        ((u32::from(viewport.rows) * 100 / u32::from(percent)) as u16).max(viewport.rows.min(21));
+    viewport
+}
+
+fn logical_coordinate(value: u16, physical: u16, logical: u16) -> u16 {
+    (u32::from(value) * u32::from(logical) / u32::from(physical.max(1))) as u16
+}
+
+fn logical_drop(text: &str, grid: (u16, u16), viewport: Viewport) -> String {
+    let (header, payload) = text.split_once(';').unwrap_or((text, ""));
+    if !header
+        .split(':')
+        .any(|field| matches!(field, "t=m" | "t=M" | "t=o"))
+    {
+        return text.into();
+    }
+    let header = header
+        .split(':')
+        .map(|field| {
+            let Some((axis, value)) = field.split_once('=') else {
+                return field.into();
+            };
+            let Ok(value) = value.parse::<u16>() else {
+                return field.into();
+            };
+            match axis {
+                "x" => format!("x={}", logical_coordinate(value, grid.0, viewport.columns)),
+                "y" => format!("y={}", logical_coordinate(value, grid.1, viewport.rows)),
+                _ => field.into(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":");
+    if text.contains(';') {
+        format!("{header};{payload}")
+    } else {
+        header
+    }
+}
+
 pub fn key(code: KeyCode) -> String {
     match code {
         KeyCode::Char(c) => return format!("char:{c}"),
@@ -339,6 +383,17 @@ fn run_impl(
     let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     let cell = graphics.cell_size().unwrap_or((10, 20));
     let mut size = viewport(1, cell)?;
+    let mut terminal_grid = (size.columns, size.rows);
+    let scale = if pixels {
+        std::env::var("STAR_GRAPHICS_SCALE")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .filter(|n| (100..=200).contains(n))
+            .unwrap_or(150)
+    } else {
+        100
+    };
+    size = scaled_viewport(size, scale);
     // SSH may need a password, key passphrase or host-key confirmation. Finish
     // that interaction before raw mode; the relay then reuses this connection.
     let ssh = authenticate(&launch)?;
@@ -552,6 +607,8 @@ fn run_impl(
                         bytes += presenter.present_regions(
                             &png,
                             Viewport {
+                                columns: terminal_grid.0,
+                                rows: terminal_grid.1,
                                 width,
                                 height,
                                 ..size
@@ -677,18 +734,23 @@ fn run_impl(
                     input = Some(Input::Pointer {
                         action: action.into(),
                         button,
-                        x: m.column,
-                        y: m.row,
+                        x: logical_coordinate(m.column, terminal_grid.0, size.columns),
+                        y: logical_coordinate(m.row, terminal_grid.1, size.rows),
                         modifiers: m.modifiers.bits(),
                     });
                 }
                 Event::Paste(text) => input = Some(Input::Paste { text }),
                 Event::Resize(..) => {
                     size = viewport(size.generation + 1, cell)?;
+                    terminal_grid = (size.columns, size.rows);
+                    size = scaled_viewport(size, scale);
                     shown = None;
                     input = Some(Input::Resize { viewport: size });
                 }
                 _ => {}
+            }
+            if let Some(Input::Osc72 { text }) = input.as_mut() {
+                *text = logical_drop(text, terminal_grid, size);
             }
             let ready = last_scene.as_ref().is_some_and(|s| s.revision > 0)
                 && shown.is_some_and(|(revision, generation)| {
@@ -748,6 +810,47 @@ fn control_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaled_graphics_keep_mouse_and_desktop_drop_targets_aligned() {
+        let viewport = scaled_viewport(
+            Viewport {
+                columns: 240,
+                rows: 120,
+                ..Viewport::default()
+            },
+            150,
+        );
+        assert_eq!((viewport.columns, viewport.rows), (160, 80));
+        assert_eq!(logical_coordinate(120, 240, viewport.columns), 80);
+        assert_eq!(logical_coordinate(119, 120, viewport.rows), 79);
+        assert_eq!(
+            logical_coordinate(240, 240, viewport.columns),
+            160,
+            "outside remains outside"
+        );
+        assert_eq!(
+            logical_drop("t=M:x=120:y=60:o=1:i=1;text/uri-list", (240, 120), viewport),
+            "t=M:x=80:y=40:o=1:i=1;text/uri-list"
+        );
+        assert_eq!(
+            logical_drop("t=r:x=1:y=2;i=1", (240, 120), viewport),
+            "t=r:x=1:y=2;i=1"
+        );
+        assert_eq!(
+            logical_drop("t=m:x=-1:y=-1:i=1", (240, 120), viewport),
+            "t=m:x=-1:y=-1:i=1"
+        );
+        let minimum = scaled_viewport(
+            Viewport {
+                columns: 60,
+                rows: 21,
+                ..Viewport::default()
+            },
+            150,
+        );
+        assert_eq!((minimum.columns, minimum.rows), (60, 21));
+    }
     #[test]
     fn only_geometry_and_capabilities_bypass_the_first_frame_guard() {
         assert!(control_input(&Input::Resize {

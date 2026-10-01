@@ -279,6 +279,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
     let mut candidates: Vec<(Peer, Instant)> = vec![];
     let mut clients: HashMap<String, Admission> = HashMap::new();
     let mut attached = true;
+    let mut input_dirty = false;
     let mut effects = VecDeque::new();
     let mut in_flight = HashSet::new();
     let mut effect_id = 0u64;
@@ -420,7 +421,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                         input
                     };
                     if accepted {
-                        attached = true;
+                        input_dirty = true;
                         match input {
                             Input::Resize { viewport: v } => {
                                 if let Ok(v) = v.validate() {
@@ -469,9 +470,11 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                 && peer
                     .as_ref()
                     .is_some_and(|p| p.presentation.ready(viewport.generation)))
+                || input_dirty
                 || painted.elapsed() >= controller.frame_interval())
         {
             let mut next = controller.scene(viewport);
+            input_dirty = false;
             painted = Instant::now();
             if !next.same_content(&scene) {
                 next.revision = scene.revision + 1;
@@ -559,6 +562,104 @@ pub fn relay(socket: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignored_input_is_acknowledged_without_resending_the_scene() {
+        struct Quiet(bool);
+        impl Controller for Quiet {
+            fn tick(&mut self) {}
+            fn frame_interval(&self) -> Duration {
+                Duration::from_secs(60)
+            }
+            fn scene(&mut self, viewport: Viewport) -> Scene {
+                Scene::from_buffer(
+                    &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                        0,
+                        0,
+                        viewport.columns,
+                        viewport.rows,
+                    )),
+                    viewport,
+                    0,
+                )
+            }
+            fn input(&mut self, input: Input) {
+                if matches!(input, Input::Key { code, .. } if code == "char:q") {
+                    self.0 = true;
+                }
+            }
+            fn closed(&self) -> bool {
+                self.0
+            }
+            fn shutdown(&mut self) {}
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        let socket = socket_path(&root, "quiet").unwrap();
+        let server = std::thread::spawn(move || serve(&root, "quiet", Quiet(false)).unwrap());
+        let start = Instant::now();
+        let mut stream = loop {
+            if let Ok(stream) = UnixStream::connect(&socket) {
+                break stream;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        write_message(
+            &ClientMessage::Hello {
+                version: VERSION,
+                viewport: Viewport::default(),
+                client: "quiet-test".into(),
+                capabilities: None,
+            },
+            &mut stream,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_message::<ServerMessage>(&mut reader).unwrap(),
+            Some(ServerMessage::Hello { .. })
+        ));
+        assert!(matches!(
+            read_message::<ServerMessage>(&mut reader).unwrap(),
+            Some(ServerMessage::Scene { .. })
+        ));
+        let send_key = |stream: &mut UnixStream, id, code: &str| {
+            write_message(
+                &ClientMessage::Input {
+                    id,
+                    revision: 1,
+                    generation: 1,
+                    input: Input::Key {
+                        code: code.into(),
+                        modifiers: 0,
+                    },
+                },
+                stream,
+            )
+            .unwrap()
+        };
+        send_key(&mut stream, 1, "unknown");
+        assert!(matches!(
+            read_message::<ServerMessage>(&mut reader).unwrap(),
+            Some(ServerMessage::Ack {
+                id: 1,
+                accepted: true
+            })
+        ));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        assert!(
+            read_message::<ServerMessage>(&mut reader).is_err(),
+            "ignored input must not trigger a PNG render"
+        );
+        send_key(&mut stream, 2, "char:q");
+        server.join().unwrap();
+    }
     #[test]
     fn presentation_budget_preserves_legacy_clients_and_rejects_stale_feedback() {
         let mut budget = PresentationBudget::default();
