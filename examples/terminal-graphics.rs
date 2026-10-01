@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<()> {
                 active: true,
             },
             Component::Tab {
+                close: None,
                 rect: Rect {
                     x: 3,
                     y: 2,

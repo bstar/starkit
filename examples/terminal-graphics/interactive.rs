@@ -148,6 +148,7 @@ impl Controller for Demo {
             .enumerate()
         {
             scene.components.push(Component::Tab {
+                close: None,
                 rect: Rect {
                     x: 3 + i as u16 * 24,
                     y: 2,

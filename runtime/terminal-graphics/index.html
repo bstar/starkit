@@ -72,7 +72,16 @@ async function paint(s){
       node.append(mark,icon(c.icon),name);
     }
     if(c.kind==='text_field'){node.style.background=s.background;node.style.color=s.foreground;node.style.fontSize=`${font}px`;node.textContent=c.secret?'•'.repeat(Math.min(c.text.length,64)):c.text;node.style.borderBottom='1px solid '+accent;}
-    if(c.kind==='tab'){node.classList.add('tab');if(c.active)node.classList.add('active');node.style.fontSize=`${font}px`;node.style.color=s.foreground;node.textContent=c.label;}
+    if(c.kind==='tab'){
+      node.classList.add('tab');if(c.active)node.classList.add('active');node.style.fontSize=`${font}px`;node.style.color=s.foreground;
+      const name=document.createElement('span');name.textContent=c.label;Object.assign(name.style,{minWidth:'0',overflow:'hidden',textOverflow:'ellipsis'});node.append(name);
+      if(c.close){
+        const close=document.createElement('span');close.textContent='×';
+        rect(close,{...c.close,x:c.close.x-c.rect.x,y:c.close.y-c.rect.y},cw,ch);
+        Object.assign(close.style,{position:'absolute',display:'flex',alignItems:'center',justifyContent:'center'});
+        node.style.paddingRight=`${(c.rect.x+c.rect.width-c.close.x)*cw}px`;node.append(close);
+      }
+    }
     if(c.kind==='meter'){node.classList.add('meter');node.style.background=c.background;const fill=document.createElement('div');fill.style.width=`${Math.max(0,Math.min(1000,c.value))/10}%`;fill.style.background=c.foreground;node.append(fill);}
     if(c.kind==='image'){
       used.add(c.id);if(c.png)images.set(c.id,'data:image/png;base64,'+c.png);

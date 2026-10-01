@@ -117,6 +117,8 @@ pub enum Component {
         rect: Rect,
         label: String,
         active: bool,
+        #[serde(default)]
+        close: Option<Rect>,
     },
     Meter {
         rect: Rect,
