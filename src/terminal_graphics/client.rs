@@ -318,10 +318,18 @@ pub fn key(code: KeyCode) -> String {
 }
 
 pub fn run(launch: Launch) -> Result<()> {
-    run_with_events(launch, |_| None)
+    run_impl(launch, |_| None, false)
 }
 
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
+    run_impl(launch, custom, true)
+}
+
+fn run_impl(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    terminal_extensions: bool,
+) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
     }
@@ -437,8 +445,13 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
                             input: Input::Resize { viewport: size },
                         })?;
                     }
-                    io::stdout().write_all(b"\x1b]72;t=q:i=1\x1b\\\x1b[c")?;
-                    io::stdout().flush()?;
+                    // OSC 72 is an application extension, not part of the
+                    // graphical transport. Only an extension-aware input
+                    // handler can safely consume its terminal replies.
+                    if terminal_extensions {
+                        io::stdout().write_all(b"\x1b]72;t=q:i=1\x1b\\\x1b[c")?;
+                        io::stdout().flush()?;
+                    }
                     shown = None;
                 }
                 ServerMessage::Clipboard { text } => renderer.clipboard(&text)?,
