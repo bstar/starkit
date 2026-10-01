@@ -308,4 +308,36 @@ mod tests {
         assert_eq!(buffer(&scene).area.width, 20);
         assert_eq!(color("#1ø234"), Color::Reset);
     }
+
+    #[test]
+    fn shared_components_have_a_readable_cell_fallback() {
+        let mut scene = Scene::from_buffer(
+            &Buffer::empty(Rect::new(0, 0, 20, 5)),
+            Viewport {
+                columns: 20,
+                rows: 5,
+                ..Viewport::default()
+            },
+            1,
+        );
+        scene.spans.clear();
+        scene.components.push(Component::ListRow {
+            rect: super::super::protocol::Rect {
+                x: 1,
+                y: 1,
+                width: 18,
+                height: 1,
+            },
+            label: "file.txt".into(),
+            icon: "file".into(),
+            foreground: "#ffffff".into(),
+            background: "#111111".into(),
+            selected: true,
+            marked: true,
+        });
+        let output = buffer(&scene);
+        assert_eq!(output[(1, 1)].symbol(), "●");
+        assert_eq!(output[(3, 1)].symbol(), "f");
+        assert_eq!(output[(3, 1)].bg, Color::Rgb(17, 17, 17));
+    }
 }

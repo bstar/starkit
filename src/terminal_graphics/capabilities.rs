@@ -1,5 +1,6 @@
 //! Presentation capabilities are independent of the application protocol.
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +19,7 @@ pub enum PixelGeometry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointerPrecision {
+    None,
     Cells,
 }
 
@@ -34,6 +36,7 @@ pub struct Capabilities {
 
 impl Capabilities {
     pub fn detected(graphics: &crate::graphics::Graphics) -> Self {
+        let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let measured = crate::crossterm::terminal::window_size()
             .is_ok_and(|size| size.width > 0 && size.height > 0);
         Self {
@@ -47,9 +50,13 @@ impl Capabilities {
             } else {
                 PixelGeometry::Estimated
             },
-            pointer_precision: PointerPrecision::Cells,
-            keyboard: true,
-            paste: true,
+            pointer_precision: if interactive {
+                PointerPrecision::Cells
+            } else {
+                PointerPrecision::None
+            },
+            keyboard: interactive,
+            paste: interactive,
         }
     }
 }
@@ -75,5 +82,19 @@ mod tests {
             serde_json::from_value::<Capabilities>(report).unwrap(),
             capabilities
         );
+    }
+
+    #[test]
+    fn version_one_clients_without_a_capability_report_still_attach() {
+        let message: super::super::protocol::ClientMessage = serde_json::from_str(
+            r#"{"type":"hello","version":1,"viewport":{"columns":80,"rows":24,"width":800,"height":480,"generation":1},"client":"legacy"}"#,
+        ).unwrap();
+        assert!(matches!(
+            message,
+            super::super::protocol::ClientMessage::Hello {
+                capabilities: None,
+                ..
+            }
+        ));
     }
 }

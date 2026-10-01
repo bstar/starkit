@@ -131,6 +131,9 @@ impl Controller for Demo {
                 .fg(starkit::ratatui::style::Color::Rgb(205, 214, 244)),
         );
         let mut scene = Scene::from_buffer(&buffer, v, 0);
+        // This demo has no compatibility text; its content comes from the
+        // shared components in both pixel and cell presentation.
+        scene.spans.clear();
         scene.interaction = self.cursor as u64;
         scene.accent = "#89b4fa".into();
         scene.border = "#45475a".into();

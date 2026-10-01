@@ -336,10 +336,10 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     clients.entry(client.clone()).or_default();
                     p.client = Some(client);
                     viewport = v;
+                    controller.attached();
                     if let Some(capabilities) = capabilities {
                         controller.capabilities(capabilities);
                     }
-                    controller.attached();
                     p.control(ServerMessage::Hello {
                         version: VERSION,
                         session: name.into(),
