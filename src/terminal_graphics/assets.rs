@@ -64,7 +64,7 @@ pub fn encode_png(image: &RgbaImage) -> anyhow::Result<String> {
     Ok(encoded)
 }
 
-/// Check dimensions before asking Chromium to decode untrusted remote data.
+/// Check dimensions before decoding untrusted remote preview data.
 pub fn validate_png(png: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         png.len() <= 12_000_000,

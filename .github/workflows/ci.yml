@@ -77,7 +77,7 @@ jobs:
   # until then it would fail on a repository that does not exist, which teaches
   # everyone to ignore a red tick.
 
-  graphical-runtime:
+  native-graphics:
     strategy:
       fail-fast: false
       matrix:
@@ -87,25 +87,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-      - run: |
-          npm ci --prefix runtime/terminal-graphics
-          npm run install-runtime --prefix runtime/terminal-graphics
-          node --test runtime/terminal-graphics/capture.test.cjs
+      - run: cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgtk-3-0 libnss3 libasound2t64 libxcb-xkb1 libxkbcommon-x11-0 libgl1-mesa-dri libegl1
-      - if: runner.os == 'Linux'
-        # Allow Electron's user-namespace sandbox on the disposable CI runner.
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - if: runner.os == 'Linux'
-        run: |
-          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
-          export STAR_GRAPHICS_SOFTWARE=1
-          export STAR_GRAPHICS_PLATFORM=x11
-          xvfb-run -a cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
-      - if: runner.os == 'macOS'
-        run: |
-          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
-          cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgl1-mesa-dri libegl1
       - name: Install private Kitty pixel capture runtime
         if: runner.os == 'Linux'
         run: |
@@ -115,8 +99,6 @@ jobs:
       - name: Interactive Kitty pixels on Linux
         if: runner.os == 'Linux'
         run: |
-          export STAR_GRAPHICS_ELECTRON="$PWD/runtime/terminal-graphics/node_modules/.bin/electron"
-          export STAR_GRAPHICS_SOFTWARE=1 STAR_GRAPHICS_PLATFORM=x11
           export LIBGL_ALWAYS_SOFTWARE=1
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-fractional-background.py \
             --example "$PWD/target/debug/examples/terminal-graphics" --output fractional-background
@@ -127,7 +109,7 @@ jobs:
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
-            --example "$PWD/target/debug/examples/terminal-graphics" --renderer-failure --output kitty-renderer-loss
+            --example "$PWD/target/debug/examples/terminal-graphics" --frontend-failure --output kitty-frontend-loss
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -135,5 +117,5 @@ jobs:
           path: |
             graphical-smoke.png
             kitty-interactive/
-            kitty-renderer-loss/
+            kitty-frontend-loss/
             fractional-background/

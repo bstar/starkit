@@ -219,33 +219,37 @@ impl Cells {
         out.flush()?;
         self.previous = Some(next);
         // Cell drawing is synchronous: acknowledgements follow the actual
-        // terminal write, rather than a browser paint notification.
+        // terminal write.
         let _ = self.output.try_recv();
         self.frames.try_send(RenderMessage::Frame {
             revision: scene.revision,
             generation: scene.viewport.generation,
             width: scene.viewport.width,
             height: scene.viewport.height,
-            png: String::new(),
+            pixels: None,
         })?;
         Ok(())
     }
     pub fn clipboard(&mut self, text: &str) -> Result<()> {
-        if std::env::var_os("TMUX").is_some_and(|value| !value.is_empty()) {
-            // set-clipboard=external intentionally rejects application OSC 52.
-            // An explicit tmux buffer write works with that default policy.
-            return clipboard_command(
-                Command::new("tmux").args(["load-buffer", "-w", "-"]),
-                text,
-                Duration::from_secs(2),
-            );
-        }
-        let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-        let mut out = io::stdout().lock();
-        write!(out, "\x1b]52;c;{data}\x1b\\")?;
-        out.flush()?;
-        Ok(())
+        clipboard(text)
     }
+}
+
+pub(crate) fn clipboard(text: &str) -> Result<()> {
+    if std::env::var_os("TMUX").is_some_and(|value| !value.is_empty()) {
+        // set-clipboard=external intentionally rejects application OSC 52.
+        // An explicit tmux buffer write works with that default policy.
+        return clipboard_command(
+            Command::new("tmux").args(["load-buffer", "-w", "-"]),
+            text,
+            Duration::from_secs(2),
+        );
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let mut out = io::stdout().lock();
+    write!(out, "\x1b]52;c;{data}\x1b\\")?;
+    out.flush()?;
+    Ok(())
 }
 
 fn clipboard_command(command: &mut Command, text: &str, timeout: Duration) -> Result<()> {

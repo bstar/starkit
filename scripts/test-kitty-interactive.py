@@ -2,7 +2,7 @@
 """Exercise real Kitty pixels and terminal input; owns only its private instance.
 
 Requires Pillow, a built terminal-graphics example, Kitty >= 0.49, and the
-configured Electron runtime. Run on a desktop or under xvfb-run on Linux.
+the native Rust renderer. Run on a desktop or under xvfb-run on Linux.
 """
 import argparse
 import json
@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--kitten", required=True)
     parser.add_argument("--example", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--renderer-failure", action="store_true")
+    parser.add_argument("--frontend-failure", action="store_true")
     parser.add_argument("--pointer-xdotool", help="Verify actual X11 pointer input")
     args = parser.parse_args()
     output = Path(args.output).resolve()
@@ -131,10 +131,10 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
                             if p["cmdline"] == [args.example, "--interactive"])
             session_path = Path.home() / ".local/starkit/graphical" / f"demo-{frontend['pid']}.sock"
             assert session_path.exists(), "Demo controller never created its session"
-            assert any("/main.cjs" in " ".join(p["cmdline"])
-                       and "electron" in " ".join(p["cmdline"]).lower()
-                       for p in window["foreground_processes"]), \
-                "No Electron pixel renderer; the cell fallback does not prove this gate"
+            assert "Native Rust graphical renderer started" in (runtime / "cache/star_kit_demo.log").read_text(), \
+                "No native pixel renderer; the cell fallback does not prove this gate"
+            assert not any("electron" in " ".join(p["cmdline"]).lower()
+                           for p in window["foreground_processes"]), "Unexpected browser process"
             # A completed terminal write precedes the terminal's physical paint.
             # Require the generated image in two consecutive real screenshots.
             initial = settled_preview("initial")
@@ -166,24 +166,22 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
             wait_presented(previous_generation)
             zoomed = settled_preview("zoomed")
             assert zoomed != selected, "Font resize did not repaint"
-            if args.renderer_failure:
-                # Select only the Electron main process owned by this window.
-                renderer = next(p for p in window["foreground_processes"]
-                                if "/main.cjs" in " ".join(p["cmdline"])
-                                and "--type=" not in " ".join(p["cmdline"]))
-                os.kill(renderer["pid"], signal.SIGTERM)
+            if args.frontend_failure:
+                # Detaching the frontend closes its native worker while the
+                # persistent controller retains navigation and marked files.
+                rc("send-key", "--match", "id:1", "ctrl+q")
                 deadline = time.monotonic() + 15
                 while json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]["in_alternate_screen"]:
-                    assert time.monotonic() < deadline, "Renderer loss did not restore the terminal"
+                    assert time.monotonic() < deadline, "Frontend detach did not restore the terminal"
                     time.sleep(.1)
-                assert session_path.exists(), "Renderer loss destroyed the controller session"
+                assert session_path.exists(), "Frontend detach destroyed the controller session"
                 with socket.socket(socket.AF_UNIX) as connection:
                     connection.settimeout(5)
                     connection.connect(str(session_path))
                     with connection.makefile("rwb", buffering=0) as stream:
                         def send(message):
                             stream.write((json.dumps(message) + "\n").encode())
-                        send({"type": "hello", "version": 1, "client": "owned-renderer-loss-proof",
+                        send({"type": "hello", "version": 1, "client": "owned-frontend-loss-proof",
                               "viewport": {"columns": 100, "rows": 40, "width": 1200,
                                            "height": 800, "generation": 1}})
                         while True:
@@ -198,7 +196,7 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
                                       "generation": 1, "input": {"kind": "key", "code": "char:q",
                                                                 "modifiers": 0}})
                                 break
-                (output / "renderer-loss.txt").write_bytes(rc("get-text", "--match", "id:1"))
+                (output / "frontend-loss.txt").write_bytes(rc("get-text", "--match", "id:1"))
             else:
                 rc("send-text", "--match", "id:1", "q")
             deadline = time.monotonic() + 15
@@ -210,7 +208,7 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
             (output / "result.json").write_text(json.dumps({
                 "keyboard_pixels_changed": True, "menu_pixels_changed": True,
                 "font_resize_pixels_changed": True, "clean_exit": True,
-                "renderer_loss_preserved_session": args.renderer_failure,
+                "frontend_loss_preserved_session": args.frontend_failure,
                 "shared_image_pixels": True,
                 "pointer_pixels_changed": bool(args.pointer_xdotool),
                 "initial_pixels": initial[0], "zoomed_pixels": zoomed[0],

@@ -15,11 +15,9 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
       - run: |
           nix develop -c cargo build --example terminal-graphics --features terminal-graphics
-          nix build .#graphical-runtime --out-link result-kitty-test-runtime
           bash scripts/install-test-kitty.sh "$RUNNER_TEMP/kitty-proof"
           python3 -m venv "$RUNNER_TEMP/kitty-proof/python"
           "$RUNNER_TEMP/kitty-proof/python/bin/pip" install Pillow==11.3.0
-          export STAR_GRAPHICS_ELECTRON="$PWD/result-kitty-test-runtime/bin/electron"
           "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
@@ -27,11 +25,11 @@ jobs:
           "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
-            --example "$PWD/target/debug/examples/terminal-graphics" --renderer-failure --output kitty-renderer-loss
+            --example "$PWD/target/debug/examples/terminal-graphics" --frontend-failure --output kitty-frontend-loss
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: interactive-kitty-macos
           path: |
             kitty-interactive/
-            kitty-renderer-loss/
+            kitty-frontend-loss/

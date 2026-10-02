@@ -145,3 +145,13 @@ nix develop -c cargo test --no-default-features
 Both ends of the feature matrix, because a feature only one application turns
 on is exactly the one that rots. `nix flake check` builds the package, which
 runs the tests with every feature on.
+
+## Experimental native terminal pixels
+
+On `experiment/terminal-graphics`, the optional renderer is a Rust thread using
+cosmic-text/Swash and tiny-skia. Native RGBA frames pass directly to the Kitty
+region presenter. No browser, JavaScript runtime or display server is used.
+Bundled Liberation fonts and their OFL notice live in `assets/fonts`; installed
+fonts supply Unicode fallback. Keep the native rendering, protocol and font
+assets in KIT so applications share one implementation. The ordinary feature
+matrix remains unaffected.

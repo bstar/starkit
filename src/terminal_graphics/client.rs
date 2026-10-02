@@ -578,11 +578,11 @@ fn run_impl(
                     generation,
                     width,
                     height,
-                    png,
+                    pixels: frame_pixels,
                 } if generation == size.generation && width > 0 && height > 0 => {
                     if pixels {
-                        bytes += presenter.present_regions(
-                            &png,
+                        bytes += presenter.present_pixels(
+                            frame_pixels.context("Native frame has no pixels")?,
                             Viewport {
                                 columns: terminal_grid.0,
                                 rows: terminal_grid.1,

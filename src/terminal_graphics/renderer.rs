@@ -1,20 +1,16 @@
-//! Browser lifecycle and Kitty image presentation. No application commands here.
-use std::fs;
-use std::io::{self, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::time::{Duration, Instant};
+//! Native worker lifecycle and Kitty image presentation.
+use std::io::{self, Write};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use crate::image::{ImageDecoder as _, ImageEncoder as _, RgbaImage};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use base64::Engine as _;
-use crossbeam_channel::{bounded, Receiver};
-use serde::Deserialize;
+use crossbeam_channel::{bounded, Receiver, Sender};
 
-use super::protocol::{read_message, write_message, Scene};
+use super::protocol::Scene;
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug)]
 pub enum RenderMessage {
     Ready,
     Frame {
@@ -22,7 +18,7 @@ pub enum RenderMessage {
         generation: u64,
         width: u32,
         height: u32,
-        png: String,
+        pixels: Option<Arc<RgbaImage>>,
     },
     Error {
         message: String,
@@ -30,139 +26,98 @@ pub enum RenderMessage {
 }
 
 pub struct Renderer {
-    child: Child,
-    input: Option<ChildStdin>,
+    input: Option<Sender<Scene>>,
+    stale: Receiver<Scene>,
     pub output: Receiver<RenderMessage>,
-    directory: PathBuf,
+    worker: Option<JoinHandle<()>>,
 }
 impl Renderer {
     pub fn spawn() -> Result<Self> {
-        let root = std::env::temp_dir();
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let directory = root.join(format!("starkit-graphics-{}-{stamp}", std::process::id()));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            fs::DirBuilder::new().mode(0o700).create(&directory)?;
-        }
-        #[cfg(not(unix))]
-        fs::create_dir(&directory)?;
-        fs::write(directory.join("main.cjs"), super::RUNTIME_MAIN)?;
-        fs::write(
-            directory.join("capture.cjs"),
-            include_str!("../../runtime/terminal-graphics/capture.cjs"),
-        )?;
-        fs::write(directory.join("index.html"), super::RUNTIME_HTML)?;
-        fs::write(directory.join("preload.cjs"), super::RUNTIME_PRELOAD)?;
-        let executable =
-            std::env::var_os("STAR_GRAPHICS_ELECTRON").unwrap_or_else(|| "electron".into());
-        let log = fs::File::create(directory.join("renderer.log"))?;
-        let mut command = Command::new(executable);
-        #[cfg(target_os = "linux")]
-        if let Ok(platform) = std::env::var("STAR_GRAPHICS_PLATFORM") {
-            if matches!(platform.as_str(), "x11" | "wayland") {
-                command.arg(format!("--ozone-platform={platform}"));
-            }
-        }
-        let child = command
-            .arg(directory.join("main.cjs"))
-            .env_remove("ELECTRON_RUN_AS_NODE")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(log)
-            .spawn();
-        let mut child = match child {
-            Ok(child) => child,
-            Err(e) => {
-                let _ = fs::remove_dir_all(&directory);
-                return Err(e)
-                    .context("Install the graphical runtime or set STAR_GRAPHICS_ELECTRON");
-            }
-        };
-        let input = child.stdin.take();
-        let stdout = child.stdout.take().context("renderer stdout unavailable")?;
-        let (tx, rx) = bounded(2);
-        let drop_old = rx.clone();
-        std::thread::Builder::new()
-            .name("star-graphics-frames".into())
+        let (input, scenes) = bounded::<Scene>(1);
+        let stale = scenes.clone();
+        let (frames, output) = bounded(2);
+        let old = output.clone();
+        let worker = std::thread::Builder::new()
+            .name("star-native-renderer".into())
             .spawn(move || {
-                let mut reader = BufReader::new(stdout);
-                loop {
-                    let message = match read_message::<RenderMessage>(&mut reader) {
-                        Ok(Some(m)) => m,
-                        Ok(None) => break,
-                        Err(error) => RenderMessage::Error {
-                            message: format!("Invalid renderer response: {error}. For npm Electron, download the runtime with install-electron before launching."),
+                let mut painter = super::native::Painter::new();
+                while let Ok(scene) = scenes.recv() {
+                    let scene = scenes.try_iter().last().unwrap_or(scene);
+                    let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        painter.render(&scene)
+                    }));
+                    let message = match rendered {
+                        Ok(Ok(pixels)) => RenderMessage::Frame {
+                            revision: scene.revision,
+                            generation: scene.viewport.generation,
+                            width: pixels.width(),
+                            height: pixels.height(),
+                            pixels: Some(Arc::new(pixels)),
+                        },
+                        Ok(Err(error)) => RenderMessage::Error {
+                            message: format!("Native renderer: {error:#}"),
+                        },
+                        Err(_) => RenderMessage::Error {
+                            message: "Native renderer worker failed".into(),
                         },
                     };
-                    let error = matches!(message, RenderMessage::Error { .. });
+                    let failed = matches!(message, RenderMessage::Error { .. });
                     if let Err(crossbeam_channel::TrySendError::Full(message)) =
-                        tx.try_send(message)
+                        frames.try_send(message)
                     {
-                        let _ = drop_old.try_recv();
-                        let _ = tx.try_send(message);
+                        let _ = old.try_recv();
+                        let _ = frames.try_send(message);
                     }
-                    if error {
+                    if failed {
                         break;
                     }
                 }
             })?;
-        let mut renderer = Self {
-            child,
-            input,
-            output: rx,
-            directory,
-        };
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            match renderer.output.recv_timeout(Duration::from_millis(100)) {
-                Ok(RenderMessage::Ready) => return Ok(renderer),
-                Ok(RenderMessage::Error { message }) => bail!("Graphical renderer: {message}"),
-                _ => {}
-            }
-            if let Some(status) = renderer.child.try_wait()? {
-                let log =
-                    fs::read_to_string(renderer.directory.join("renderer.log")).unwrap_or_default();
-                bail!(
-                    "Graphical renderer exited ({status}): {}",
-                    log.chars().take(2000).collect::<String>()
-                );
-            }
-            if Instant::now() > deadline {
-                bail!("Graphical renderer did not start within 20 seconds");
-            }
-        }
+        tracing::info!("Native Rust graphical renderer started");
+        Ok(Self {
+            input: Some(input),
+            stale,
+            output,
+            worker: Some(worker),
+        })
     }
     pub fn scene(&mut self, scene: &Scene) -> Result<()> {
-        write_message(
-            &serde_json::json!({"type":"scene","scene":scene}),
-            self.input.as_mut().context("renderer closed")?,
-        )?;
+        let input = self.input.as_ref().context("Native renderer closed")?;
+        if let Err(error) = input.try_send(scene.clone()) {
+            match error {
+                crossbeam_channel::TrySendError::Full(scene) => {
+                    let _ = self.stale.try_recv();
+                    // The consumer can race the replacement. A full queue
+                    // retains a newer pending scene rather than blocking input.
+                    if let Err(crossbeam_channel::TrySendError::Disconnected(_)) =
+                        input.try_send(scene)
+                    {
+                        anyhow::bail!("Native renderer stopped");
+                    }
+                }
+                crossbeam_channel::TrySendError::Disconnected(_) => {
+                    anyhow::bail!("Native renderer stopped")
+                }
+            }
+        }
         Ok(())
     }
     pub fn clipboard(&mut self, text: &str) -> Result<()> {
-        write_message(
-            &serde_json::json!({"type":"clipboard","text":text}),
-            self.input.as_mut().context("renderer closed")?,
-        )?;
-        Ok(())
+        super::cells::clipboard(text)
     }
     pub fn alive(&mut self) -> Result<bool> {
-        Ok(self.child.try_wait()?.is_none())
+        Ok(self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished()))
     }
 }
 impl Drop for Renderer {
     fn drop(&mut self) {
         self.input.take();
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while matches!(self.child.try_wait(), Ok(None)) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -174,7 +129,7 @@ pub struct KittyPresenter {
     regions: Option<RegionCache>,
 }
 struct RegionCache {
-    pixels: RgbaImage,
+    pixels: Arc<RgbaImage>,
     columns: u16,
     rows: u16,
     placements: Vec<(super::protocol::Rect, u32)>,
@@ -291,8 +246,42 @@ impl KittyPresenter {
         if viewport.width < u32::from(viewport.columns)
             || viewport.height < u32::from(viewport.rows)
         {
-            return Ok(self.present(png, viewport.columns, viewport.rows, out)?);
+            return Ok(self.present(
+                &encode_pixels(&pixels)?,
+                viewport.columns,
+                viewport.rows,
+                out,
+            )?);
         }
+        self.present_pixels(Arc::new(pixels), viewport, out)
+    }
+
+    pub fn present_pixels(
+        &mut self,
+        pixels: Arc<RgbaImage>,
+        viewport: super::protocol::Viewport,
+        out: &mut impl Write,
+    ) -> anyhow::Result<usize> {
+        viewport.validate()?;
+        anyhow::ensure!(
+            pixels.dimensions() == (viewport.width, viewport.height),
+            "Frame dimensions do not match viewport"
+        );
+        if viewport.width < u32::from(viewport.columns)
+            || viewport.height < u32::from(viewport.rows)
+        {
+            return Ok(self.present(
+                &encode_pixels(&pixels)?,
+                viewport.columns,
+                viewport.rows,
+                out,
+            )?);
+        }
+        let same_geometry = self.regions.as_ref().is_some_and(|old| {
+            old.columns == viewport.columns
+                && old.rows == viewport.rows
+                && old.pixels.dimensions() == pixels.dimensions()
+        });
         let grid = region_grid(viewport.columns, viewport.rows);
         let mut changes = Vec::new();
         let mut payload_bytes = 0;
@@ -309,11 +298,12 @@ impl KittyPresenter {
             if unchanged {
                 continue;
             }
-            let crop = crate::image::imageops::crop_imm(&pixels, x, y, width, height).to_image();
+            let crop =
+                crate::image::imageops::crop_imm(pixels.as_ref(), x, y, width, height).to_image();
             let mut encoded = Vec::new();
             crate::image::codecs::png::PngEncoder::new_with_quality(
                 &mut encoded,
-                crate::image::codecs::png::CompressionType::Default,
+                crate::image::codecs::png::CompressionType::Fast,
                 crate::image::codecs::png::FilterType::Adaptive,
             )
             .write_image(
@@ -327,7 +317,12 @@ impl KittyPresenter {
             // Noise-heavy frames can compress better as one image. Preserve
             // the existing wire ceiling instead of accumulating huge patches.
             if payload_bytes > 15_000_000 {
-                return Ok(self.present(png, viewport.columns, viewport.rows, out)?);
+                return Ok(self.present(
+                    &encode_pixels(&pixels)?,
+                    viewport.columns,
+                    viewport.rows,
+                    out,
+                )?);
             }
             changes.push((index, rect, encoded));
         }
@@ -381,7 +376,7 @@ impl KittyPresenter {
             out.flush()?;
         }
         self.previous = None;
-        self.cached = Some((png.to_owned(), viewport.columns, viewport.rows));
+        self.cached = None;
         self.regions = Some(RegionCache {
             pixels,
             columns: viewport.columns,
@@ -390,6 +385,22 @@ impl KittyPresenter {
         });
         Ok(payload_bytes)
     }
+}
+
+pub fn encode_pixels(pixels: &RgbaImage) -> anyhow::Result<String> {
+    let mut bytes = Vec::new();
+    crate::image::codecs::png::PngEncoder::new_with_quality(
+        &mut bytes,
+        crate::image::codecs::png::CompressionType::Fast,
+        crate::image::codecs::png::FilterType::Adaptive,
+    )
+    .write_image(
+        pixels.as_raw(),
+        pixels.width(),
+        pixels.height(),
+        crate::image::ExtendedColorType::Rgba8,
+    )?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 fn region_grid(columns: u16, rows: u16) -> Vec<super::protocol::Rect> {
@@ -431,6 +442,38 @@ fn pixel_rect(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn native_worker_reports_invalid_data_and_shuts_down_without_a_runtime() {
+        let mut renderer = Renderer::spawn().unwrap();
+        let mut scene = super::super::Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0, 0, 100, 40,
+            )),
+            super::super::Viewport::default(),
+            1,
+        );
+        scene.components.push(super::super::Component::Image {
+            rect: super::super::Rect {
+                x: 1,
+                y: 1,
+                width: 10,
+                height: 10,
+            },
+            id: "broken".into(),
+            png: Some("invalid".into()),
+        });
+        renderer.scene(&scene).unwrap();
+        assert!(matches!(
+            renderer
+                .output
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            RenderMessage::Error { .. }
+        ));
+        // Drop joins the bounded worker; no subprocess remains to kill/reap.
+        drop(renderer);
+    }
 
     fn encode_frame(image: &RgbaImage) -> String {
         let mut bytes = Vec::new();

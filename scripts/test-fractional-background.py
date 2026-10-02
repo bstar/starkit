@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check actual browser pixels for fractional-cell background seams."""
+"""Check actual native pixels for fractional-cell background seams."""
 import argparse
 import json
 from pathlib import Path
@@ -31,4 +31,4 @@ with Image.open(png) as source:
     mismatches = sum(image.getpixel((x, y)) != (102, 119, 136)
                      for y in range(top, bottom) for x in range(1850))
     assert mismatches == 0, f"{mismatches} fractional background pixels have seams"
-print("Fractional-cell browser background pixels are solid")
+print("Fractional-cell native background pixels are solid")

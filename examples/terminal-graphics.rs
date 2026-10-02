@@ -1,4 +1,5 @@
 //! Shared runtime smoke example; --png captures without taking over the terminal.
+use anyhow::Context as _;
 use starkit::terminal_graphics::{
     protocol::*,
     renderer::{KittyPresenter, RenderMessage, Renderer},
@@ -103,7 +104,11 @@ fn main() -> anyhow::Result<()> {
     renderer.scene(&scene)?;
     for index in 0..iterations {
         scene.revision = index as u64 + 1;
-        if let Some(Component::ListRow { selected, .. }) = scene.components.get_mut(3) {
+        if let Some(Component::ListRow { selected, .. }) = scene
+            .components
+            .iter_mut()
+            .find(|c| matches!(c, Component::ListRow { .. }))
+        {
             *selected = index % 2 == 0;
         }
         let sent = std::time::Instant::now();
@@ -113,9 +118,14 @@ fn main() -> anyhow::Result<()> {
         loop {
             match renderer.output.recv_timeout(Duration::from_secs(10))? {
                 RenderMessage::Frame {
-                    png, width, height, ..
+                    pixels,
+                    width,
+                    height,
+                    ..
                 } => {
                     use base64::Engine;
+                    let pixels = pixels.context("Native frame has no pixels")?;
+                    let png = starkit::terminal_graphics::renderer::encode_pixels(&pixels)?;
                     let bytes = base64::engine::general_purpose::STANDARD.decode(&png)?;
                     if index == iterations - 1 {
                         std::fs::File::create(&output)?.write_all(&bytes)?;
@@ -123,8 +133,8 @@ fn main() -> anyhow::Result<()> {
                     timings.push(sent.elapsed().as_secs_f64() * 1000.0);
                     let before = std::time::Instant::now();
                     wire.clear();
-                    let payload = presenter.present_regions(
-                        &png,
+                    let payload = presenter.present_pixels(
+                        pixels,
                         Viewport {
                             width,
                             height,

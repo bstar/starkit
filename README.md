@@ -51,8 +51,7 @@ MIT.
 
 ## Experimental graphics inside Kitty
 
-The `experiment/terminal-graphics` branch adds an optional shared offscreen
-renderer and persistent SSH scene relay. The remote application needs no browser
-or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
+The `experiment/terminal-graphics` branch adds an optional shared native Rust
+renderer and persistent SSH scene relay. Neither the local renderer nor remote application needs a browser or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
 launch, verification and compatibility details. The ordinary TUI remains the
 standard build.

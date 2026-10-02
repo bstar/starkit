@@ -49,13 +49,6 @@
           };
         };
 
-        # Optional runtime only. Ordinary library/consumer closures stay small.
-        packages.graphical-runtime = pkgs.electron;
-        devShells.graphical = pkgs.mkShell {
-          packages = with pkgs; [ rustc cargo rustfmt clippy cargo-deny nodejs electron ];
-          STAR_GRAPHICS_ELECTRON = "${pkgs.electron}/bin/electron";
-        };
-
         checks = {
           inherit (self.packages.${system}) default;
 
