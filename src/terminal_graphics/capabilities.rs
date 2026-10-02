@@ -36,6 +36,8 @@ pub struct Capabilities {
     /// version-one clients remain compatible without presentation pacing.
     #[serde(default)]
     pub presentation_ack: bool,
+    #[serde(default)]
+    pub native_surfaces: bool,
 }
 
 impl Capabilities {
@@ -62,6 +64,7 @@ impl Capabilities {
             keyboard: interactive,
             paste: interactive,
             presentation_ack: interactive,
+            native_surfaces: true,
         }
     }
 }
@@ -79,6 +82,7 @@ mod tests {
             keyboard: true,
             paste: true,
             presentation_ack: true,
+            native_surfaces: true,
         };
         let report = serde_json::to_value(capabilities).unwrap();
         assert_eq!(report["image_transport"], "kitty");

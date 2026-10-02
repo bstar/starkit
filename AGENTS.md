@@ -155,3 +155,10 @@ Bundled Liberation fonts and their OFL notice live in `assets/fonts`; installed
 fonts supply Unicode fallback. Keep the native rendering, protocol and font
 assets in KIT so applications share one implementation. The ordinary feature
 matrix remains unaffected.
+
+Native embedded surfaces use `native_surface::{Surface, Primitive, PixelRect}`.
+The contract is available without the renderer feature so a helper can own its
+UI without linking a rasterizer. Pixel coordinates are local, bounded and clipped
+to the containing surface; opaque hit actions remain the helper's responsibility.
+`native_surfaces` is an additive negotiated frontend capability. Terminal input
+is still cell precision; do not advertise pixel pointer precision.

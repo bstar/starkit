@@ -87,6 +87,10 @@ pub struct Span {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Component {
+    Surface {
+        rect: Rect,
+        surface: super::surface::Surface,
+    },
     Menu {
         rect: Rect,
     },

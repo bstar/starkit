@@ -112,6 +112,61 @@ fn rounded(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: b
 }
 
 impl Painter {
+    fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
+        use super::surface::Primitive;
+        let [x, y, width, height] = area;
+        let sx = width / f32::from(surface.width);
+        let sy = height / f32::from(surface.height);
+        fill(canvas, area, &surface.background);
+        for node in &surface.nodes {
+            let r = node.rect();
+            let rect = [
+                x + f32::from(r.x) * sx,
+                y + f32::from(r.y) * sy,
+                f32::from(r.width) * sx,
+                f32::from(r.height) * sy,
+            ];
+            match node {
+                Primitive::Fill { color, radius, .. } => {
+                    rounded(canvas, rect, f32::from(*radius), color, false)
+                }
+                Primitive::Border { color, radius, .. } => rounded(
+                    canvas,
+                    [
+                        rect[0] + 1.,
+                        rect[1] + 1.,
+                        (rect[2] - 2.).max(0.),
+                        (rect[3] - 2.).max(0.),
+                    ],
+                    f32::from(*radius),
+                    color,
+                    true,
+                ),
+                Primitive::Text {
+                    text,
+                    color,
+                    size,
+                    bold,
+                    mono,
+                    ..
+                } => self.text(
+                    canvas,
+                    text,
+                    rect,
+                    TextStyle {
+                        size: f32::from(*size) * sy,
+                        color,
+                        bold: *bold,
+                        mono: *mono,
+                        ellipsis: true,
+                    },
+                ),
+                Primitive::Icon { name, color, .. } => {
+                    draw_icon(canvas, name, rect[0], rect[1], rect[2].min(rect[3]), color)
+                }
+            }
+        }
+    }
     pub fn new() -> Self {
         let mut db = cosmic_text::fontdb::Database::new();
         for bytes in FONTS {
@@ -367,7 +422,8 @@ impl Painter {
         };
         for component in &scene.components {
             let rect = match component {
-                Component::Panel { rect, .. }
+                Component::Surface { rect, .. }
+                | Component::Panel { rect, .. }
                 | Component::Menu { rect }
                 | Component::Dialog { rect, .. }
                 | Component::TextField { rect, .. }
@@ -395,6 +451,10 @@ impl Painter {
             let h = f32::from(rect.height) * ch;
             let area = [x, y, w, h];
             match component {
+                Component::Surface { surface, .. } => {
+                    surface.validate()?;
+                    self.surface(&mut canvas, surface, area);
+                }
                 Component::Panel { active, .. } => rounded(
                     &mut canvas,
                     [x + 1., y + 1., w - 2., h - 2.],
@@ -426,7 +486,7 @@ impl Painter {
                     if *selected {
                         fill(&mut canvas, [x + 1., y + 2., 2., (h - 4.).max(0.)], accent);
                     }
-                    let mark = PathBuilder::from_circle(x + 15., y + h / 2., 4.5);
+                    let mark = PathBuilder::from_circle(x + 6., y + h / 2., 4.5);
                     if let Some(mark) = mark {
                         if *marked {
                             canvas.fill_path(
@@ -453,7 +513,7 @@ impl Painter {
                     draw_icon(
                         &mut canvas,
                         icon,
-                        x + 29.,
+                        x + 18.,
                         y + (h - icon_size) / 2.,
                         icon_size,
                         accent,
@@ -461,7 +521,7 @@ impl Painter {
                     self.text(
                         &mut canvas,
                         label,
-                        [x + 55., y, (w - 65.).max(0.), h],
+                        [x + 40., y, (w - 48.).max(0.), h],
                         TextStyle {
                             size: font,
                             color: foreground,
@@ -479,14 +539,20 @@ impl Painter {
                 } => {
                     fill(&mut canvas, area, &scene.background);
                     if *active {
-                        rounded(&mut canvas, area, 6., border, false);
+                        rounded(
+                            &mut canvas,
+                            [x, y + 4., (w - 4.).max(0.), (h - 8.).max(0.)],
+                            4.,
+                            border,
+                            false,
+                        );
                         fill(
                             &mut canvas,
-                            [x + 6., y + h - 2., (w - 12.).max(0.), 2.],
+                            [x + 4., y + h - 6., (w - 12.).max(0.), 2.],
                             accent,
                         );
                     }
-                    let padding = (w * 0.15).min(20.);
+                    let padding = 12f32.min(w / 4.);
                     let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
                     self.text(
                         &mut canvas,
@@ -549,13 +615,18 @@ impl Painter {
                     background,
                     ..
                 } => {
-                    fill(&mut canvas, [x, y + h / 2. - 2., w, 4.], background);
+                    fill(&mut canvas, area, &scene.background);
+                    fill(
+                        &mut canvas,
+                        [x, y + h / 2. - 2., w.min(96.), 4.],
+                        background,
+                    );
                     fill(
                         &mut canvas,
                         [
                             x,
                             y + h / 2. - 2.,
-                            w * f32::from((*value).min(1000)) / 1000.,
+                            w.min(96.) * f32::from((*value).min(1000)) / 1000.,
                             4.,
                         ],
                         foreground,
@@ -704,7 +775,50 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
 
 fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: &str) {
     let mut p = PathBuilder::new();
-    if kind == "folder" {
+    if matches!(
+        kind,
+        "play" | "pause" | "stop" | "previous" | "next" | "close"
+    ) {
+        match kind {
+            "play" | "next" => {
+                p.move_to(4., 2.);
+                p.line_to(13., 8.);
+                p.line_to(4., 14.);
+                p.close();
+                if kind == "next" {
+                    p.move_to(14., 2.);
+                    p.line_to(14., 14.);
+                }
+            }
+            "previous" => {
+                p.move_to(12., 2.);
+                p.line_to(3., 8.);
+                p.line_to(12., 14.);
+                p.close();
+                p.move_to(2., 2.);
+                p.line_to(2., 14.);
+            }
+            "pause" => {
+                p.move_to(5., 2.);
+                p.line_to(5., 14.);
+                p.move_to(11., 2.);
+                p.line_to(11., 14.);
+            }
+            "stop" => {
+                p.move_to(3., 3.);
+                p.line_to(13., 3.);
+                p.line_to(13., 13.);
+                p.line_to(3., 13.);
+                p.close();
+            }
+            _ => {
+                p.move_to(4., 4.);
+                p.line_to(12., 12.);
+                p.move_to(12., 4.);
+                p.line_to(4., 12.);
+            }
+        }
+    } else if kind == "folder" {
         p.move_to(1., 3.);
         p.line_to(6., 3.);
         p.line_to(8., 5.);

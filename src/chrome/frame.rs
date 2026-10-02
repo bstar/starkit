@@ -159,7 +159,7 @@ pub fn body<W: header::Word>(area: Rect, words: &[W]) -> Rect {
         if padded() {
             inner.x = inner.x.saturating_add(1).min(area.right());
             inner.width = inner.width.saturating_sub(2);
-            inner.y = inner.y.saturating_add(2).min(area.bottom());
+            inner.y = inner.y.saturating_add(1).min(area.bottom());
             inner.height = inner.height.saturating_sub(2);
         }
         inner
@@ -282,9 +282,19 @@ pub fn frame<W: header::Word>(area: Rect, buf: &mut Buffer, f: &Frame<'_, W>) ->
         let y = area.y + 1;
         if let Some(title) = &title_text {
             let text = title.strip_prefix(TITLE_LEAD).unwrap_or(title).trim_end();
-            buf.set_stringn(area.x + 2, y, text, usize::from(room), style);
+            buf.set_stringn(
+                area.x + 2,
+                y,
+                text,
+                usize::from(if f.words.is_empty() {
+                    room
+                } else {
+                    room.min(24)
+                }),
+                style,
+            );
         }
-        if let Some((drawn, tone)) = &badge {
+        if let Some((drawn, tone)) = &badge.as_ref().filter(|_| f.words.is_empty()) {
             let text = drawn.trim().trim_end_matches('═').trim();
             let width = crate::wrap::width_of(text);
             buf.set_string(
@@ -341,20 +351,20 @@ mod tests {
             );
             assert_eq!(buf[(2, 0)].symbol(), "═");
             assert_eq!(buf[(2, 1)].symbol(), "P");
-            assert_eq!((content.x, content.y), (2, 4));
+            assert_eq!((content.x, content.y), (2, 3));
             let slots = header::slots(area, &[Action::Close]);
             let (_, hit) = slots[0];
-            assert_eq!(hit.y, 2);
+            assert_eq!(hit.y, 1);
             assert_eq!(
                 header::hit(area, &[Action::Close], hit.x, hit.y),
                 Some(Action::Close)
             );
-            assert_eq!(header::hit(area, &[Action::Close], hit.x, 1), None);
+            assert_eq!(header::hit(area, &[Action::Close], hit.x, 2), None);
             {
                 let _compact = padding_scope(false);
                 assert_eq!(body(area, &[Action::Close]).y, 2);
             }
-            assert_eq!(body(area, &[Action::Close]).y, 4);
+            assert_eq!(body(area, &[Action::Close]).y, 3);
         }
         assert_eq!(extra_rows(), 0);
         assert_eq!(body(area, &[Action::Close]).y, 2);

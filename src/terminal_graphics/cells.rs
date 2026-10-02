@@ -57,7 +57,8 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
     buffer.set_style(area, base);
     for component in &scene.components {
         let rect = match component {
-            Component::Panel { rect, .. }
+            Component::Surface { rect, .. }
+            | Component::Panel { rect, .. }
             | Component::ListRow { rect, .. }
             | Component::Tab { rect, .. }
             | Component::Meter { rect, .. }
@@ -155,7 +156,10 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
                     ));
                 }
             }
-            Component::Scrollbar { .. } | Component::Image { .. } | Component::Terminal { .. } => {}
+            Component::Surface { .. }
+            | Component::Scrollbar { .. }
+            | Component::Image { .. }
+            | Component::Terminal { .. } => {}
         }
     }
     // Application compatibility spans are the authoritative cell view,

@@ -62,8 +62,6 @@ pub fn rect(area: Rect) -> Rect {
     if super::frame::padded() {
         inner.x = inner.x.saturating_add(1).min(area.right());
         inner.width = inner.width.saturating_sub(2);
-        inner.y = inner.y.saturating_add(1).min(area.bottom());
-        inner.height = inner.height.saturating_sub(1);
     }
     Rect {
         height: inner.height.min(ROWS),
@@ -83,7 +81,10 @@ pub fn body(area: Rect) -> Rect {
         inner.x = inner.x.saturating_add(1).min(area.right());
         inner.width = inner.width.saturating_sub(2);
     }
-    let rows = ROWS + super::frame::extra_rows();
+    let rows = ROWS + u16::from(super::frame::padded());
+    if super::frame::padded() {
+        inner.height = inner.height.saturating_sub(1);
+    }
     // A panel with no room for a body gets an empty rect inside itself rather
     // than one starting past its own bottom edge. `Block::inner` moves the
     // corner down whether or not there was anything to move it into.
@@ -111,7 +112,12 @@ fn width_of<I: Word>(items: &[I]) -> u16 {
 /// The renderer and the mouse handler both come through here, so a word that
 /// was never drawn cannot be clicked.
 pub fn slots<I: Word>(area: Rect, items: &[I]) -> Vec<(I, Rect)> {
-    let row = rect(area);
+    let mut row = rect(area);
+    if super::frame::padded() {
+        let reserved = row.width.min(24);
+        row.x += reserved;
+        row.width -= reserved;
+    }
     if row.height == 0 {
         return Vec::new();
     }

@@ -58,3 +58,6 @@ pub mod wrap;
 
 #[cfg(feature = "terminal-graphics")]
 pub mod terminal_graphics;
+
+/// Native surface contract, usable by helpers without linking the renderer.
+pub mod native_surface;
