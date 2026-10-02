@@ -89,7 +89,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgl1-mesa-dri libegl1
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgl1-mesa-dri libegl1 libxcb-xkb1 libxkbcommon-x11-0 libxcb-cursor0
       - name: Install private Kitty pixel capture runtime
         if: runner.os == 'Linux'
         run: |
