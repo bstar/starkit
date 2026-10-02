@@ -426,34 +426,11 @@ fn run_impl(
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut assets = std::collections::HashMap::<String, String>::new();
     let mut epoch: Option<String> = None;
-    let loading = Scene {
-        revision: 0,
-        interaction: 0,
-        viewport: size,
-        background: "#1e1e2e".into(),
-        foreground: "#cdd6f4".into(),
-        accent: "#89b4fa".into(),
-        border: "#45475a".into(),
-        spans: vec![Span {
-            x: 3,
-            y: 3,
-            text: "Connecting to application session…".into(),
-            foreground: "#cdd6f4".into(),
-            background: "#1e1e2e".into(),
-            bold: true,
-        }],
-        components: vec![Component::Panel {
-            rect: Rect {
-                x: 1,
-                y: 1,
-                width: size.columns.saturating_sub(2),
-                height: size.rows.saturating_sub(2),
-            },
-            active: true,
-        }],
-    };
-    renderer.scene(&loading)?;
-    let mut last_scene: Option<Scene> = Some(loading);
+    // Keep startup outside the pixel renderer. Its first capture must belong
+    // to the application, rather than a competing placeholder scene.
+    io::stdout().write_all(b"\x1b[HConnecting to application session...")?;
+    io::stdout().flush()?;
+    let mut last_scene: Option<Scene> = None;
     let mut shown: Option<(u64, u64)> = None;
     let mut id = 0u64;
     let mut connected = false;
