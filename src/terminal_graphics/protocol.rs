@@ -145,6 +145,24 @@ pub enum Component {
     },
 }
 
+impl Component {
+    pub fn rect(&self) -> Rect {
+        match self {
+            Self::Surface { rect, .. }
+            | Self::Menu { rect }
+            | Self::Dialog { rect, .. }
+            | Self::TextField { rect, .. }
+            | Self::Panel { rect, .. }
+            | Self::ListRow { rect, .. }
+            | Self::Tab { rect, .. }
+            | Self::Meter { rect, .. }
+            | Self::Scrollbar { rect, .. }
+            | Self::Image { rect, .. }
+            | Self::Terminal { rect } => *rect,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scene {
     pub revision: u64,
@@ -160,6 +178,8 @@ pub struct Scene {
     pub border: String,
     pub spans: Vec<Span>,
     pub components: Vec<Component>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<super::placement::Placement>,
 }
 impl Scene {
     pub fn from_buffer(
@@ -243,6 +263,7 @@ impl Scene {
             foreground,
             spans,
             components: vec![],
+            placements: vec![],
         }
     }
     pub fn same_content(&self, other: &Self) -> bool {
@@ -254,6 +275,7 @@ impl Scene {
             && self.border == other.border
             && self.spans == other.spans
             && self.components == other.components
+            && self.placements == other.placements
     }
 }
 
@@ -474,6 +496,7 @@ mod tests {
             border: String::new(),
             spans: vec![],
             components: vec![],
+            placements: vec![],
         };
         let pointer = |action: &str| Input::Pointer {
             action: action.into(),
@@ -511,6 +534,7 @@ mod tests {
             border: String::new(),
             spans: vec![],
             components: vec![],
+            placements: vec![],
         };
         let mut admission = Admission::default();
         admission.target(9, 1, 4);

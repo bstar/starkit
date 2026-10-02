@@ -22,6 +22,7 @@ fn main() -> anyhow::Result<()> {
         accent: "#89b4fa".into(),
         border: "#45475a".into(),
         spans: vec![],
+        placements: vec![],
         components: vec![
             Component::Panel {
                 rect: Rect {

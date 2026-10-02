@@ -106,3 +106,18 @@ Rust drawing and shaping APIs:
 
 - https://github.com/linebender/tiny-skia
 - https://github.com/pop-os/cosmic-text
+
+### Pixel region layout
+
+Frontends negotiate `pixel_layout` separately from `native_surfaces`. A scene can
+then place logical controller regions into bounded pixel rectangles using
+`placement::Placement`. Shared column/split helpers use physical gaps; the same
+placement maps a terminal cell centre back into controller coordinates. Gutters
+have no hit target and scrollbar captures clamp to the originating region.
+Pointer precision remains **cells**.
+
+Layers are rasterized directly at their destination size, preserving the
+terminal-derived font size and the shared image cache. No finished text bitmap
+is resized. Modal spans belong to a separate topmost layer so moving a popup
+cannot leave its old text in the background. Legacy clients retain the cell
+layout. Placements are limited to 16 regions and two viewport areas of painting.

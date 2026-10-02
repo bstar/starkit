@@ -162,3 +162,10 @@ UI without linking a rasterizer. Pixel coordinates are local, bounded and clippe
 to the containing surface; opaque hit actions remain the helper's responsibility.
 `native_surfaces` is an additive negotiated frontend capability. Terminal input
 is still cell precision; do not advertise pixel pointer precision.
+
+Pixel root layout uses `terminal_graphics::placement`: bounded logical regions
+mapped to pixel destinations, with shared column/split gaps and optional panel
+insets. Pointer projection and raster row edges must stay identical. Preserve
+terminal-derived font sizes when placing regions; do not resize text bitmaps.
+Native surfaces carry physical text sizes, so resizing their host changes their
+layout boxes without scaling the glyphs. `pixel_layout` is separately negotiated.

@@ -38,6 +38,8 @@ pub struct Capabilities {
     pub presentation_ack: bool,
     #[serde(default)]
     pub native_surfaces: bool,
+    #[serde(default)]
+    pub pixel_layout: bool,
 }
 
 impl Capabilities {
@@ -65,6 +67,7 @@ impl Capabilities {
             paste: interactive,
             presentation_ack: interactive,
             native_surfaces: true,
+            pixel_layout: true,
         }
     }
 }
@@ -83,6 +86,7 @@ mod tests {
             paste: true,
             presentation_ack: true,
             native_surfaces: true,
+            pixel_layout: true,
         };
         let report = serde_json::to_value(capabilities).unwrap();
         assert_eq!(report["image_transport"], "kitty");

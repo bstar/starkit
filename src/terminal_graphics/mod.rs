@@ -7,6 +7,7 @@ pub mod capabilities;
 pub mod cells;
 pub mod client;
 mod native;
+pub mod placement;
 pub mod protocol;
 pub mod renderer;
 pub use crate::native_surface as surface;

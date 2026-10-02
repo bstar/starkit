@@ -154,7 +154,7 @@ impl Painter {
                     text,
                     rect,
                     TextStyle {
-                        size: f32::from(*size) * sy,
+                        size: f32::from(*size),
                         color,
                         bold: *bold,
                         mono: *mono,
@@ -295,11 +295,12 @@ impl Painter {
         &mut self,
         canvas: &mut Pixmap,
         scene: &Scene,
-        cw: f32,
-        ch: f32,
-        font: f32,
+        metrics: [f32; 3],
         region: Option<Rect>,
+        placement: Option<&super::placement::Placement>,
     ) {
+        let [cw, ch, font] = metrics;
+        let row_edge = |row: u16| placement.map_or(f32::from(row) * ch, |p| p.row_edge(row));
         for span in &scene.spans {
             if span.x >= scene.viewport.columns || span.y >= scene.viewport.rows {
                 continue;
@@ -312,8 +313,8 @@ impl Painter {
             let cells = unicode_width::UnicodeWidthStr::width(span.text.as_str());
             let x = (f32::from(span.x) * cw).floor();
             let right = ((f32::from(span.x) + cells as f32) * cw).floor();
-            let y = (f32::from(span.y) * ch).floor();
-            let bottom = (f32::from(span.y.saturating_add(1)) * ch).floor();
+            let y = row_edge(span.y).floor();
+            let bottom = row_edge(span.y.saturating_add(1)).floor();
             let mut rect = [x, y, right - x, bottom - y];
             if let Some(r) = region {
                 let left = (f32::from(r.x) * cw).floor();
@@ -370,6 +371,67 @@ impl Painter {
     }
 
     pub fn render(&mut self, scene: &Scene) -> Result<RgbaImage> {
+        let v = scene.viewport.validate()?;
+        anyhow::ensure!(
+            scene.spans.len() <= super::protocol::MAX_CELLS
+                && scene.components.len() <= super::protocol::MAX_CELLS,
+            "Scene exceeds limits"
+        );
+        if scene.placements.is_empty() {
+            return self.render_grid(scene, None, true, None);
+        }
+        anyhow::ensure!(scene.placements.len() <= 16, "Too many pixel placements");
+        let mut area = 0u64;
+        for placement in &scene.placements {
+            placement.validate(v)?;
+            area += u64::from(placement.target.width) * u64::from(placement.target.height);
+        }
+        anyhow::ensure!(
+            area <= 2 * u64::from(v.width) * u64::from(v.height),
+            "Pixel layers exceed limits"
+        );
+        let images: HashSet<_> = scene
+            .components
+            .iter()
+            .filter_map(|c| match c {
+                Component::Image { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        anyhow::ensure!(images.len() <= 8, "Too many preview assets");
+        self.assets.retain(|id, _| images.contains(id));
+        let [r, g, b] = rgb(&scene.background);
+        let mut frame =
+            RgbaImage::from_pixel(v.width, v.height, crate::image::Rgba([r, g, b, 255]));
+        let font = ((v.height as f32 / f32::from(v.rows) * 0.84)
+            .min(v.width as f32 / f32::from(v.columns) / 0.6))
+        .floor()
+        .clamp(1., 64.);
+        for placement in &scene.placements {
+            // Rasterize at the destination size. Text is never resized as an image.
+            let layer = self.render_grid(
+                &placement.project(scene),
+                Some(font),
+                false,
+                Some(placement),
+            )?;
+            crate::image::GenericImage::copy_from(
+                &mut frame,
+                &layer,
+                u32::from(placement.target.x),
+                u32::from(placement.target.y),
+            )?;
+        }
+        Ok(frame)
+    }
+
+    fn render_grid(
+        &mut self,
+        scene: &Scene,
+        font_override: Option<f32>,
+        manage_assets: bool,
+        placement: Option<&super::placement::Placement>,
+    ) -> Result<RgbaImage> {
         let viewport = scene.viewport.validate()?;
         if self
             .glyphs
@@ -390,12 +452,13 @@ impl Painter {
         let cw = viewport.width as f32 / f32::from(viewport.columns);
         let ch = viewport.height as f32 / f32::from(viewport.rows);
         // Match the terminal cell metrics; never expand text beyond its cell advance.
-        let font = (ch * 0.84).min(cw / 0.6).floor().clamp(1., 64.);
+        let font =
+            font_override.unwrap_or_else(|| (ch * 0.84).min(cw / 0.6).floor().clamp(1., 64.));
         let mut canvas =
             Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?;
         let [r, g, b] = rgb(&scene.background);
         canvas.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
-        self.spans(&mut canvas, scene, cw, ch, font, None);
+        self.spans(&mut canvas, scene, [cw, ch, font], None, placement);
         let active_images: HashSet<_> = scene
             .components
             .iter()
@@ -408,7 +471,9 @@ impl Painter {
             })
             .collect();
         anyhow::ensure!(active_images.len() <= 8, "Too many preview assets");
-        self.assets.retain(|id, _| active_images.contains(id));
+        if manage_assets {
+            self.assets.retain(|id, _| active_images.contains(id));
+        }
         let mut used = HashSet::new();
         let accent = if scene.accent.is_empty() {
             &scene.foreground
@@ -420,6 +485,7 @@ impl Painter {
         } else {
             &scene.border
         };
+        let row_edge = |row: u16| placement.map_or(f32::from(row) * ch, |p| p.row_edge(row));
         for component in &scene.components {
             let rect = match component {
                 Component::Surface { rect, .. }
@@ -446,9 +512,9 @@ impl Painter {
                 ..rect
             };
             let x = f32::from(rect.x) * cw;
-            let y = f32::from(rect.y) * ch;
+            let y = row_edge(rect.y);
             let w = f32::from(rect.width) * cw;
-            let h = f32::from(rect.height) * ch;
+            let h = row_edge(rect.y.saturating_add(rect.height)) - y;
             let area = [x, y, w, h];
             match component {
                 Component::Surface { surface, .. } => {
@@ -464,7 +530,7 @@ impl Painter {
                 ),
                 Component::Menu { .. } | Component::Dialog { .. } => {
                     fill(&mut canvas, area, &scene.background);
-                    self.spans(&mut canvas, scene, cw, ch, font, Some(rect));
+                    self.spans(&mut canvas, scene, [cw, ch, font], Some(rect), placement);
                     rounded(
                         &mut canvas,
                         [x + 1., y + 1., w - 2., h - 2.],
@@ -577,9 +643,9 @@ impl Painter {
                             "×",
                             [
                                 f32::from(r.x) * cw,
-                                f32::from(r.y) * ch,
+                                row_edge(r.y),
                                 f32::from(r.width) * cw,
-                                f32::from(r.height) * ch,
+                                row_edge(r.y.saturating_add(r.height)) - row_edge(r.y),
                             ],
                             TextStyle {
                                 size: font,
@@ -597,8 +663,8 @@ impl Painter {
                     let width = w.min(6.);
                     let left = x + (w - width) / 2.;
                     rounded(&mut canvas, [left, y, width, h], width / 2., border, false);
-                    let top = (f32::from(thumb.y) * ch).max(y);
-                    let bottom = (f32::from(thumb.y.saturating_add(thumb.height)) * ch).min(y + h);
+                    let top = row_edge(thumb.y).max(y);
+                    let bottom = row_edge(thumb.y.saturating_add(thumb.height)).min(y + h);
                     if bottom > top {
                         rounded(
                             &mut canvas,
@@ -718,7 +784,9 @@ impl Painter {
                 Component::Terminal { .. } => {}
             }
         }
-        self.assets.retain(|id, _| used.contains(id));
+        if manage_assets {
+            self.assets.retain(|id, _| used.contains(id));
+        }
         RgbaImage::from_raw(viewport.width, viewport.height, canvas.take())
             .context("Native frame pixels")
     }
@@ -893,8 +961,117 @@ mod tests {
             accent: "#89b4fa".into(),
             border: "#45475a".into(),
             spans: vec![],
+            placements: vec![],
             components: vec![],
         }
+    }
+
+    #[test]
+    fn pixel_layers_share_preview_cache_when_payloads_are_omitted() {
+        use super::super::placement::Placement;
+        use crate::native_surface::PixelRect;
+        let mut scene = scene();
+        for i in 0..2 {
+            let rect = Rect {
+                x: i * 50,
+                y: 0,
+                width: 50,
+                height: 40,
+            };
+            let png = super::super::assets::encode_png(&RgbaImage::from_pixel(
+                4,
+                4,
+                crate::image::Rgba([i as u8 * 100, 80, 60, 255]),
+            ))
+            .unwrap();
+            scene.components.push(Component::Image {
+                rect,
+                id: format!("asset-{i}"),
+                png: Some(png),
+            });
+            scene
+                .placements
+                .push(Placement::new(rect, PixelRect::new(i * 600, 0, 600, 800)));
+        }
+        let mut painter = Painter::new();
+        let first = painter.render(&scene).unwrap();
+        for c in &mut scene.components {
+            if let Component::Image { png, .. } = c {
+                *png = None;
+            }
+        }
+        assert_eq!(first, painter.render(&scene).unwrap());
+        assert_eq!(painter.assets.len(), 2);
+    }
+
+    #[test]
+    fn pixel_layers_keep_exact_gutters_borders_and_modal_background() {
+        use super::super::placement::Placement;
+        use crate::native_surface::PixelRect;
+        let mut scene = scene();
+        scene.viewport.width = 1003;
+        scene.viewport.height = 803;
+        let left = Rect {
+            x: 0,
+            y: 0,
+            width: 48,
+            height: 30,
+        };
+        let right = Rect {
+            x: 50,
+            y: 0,
+            width: 50,
+            height: 30,
+        };
+        scene.components = vec![
+            Component::Panel {
+                rect: left,
+                active: false,
+            },
+            Component::Panel {
+                rect: right,
+                active: true,
+            },
+        ];
+        scene.placements = vec![
+            Placement::new(left, PixelRect::new(8, 8, 489, 700)),
+            Placement::new(right, PixelRect::new(505, 8, 490, 700)),
+        ];
+        let mut painter = Painter::new();
+        let image = painter.render(&scene).unwrap();
+        for x in 497..505 {
+            for y in 8..708 {
+                assert_eq!(image.get_pixel(x, y).0, [30, 30, 46, 255]);
+            }
+        }
+        assert_eq!(image.get_pixel(8, 100).0, [69, 71, 90, 255]);
+        assert_eq!(image.get_pixel(9, 100).0, [69, 71, 90, 255]);
+        assert_eq!(image.get_pixel(10, 100).0, [30, 30, 46, 255]);
+        // A popup can cross a pane boundary without erasing the base scene or
+        // using a different projection for its text and its hit region.
+        let rect = Rect {
+            x: 40,
+            y: 5,
+            width: 20,
+            height: 5,
+        };
+        scene.components.push(Component::Menu { rect });
+        scene.placements.push(Placement {
+            source: rect,
+            target: PixelRect::new(450, 150, 200, 100),
+            padding: None,
+            overlay: Some(vec![super::super::protocol::Span {
+                x: 40,
+                y: 5,
+                text: "                    ".into(),
+                foreground: "#ffffff".into(),
+                background: "#123456".into(),
+                bold: false,
+            }]),
+        });
+        let popup = painter.render(&scene).unwrap();
+        assert_eq!(popup.get_pixel(550, 160).0, [18, 52, 86, 255]);
+        assert_eq!(popup.get_pixel(505, 300), image.get_pixel(505, 300));
     }
 
     #[test]
