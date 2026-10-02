@@ -13,6 +13,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -33,13 +34,24 @@ def main():
     with tempfile.TemporaryDirectory(prefix="kit-pixels-") as private:
         address = f"unix:{private}/rc.sock"
         runtime = Path(private) / "runtime"
+        gate = Path(private) / "window-ready"
+        starter = Path(private) / "start.py"
+        starter.write_text("""import os, pathlib, sys, time
+deadline = time.monotonic() + 30
+while not pathlib.Path(sys.argv[1]).exists():
+    if time.monotonic() > deadline:
+        raise RuntimeError('Kitty window did not become ready')
+    time.sleep(.02)
+os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
+""")
         log = (output / "kitty.log").open("w")
         child = subprocess.Popen([
             args.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
             "-o", "allow_remote_control=yes", "-o", "remember_window_size=no",
             "-o", "initial_window_width=100c", "-o", "initial_window_height=40c",
             *(["-o", "linux_display_server=x11"] if args.pointer_xdotool else []),
-            "--title", "STAR-KIT-INTERACTIVE-PROOF", args.example, "--interactive",
+            "--title", "STAR-KIT-INTERACTIVE-PROOF",
+            sys.executable, str(starter), str(gate), args.example,
         ], stdout=log, stderr=log, env={
             **os.environ, "STAR_KIT_DEMO_DIR": str(runtime),
             "STAR_KIT_DEMO_LOG": "debug",
@@ -106,6 +118,11 @@ def main():
                 except (subprocess.SubprocessError, IndexError):
                     assert time.monotonic() < deadline, "Kitty remote control startup timed out"
                     time.sleep(.1)
+            # Start the application after Kitty's first native paint, matching
+            # launching it inside an existing terminal. Early capability
+            # queries during a cold window's GL setup can report half-blocks.
+            rc("screenshot", "--match", "id:1", str(Path(private) / "window-ready.png"))
+            gate.touch()
             wait_presented()
             window = json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]
             # --hold introduces a Kitty shell parent. Use the actual demo,
