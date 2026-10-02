@@ -55,7 +55,7 @@ are bounded. Invalid geometry/assets return an error; terminal guards restore
 the terminal. Worker failure leaves the remote session intact for reattachment.
 
 The graphical layout defaults to 100% scale. `STAR_GRAPHICS_SCALE=150` enlarges
-the denser layout; values 100–200 are accepted. Input and OSC 72 coordinates
+the layout; values 100–200 are accepted. Input and OSC 72 coordinates
 are translated to the logical layout while image placements retain the terminal's
 physical cell grid. Existing 60×21 layout limits remain.
 

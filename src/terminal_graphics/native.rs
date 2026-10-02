@@ -483,7 +483,12 @@ impl Painter {
                     self.text(
                         &mut canvas,
                         label,
-                        [x + 20., y + 2., (end - x - 32.).max(0.), (h - 4.).max(0.)],
+                        [
+                            x + padding,
+                            y + 2.,
+                            (end - x - 2. * padding).max(0.),
+                            (h - 4.).max(0.),
+                        ],
                         TextStyle {
                             size: font,
                             color: &scene.foreground,
