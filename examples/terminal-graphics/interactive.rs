@@ -213,7 +213,7 @@ impl Controller for Demo {
             secret: false,
         });
         let top = self.cursor.saturating_sub(10);
-        let preview_width = if v.columns >= 65 && v.rows >= 20 {
+        let preview_width = if v.columns >= 60 && v.rows >= 20 {
             22
         } else {
             0

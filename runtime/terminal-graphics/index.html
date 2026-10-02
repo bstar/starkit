@@ -37,7 +37,7 @@ async function paint(s){
   ctx.fillStyle=s.background;ctx.fillRect(0,0,width,height);
   const accent=s.accent||s.foreground, border=s.border||s.foreground;
   surfaces.style.setProperty('--border',border);surfaces.style.setProperty('--accent',accent);surfaces.style.setProperty('--tab',s.background);
-  const font=Math.max(9,Math.min(ch*.84,cw*1.65));ctx.textBaseline='middle';
+  const font=Math.max(9,Math.round(Math.min(ch*.84,cw*1.65)));ctx.textBaseline='middle';
   for(const p of s.spans){
     ctx.fillStyle=p.background;
     // The controller's coordinate grid is authoritative, including wide text.
@@ -48,6 +48,15 @@ async function paint(s){
     const y0=Math.floor(p.y*ch),y1=Math.floor((p.y+1)*ch);
     ctx.fillRect(x0,y0,x1-x0,y1-y0);
     ctx.fillStyle=p.foreground;ctx.font=`${p.bold?'600':'400'} ${font}px monospace`;
+    if(/^[\x20-\x7e]*$/.test(p.text)){
+      // Let the font shape each word naturally, while keeping column gaps
+      // and controller hit targets on the authoritative grid.
+      for(const word of p.text.match(/[^ ]+| +/g)||[]){
+        if(word[0]!==' ')ctx.fillText(word,Math.floor(x*cw),Math.round((p.y+.5)*ch),word.length*cw);
+        x+=word.length;
+      }
+      continue;
+    }
     for(const c of chars){
       const wide=wideGlyph.test(c)?2:1;
       // Shared integer boundaries avoid antialiased gaps between adjacent
