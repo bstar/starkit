@@ -143,11 +143,19 @@ impl Placement {
                 })
             })
             .collect();
+        // Modal components follow the first Menu/Dialog marker. This keeps
+        // popup controls (including scrollbars) out of background regions.
+        let overlay_start = scene
+            .components
+            .iter()
+            .position(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
+            .unwrap_or(scene.components.len());
         let components = scene
             .components
             .iter()
-            .filter_map(|c| {
-                let overlay = matches!(c, Component::Menu { .. } | Component::Dialog { .. });
+            .enumerate()
+            .filter_map(|(index, c)| {
+                let overlay = index >= overlay_start;
                 if overlay != self.overlay.is_some() {
                     return None;
                 }

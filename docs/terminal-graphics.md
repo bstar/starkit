@@ -118,6 +118,7 @@ Pointer precision remains **cells**.
 
 Layers are rasterized directly at their destination size, preserving the
 terminal-derived font size and the shared image cache. No finished text bitmap
-is resized. Modal spans belong to a separate topmost layer so moving a popup
+is resized. Modal spans belong to a separate topmost layer; popup components follow the
+first Menu/Dialog marker, including their scrollbars. Moving a popup
 cannot leave its old text in the background. Legacy clients retain the cell
 layout. Placements are limited to 16 regions and two viewport areas of painting.

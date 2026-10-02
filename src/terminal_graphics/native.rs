@@ -1069,8 +1069,23 @@ mod tests {
                 bold: false,
             }]),
         });
+        scene.components.push(Component::Scrollbar {
+            rect: Rect {
+                x: 59,
+                y: 6,
+                width: 1,
+                height: 3,
+            },
+            thumb: Rect {
+                x: 59,
+                y: 6,
+                width: 1,
+                height: 1,
+            },
+        });
         let popup = painter.render(&scene).unwrap();
         assert_eq!(popup.get_pixel(550, 160).0, [18, 52, 86, 255]);
+        assert_eq!(popup.get_pixel(645, 178).0, [137, 180, 250, 255]);
         assert_eq!(popup.get_pixel(505, 300), image.get_pixel(505, 300));
     }
 
