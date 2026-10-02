@@ -70,7 +70,11 @@ async function paint(s){
   const loading=[];const used=new Set();
   for(const c of s.components){
     if(c.kind==='terminal')continue;
-    let node=document.createElement(c.kind==='image'?'img':'div');node.className='surface';rect(node,c.rect,cw,ch);
+    // Keep decoded previews alive across cursor, menu and progress repaints.
+    // Recreating an <img> and awaiting decode on every scene makes unrelated
+    // navigation pay for the same preview repeatedly.
+    let cached=c.kind==='image'?images.get(c.id):undefined;
+    let node=cached?.node||document.createElement(c.kind==='image'?'img':'div');node.className='surface';rect(node,c.rect,cw,ch);
     if(['panel','menu','dialog'].includes(c.kind)){
       node.classList.add('panel');if(c.active)node.classList.add('active');
       if(c.kind!=='panel'){
@@ -102,9 +106,13 @@ async function paint(s){
     }
     if(c.kind==='meter'){node.classList.add('meter');node.style.background=c.background;const fill=document.createElement('div');fill.style.width=`${Math.max(0,Math.min(1000,c.value))/10}%`;fill.style.background=c.foreground;node.append(fill);}
     if(c.kind==='image'){
-      used.add(c.id);if(c.png)images.set(c.id,'data:image/png;base64,'+c.png);
-      node.src=images.get(c.id)||'';
-      loading.push(node.decode().catch(()=>{}));
+      used.add(c.id);
+      if(!cached){cached={node,png:undefined,ready:Promise.resolve()};images.set(c.id,cached);}
+      if(c.png&&c.png!==cached.png){
+        cached.png=c.png;node.src='data:image/png;base64,'+c.png;
+        cached.ready=node.decode().catch(()=>{});
+      }
+      loading.push(cached.ready);
     }
     surfaces.append(node);
   }
