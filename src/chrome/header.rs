@@ -58,7 +58,13 @@ const RIGHT_PAD: u16 = 1;
 
 /// The header row: the first row inside the border.
 pub fn rect(area: Rect) -> Rect {
-    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    if super::frame::padded() {
+        inner.x = inner.x.saturating_add(1).min(area.right());
+        inner.width = inner.width.saturating_sub(2);
+        inner.y = inner.y.saturating_add(1).min(area.bottom());
+        inner.height = inner.height.saturating_sub(1);
+    }
     Rect {
         height: inner.height.min(ROWS),
         ..inner
@@ -72,14 +78,19 @@ pub fn rect(area: Rect) -> Rect {
 /// separate derivations of the playlist's offset is exactly how a click comes
 /// to select the row above the one it landed on.
 pub fn body(area: Rect) -> Rect {
-    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    if super::frame::padded() {
+        inner.x = inner.x.saturating_add(1).min(area.right());
+        inner.width = inner.width.saturating_sub(2);
+    }
+    let rows = ROWS + super::frame::extra_rows();
     // A panel with no room for a body gets an empty rect inside itself rather
     // than one starting past its own bottom edge. `Block::inner` moves the
     // corner down whether or not there was anything to move it into.
     let bottom = area.y.saturating_add(area.height);
     Rect {
-        y: inner.y.saturating_add(ROWS).min(bottom),
-        height: inner.height.saturating_sub(ROWS),
+        y: inner.y.saturating_add(rows).min(bottom),
+        height: inner.height.saturating_sub(rows),
         ..inner
     }
 }

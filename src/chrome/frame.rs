@@ -23,6 +23,40 @@ use crate::theme::Theme;
 use super::header;
 use super::rgb;
 
+thread_local! {
+    static PADDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Scoped pixel chrome geometry. Restores the previous presentation on drop,
+/// so a controller cannot change another app or the ordinary terminal layout.
+pub struct PaddingScope {
+    previous: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Drop for PaddingScope {
+    fn drop(&mut self) {
+        PADDED.with(|value| value.set(self.previous));
+    }
+}
+/// Keep drawing and hit testing inside the same presentation scope.
+pub fn padding_scope(enabled: bool) -> PaddingScope {
+    PaddingScope {
+        previous: PADDED.with(|value| value.replace(enabled)),
+        _thread: std::marker::PhantomData,
+    }
+}
+pub(super) fn padded() -> bool {
+    PADDED.with(std::cell::Cell::get)
+}
+/// Extra height reserved for an inset title and content gap in pixel mode.
+pub fn extra_rows() -> u16 {
+    if padded() {
+        2
+    } else {
+        0
+    }
+}
+
 /// What a panel's title starts with.
 ///
 /// One border character between the corner and the text, so the title reads
@@ -121,7 +155,14 @@ pub const NO_WORDS: &[NoWords] = &[];
 /// row of content the panel never gets back.
 pub fn body<W: header::Word>(area: Rect, words: &[W]) -> Rect {
     if words.is_empty() {
-        Block::default().borders(Borders::ALL).inner(area)
+        let mut inner = Block::default().borders(Borders::ALL).inner(area);
+        if padded() {
+            inner.x = inner.x.saturating_add(1).min(area.right());
+            inner.width = inner.width.saturating_sub(2);
+            inner.y = inner.y.saturating_add(2).min(area.bottom());
+            inner.height = inner.height.saturating_sub(2);
+        }
+        inner
     } else {
         header::body(area)
     }
@@ -168,7 +209,7 @@ pub fn frame<W: header::Word>(area: Rect, buf: &mut Buffer, f: &Frame<'_, W>) ->
     // mid-way reads as a fault -- `PLAYLIST — Some Long Pla` is not the name
     // of anything -- so the detail goes first, and if the bare title still
     // does not fit, the whole title goes rather than any part of it.
-    let room = area.width.saturating_sub(2);
+    let room = area.width.saturating_sub(if padded() { 4 } else { 2 });
     let full_width = crate::wrap::width_of(&full);
     let bare_width = crate::wrap::width_of(&bare);
     let (title_text, left_width) = if full_width <= room {
@@ -208,14 +249,14 @@ pub fn frame<W: header::Word>(area: Rect, buf: &mut Buffer, f: &Frame<'_, W>) ->
     // keeps the border's own colour rather than the title's or badge's --
     // a frame is one colour all the way round, and the only cells that say
     // otherwise are the words themselves.
-    if let Some(title_text) = &title_text {
+    if let Some(title_text) = &title_text.as_ref().filter(|_| !padded()) {
         let rest = title_text.strip_prefix(TITLE_LEAD).unwrap_or(title_text);
         block = block.title(Line::from(vec![
             Span::styled(TITLE_LEAD, border_style),
             Span::styled(rest.to_string(), style),
         ]));
     }
-    if let Some((drawn, tone)) = &badge {
+    if let Some((drawn, tone)) = &badge.as_ref().filter(|_| !padded()) {
         let glyph = &TITLE_TRAIL[1..];
         let main = drawn.strip_suffix(glyph).unwrap_or(drawn);
         block = block.title_top(
@@ -237,6 +278,23 @@ pub fn frame<W: header::Word>(area: Rect, buf: &mut Buffer, f: &Frame<'_, W>) ->
     }
 
     block.render(area, buf);
+    if padded() && area.height > 2 && area.width > 4 {
+        let y = area.y + 1;
+        if let Some(title) = &title_text {
+            let text = title.strip_prefix(TITLE_LEAD).unwrap_or(title).trim_end();
+            buf.set_stringn(area.x + 2, y, text, usize::from(room), style);
+        }
+        if let Some((drawn, tone)) = &badge {
+            let text = drawn.trim().trim_end_matches('═').trim();
+            let width = crate::wrap::width_of(text);
+            buf.set_string(
+                area.right() - 2 - width,
+                y,
+                text,
+                Style::default().fg(rgb(tone.colour(t))),
+            );
+        }
+    }
 
     if !f.words.is_empty() {
         header::render(area, f.words, buf, t);
@@ -249,6 +307,58 @@ pub fn frame<W: header::Word>(area: Rect, buf: &mut Buffer, f: &Frame<'_, W>) ->
 mod tests {
     use super::super::test_theme;
     use super::*;
+
+    #[test]
+    fn inset_titles_actions_and_body_share_geometry_and_restore_scope() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Action {
+            Close,
+        }
+        impl header::Word for Action {
+            fn word(self) -> Cow<'static, str> {
+                "close".into()
+            }
+        }
+        let theme = test_theme("cosmic");
+        let area = Rect::new(0, 0, 60, 12);
+        let mut buf = Buffer::empty(area);
+        assert_eq!(extra_rows(), 0);
+        {
+            let _chrome = padding_scope(true);
+            let content = frame(
+                area,
+                &mut buf,
+                &Frame {
+                    theme: &theme,
+                    focused: true,
+                    title: "preview",
+                    detail: None,
+                    heading: false,
+                    badge: None,
+                    footer: None,
+                    words: &[Action::Close],
+                },
+            );
+            assert_eq!(buf[(2, 0)].symbol(), "═");
+            assert_eq!(buf[(2, 1)].symbol(), "P");
+            assert_eq!((content.x, content.y), (2, 4));
+            let slots = header::slots(area, &[Action::Close]);
+            let (_, hit) = slots[0];
+            assert_eq!(hit.y, 2);
+            assert_eq!(
+                header::hit(area, &[Action::Close], hit.x, hit.y),
+                Some(Action::Close)
+            );
+            assert_eq!(header::hit(area, &[Action::Close], hit.x, 1), None);
+            {
+                let _compact = padding_scope(false);
+                assert_eq!(body(area, &[Action::Close]).y, 2);
+            }
+            assert_eq!(body(area, &[Action::Close]).y, 4);
+        }
+        assert_eq!(extra_rows(), 0);
+        assert_eq!(body(area, &[Action::Close]).y, 2);
+    }
 
     /// Every border cell -- both corners and the straight runs between them
     /// -- is the one colour a frame draws in, focused or not.
