@@ -126,6 +126,11 @@ pub enum Component {
         foreground: String,
         background: String,
     },
+    /// Continuous pixel scrollbar over the controller's existing cell hit track.
+    Scrollbar {
+        rect: Rect,
+        thumb: Rect,
+    },
     Image {
         rect: Rect,
         id: String,

@@ -410,6 +410,13 @@ impl<K: Copy + Eq> Scrollbars<K> {
         render(track, buf, t, thumb(track.height, total, above));
     }
 
+    /// Visible track and thumb geometry, shared with native pixel presentation.
+    pub fn visible(&self) -> impl Iterator<Item = (Rect, Thumb)> + '_ {
+        self.drawn.iter().filter_map(|bar| {
+            thumb(bar.track.height, bar.total, bar.above).map(|thumb| (bar.track, thumb))
+        })
+    }
+
     /// The track recorded for `key` this frame, if any.
     pub fn track_of(&self, key: K) -> Option<Rect> {
         self.drawn.iter().find(|b| b.key == key).map(|b| b.track)

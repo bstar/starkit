@@ -61,6 +61,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
             | Component::ListRow { rect, .. }
             | Component::Tab { rect, .. }
             | Component::Meter { rect, .. }
+            | Component::Scrollbar { rect, .. }
             | Component::Image { rect, .. }
             | Component::Menu { rect }
             | Component::Dialog { rect, .. }
@@ -154,7 +155,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
                     ));
                 }
             }
-            Component::Image { .. } | Component::Terminal { .. } => {}
+            Component::Scrollbar { .. } | Component::Image { .. } | Component::Terminal { .. } => {}
         }
     }
     // Application compatibility spans are the authoritative cell view,

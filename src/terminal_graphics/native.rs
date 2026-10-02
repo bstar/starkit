@@ -93,7 +93,7 @@ fn rounded(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: b
                 &path,
                 &paint(color),
                 &Stroke {
-                    width: 1.,
+                    width: 2.,
                     ..Stroke::default()
                 },
                 Transform::identity(),
@@ -334,7 +334,8 @@ impl Painter {
         );
         let cw = viewport.width as f32 / f32::from(viewport.columns);
         let ch = viewport.height as f32 / f32::from(viewport.rows);
-        let font = (ch * 0.84).min(cw * 1.65).round().clamp(9., 64.);
+        // Match the terminal cell metrics; never expand text beyond its cell advance.
+        let font = (ch * 0.84).min(cw / 0.6).floor().clamp(1., 64.);
         let mut canvas =
             Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?;
         let [r, g, b] = rgb(&scene.background);
@@ -373,6 +374,7 @@ impl Painter {
                 | Component::ListRow { rect, .. }
                 | Component::Tab { rect, .. }
                 | Component::Meter { rect, .. }
+                | Component::Scrollbar { rect, .. }
                 | Component::Image { rect, .. }
                 | Component::Terminal { rect } => *rect,
             };
@@ -395,7 +397,7 @@ impl Painter {
             match component {
                 Component::Panel { active, .. } => rounded(
                     &mut canvas,
-                    [x + 0.5, y + 0.5, w - 1., h - 1.],
+                    [x + 1., y + 1., w - 2., h - 2.],
                     9.,
                     if *active { accent } else { border },
                     true,
@@ -405,7 +407,7 @@ impl Painter {
                     self.spans(&mut canvas, scene, cw, ch, font, Some(rect));
                     rounded(
                         &mut canvas,
-                        [x + 0.5, y + 0.5, w - 1., h - 1.],
+                        [x + 1., y + 1., w - 2., h - 2.],
                         9.,
                         border,
                         true,
@@ -424,7 +426,7 @@ impl Painter {
                     if *selected {
                         fill(&mut canvas, [x + 1., y + 2., 2., (h - 4.).max(0.)], accent);
                     }
-                    let mark = PathBuilder::from_circle(x + 11., y + h / 2., 4.5);
+                    let mark = PathBuilder::from_circle(x + 15., y + h / 2., 4.5);
                     if let Some(mark) = mark {
                         if *marked {
                             canvas.fill_path(
@@ -447,11 +449,11 @@ impl Painter {
                             );
                         }
                     }
-                    draw_icon(&mut canvas, icon, x + 23., y + (h - 16.) / 2., accent);
+                    draw_icon(&mut canvas, icon, x + 29., y + (h - 16.) / 2., accent);
                     self.text(
                         &mut canvas,
                         label,
-                        [x + 47., y, (w - 52.).max(0.), h],
+                        [x + 55., y, (w - 65.).max(0.), h],
                         TextStyle {
                             size: font,
                             color: foreground,
@@ -476,11 +478,12 @@ impl Painter {
                             accent,
                         );
                     }
-                    let end = close.map_or(x + w - 14., |r| f32::from(r.x) * cw);
+                    let padding = (w * 0.15).min(20.);
+                    let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
                     self.text(
                         &mut canvas,
                         label,
-                        [x + 14., y, (end - x - 28.).max(0.), h],
+                        [x + 20., y + 2., (end - x - 32.).max(0.), (h - 4.).max(0.)],
                         TextStyle {
                             size: font,
                             color: &scene.foreground,
@@ -506,6 +509,24 @@ impl Painter {
                                 mono: false,
                                 ellipsis: false,
                             },
+                        );
+                    }
+                }
+                Component::Scrollbar { thumb, .. } => {
+                    // Erase the cell block glyphs before drawing an unbroken pixel thumb.
+                    fill(&mut canvas, area, &scene.background);
+                    let width = w.min(6.);
+                    let left = x + (w - width) / 2.;
+                    rounded(&mut canvas, [left, y, width, h], width / 2., border, false);
+                    let top = (f32::from(thumb.y) * ch).max(y);
+                    let bottom = (f32::from(thumb.y.saturating_add(thumb.height)) * ch).min(y + h);
+                    if bottom > top {
+                        rounded(
+                            &mut canvas,
+                            [left, top, width, bottom - top],
+                            width / 2.,
+                            accent,
+                            false,
                         );
                     }
                 }
@@ -747,6 +768,53 @@ mod tests {
             spans: vec![],
             components: vec![],
         }
+    }
+
+    #[test]
+    fn borders_are_two_pixels_and_scrollbar_has_no_cell_gaps() {
+        let mut painter = Painter::new();
+        let mut scene = scene();
+        scene.components.push(Component::Panel {
+            rect: Rect {
+                x: 2,
+                y: 2,
+                width: 10,
+                height: 10,
+            },
+            active: false,
+        });
+        scene.spans.push(super::super::protocol::Span {
+            x: 20,
+            y: 4,
+            text: "█".into(),
+            foreground: "#ffffff".into(),
+            background: "#000000".into(),
+            bold: false,
+        });
+        scene.components.push(Component::Scrollbar {
+            rect: Rect {
+                x: 20,
+                y: 2,
+                width: 1,
+                height: 8,
+            },
+            thumb: Rect {
+                x: 20,
+                y: 4,
+                width: 1,
+                height: 3,
+            },
+        });
+        let pixels = painter.render(&scene).unwrap();
+        assert_eq!(pixels.get_pixel(60, 40).0, [69, 71, 90, 255]);
+        assert_eq!(pixels.get_pixel(60, 41).0, [69, 71, 90, 255]);
+        assert_eq!(pixels.get_pixel(60, 42).0, [30, 30, 46, 255]);
+        // Every interior pixel is continuous across the three terminal rows.
+        for y in 82..138 {
+            assert_eq!(pixels.get_pixel(245, y).0, [137, 180, 250, 255]);
+        }
+        assert_eq!(pixels.get_pixel(245, 65).0, [69, 71, 90, 255]);
+        assert_eq!(pixels.get_pixel(241, 90).0, [30, 30, 46, 255]);
     }
 
     #[test]

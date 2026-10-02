@@ -389,7 +389,7 @@ fn run_impl(
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .filter(|n| (100..=200).contains(n))
-            .unwrap_or(150)
+            .unwrap_or(100)
     } else {
         100
     };
