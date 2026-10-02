@@ -449,7 +449,15 @@ impl Painter {
                             );
                         }
                     }
-                    draw_icon(&mut canvas, icon, x + 29., y + (h - 16.) / 2., accent);
+                    let icon_size = (font + 1.).min((h - 4.).max(1.)).min(16.);
+                    draw_icon(
+                        &mut canvas,
+                        icon,
+                        x + 29.,
+                        y + (h - icon_size) / 2.,
+                        icon_size,
+                        accent,
+                    );
                     self.text(
                         &mut canvas,
                         label,
@@ -694,7 +702,7 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
     Ok(())
 }
 
-fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, color: &str) {
+fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: &str) {
     let mut p = PathBuilder::new();
     if kind == "folder" {
         p.move_to(1., 3.);
@@ -752,7 +760,7 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, color: &str) {
                 width: 1.2,
                 ..Stroke::default()
             },
-            Transform::from_translate(x, y),
+            Transform::from_row(size / 16., 0., 0., size / 16., x, y),
             None,
         );
     }
