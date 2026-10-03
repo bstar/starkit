@@ -190,6 +190,7 @@ impl Placement {
             placements: Vec::new(),
             revision: scene.revision,
             interaction: scene.interaction,
+            scroll_interaction: None,
             background: scene.background.clone(),
             foreground: scene.foreground.clone(),
             accent: scene.accent.clone(),

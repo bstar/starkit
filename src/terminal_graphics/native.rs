@@ -955,6 +955,7 @@ mod tests {
         Scene {
             revision: 1,
             interaction: 1,
+            scroll_interaction: None,
             viewport: super::super::Viewport::default(),
             background: "#1e1e2e".into(),
             foreground: "#cdd6f4".into(),

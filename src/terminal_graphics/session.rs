@@ -284,8 +284,12 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
     let mut in_flight = HashSet::new();
     let mut effect_id = 0u64;
     let mut painted = Instant::now();
-    let mut history =
-        VecDeque::from([(scene.revision, scene.viewport.generation, scene.interaction)]);
+    let mut history = VecDeque::from([(
+        scene.revision,
+        scene.viewport.generation,
+        scene.interaction,
+        scene.scroll_interaction,
+    )]);
     loop {
         let start = Instant::now();
         match listener.accept() {
@@ -415,6 +419,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     let stale_release = matches!(&input,Input::Pointer{action,..} if action=="up")
                         && !admission.matches(revision, generation, &scene);
                     let accepted = admission.admit(id, revision, generation, &scene, &input);
+                    tracing::debug!(id, accepted, "Graphical input admitted");
                     let input = if stale_release {
                         Input::CancelPointer
                     } else {
@@ -446,12 +451,13 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     generation,
                 } => {
                     p.presentation.presented(revision, generation);
-                    if let Some((_, _, interaction)) = history
+                    if let Some((_, _, interaction, scroll)) = history
                         .iter()
-                        .find(|(r, g, _)| *r == revision && *g == generation)
+                        .find(|(r, g, _, _)| *r == revision && *g == generation)
                     {
                         if let Some(a) = p.client.as_ref().and_then(|c| clients.get_mut(c)) {
                             a.target(revision, generation, *interaction);
+                            a.scroll_target(revision, generation, *scroll);
                         }
                     }
                 }
@@ -485,8 +491,12 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                 if let Some(p) = &mut peer {
                     attached = !p.scene(&scene);
                     if !attached {
-                        let presented =
-                            (scene.revision, scene.viewport.generation, scene.interaction);
+                        let presented = (
+                            scene.revision,
+                            scene.viewport.generation,
+                            scene.interaction,
+                            scene.scroll_interaction,
+                        );
                         if history.back() != Some(&presented) {
                             history.push_back(presented);
                         }
@@ -532,7 +542,15 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
             return Ok(());
         }
         let remaining = Duration::from_millis(33).saturating_sub(start.elapsed());
-        std::thread::sleep(remaining);
+        // Input and presentation acknowledgements wake the controller immediately.
+        // Keep the timer for worker updates and accepting new attachments.
+        if let Some(p) = &peer {
+            let mut wait = crossbeam_channel::Select::new();
+            wait.recv(&p.messages);
+            let _ = wait.ready_timeout(remaining);
+        } else {
+            std::thread::sleep(remaining);
+        }
     }
 }
 

@@ -436,6 +436,7 @@ fn run_impl(
     let mut connected = false;
     let mut last_reply = Instant::now();
     let mut ping = Instant::now();
+    let mut last_input = Instant::now();
     let mut reconnect = Instant::now() + Duration::from_secs(5);
     let mut fatal = None;
     let mut frames = 0u64;
@@ -580,6 +581,7 @@ fn run_impl(
                     height,
                     pixels: frame_pixels,
                 } if generation == size.generation && width > 0 && height > 0 => {
+                    let presentation_started = Instant::now();
                     if pixels {
                         bytes += presenter.present_pixels(
                             frame_pixels.context("Native frame has no pixels")?,
@@ -600,6 +602,7 @@ fn run_impl(
                         generation,
                         width,
                         height,
+                        present_us = presentation_started.elapsed().as_micros(),
                         "Graphical frame presented"
                     );
                     if connected {
@@ -672,7 +675,19 @@ fn run_impl(
             }
             reconnect = Instant::now() + Duration::from_secs(5);
         }
-        if event::poll(Duration::from_millis(16))? {
+        // Renderer/socket readiness is independent of terminal input. During
+        // interaction avoid stacking a whole idle poll onto each frame; return
+        // to the quiet poll once the burst and its raster work have settled.
+        let rendering = last_scene
+            .as_ref()
+            .is_some_and(|scene| shown != Some((scene.revision, scene.viewport.generation)));
+        let poll_ms = if rendering || last_input.elapsed() < Duration::from_millis(100) {
+            2
+        } else {
+            16
+        };
+        if event::poll(Duration::from_millis(poll_ms))? {
+            last_input = Instant::now();
             let event = event::read()?;
             let mut input = custom(&event);
             match event {

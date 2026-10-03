@@ -43,6 +43,7 @@ impl Renderer {
                 let mut painter = super::native::Painter::new();
                 while let Ok(scene) = scenes.recv() {
                     let scene = scenes.try_iter().last().unwrap_or(scene);
+                    let started = std::time::Instant::now();
                     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         painter.render(&scene)
                     }));
@@ -61,6 +62,11 @@ impl Renderer {
                             message: "Native renderer worker failed".into(),
                         },
                     };
+                    tracing::debug!(
+                        revision = scene.revision,
+                        render_us = started.elapsed().as_micros(),
+                        "Native scene rasterized"
+                    );
                     let failed = matches!(message, RenderMessage::Error { .. });
                     if let Err(crossbeam_channel::TrySendError::Full(message)) =
                         frames.try_send(message)

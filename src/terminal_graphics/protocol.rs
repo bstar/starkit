@@ -169,6 +169,10 @@ pub struct Scene {
     /// Changes when hit targets change; ordinary progress/selection paint does not.
     #[serde(default)]
     pub interaction: u64,
+    /// Stable while wheel destinations are unchanged, even when rows move.
+    /// None keeps strict hit-target admission (including legacy controllers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_interaction: Option<u64>,
     pub viewport: Viewport,
     pub background: String,
     pub foreground: String,
@@ -256,6 +260,7 @@ impl Scene {
         Self {
             revision,
             interaction: 0,
+            scroll_interaction: None,
             viewport,
             background,
             accent: foreground.clone(),
@@ -268,6 +273,7 @@ impl Scene {
     }
     pub fn same_content(&self, other: &Self) -> bool {
         self.interaction == other.interaction
+            && self.scroll_interaction == other.scroll_interaction
             && self.viewport == other.viewport
             && self.background == other.background
             && self.foreground == other.foreground
@@ -418,6 +424,7 @@ pub struct Admission {
     last: u64,
     presented: Option<(u64, u64, u64)>,
     press: Option<u64>,
+    scroll: Option<(u64, u64, u64)>,
 }
 impl Admission {
     pub fn presented(&mut self, revision: u64, generation: u64) {
@@ -425,6 +432,9 @@ impl Admission {
     }
     pub fn target(&mut self, revision: u64, generation: u64, interaction: u64) {
         self.presented = Some((revision, generation, interaction));
+    }
+    pub fn scroll_target(&mut self, revision: u64, generation: u64, context: Option<u64>) {
+        self.scroll = context.map(|context| (revision, generation, context));
     }
     pub fn matches(&self, revision: u64, generation: u64, current: &Scene) -> bool {
         self.presented == Some((revision, generation, current.interaction))
@@ -453,7 +463,15 @@ impl Admission {
                 if action == "drag" && self.press == Some(generation) {
                     return current_geometry;
                 }
-                if !current_geometry || !fresh {
+                let wheel = matches!(
+                    action.as_str(),
+                    "scroll_up" | "scroll_down" | "scroll_left" | "scroll_right"
+                );
+                let stable_scroll = wheel
+                    && current.scroll_interaction.is_some_and(|context| {
+                        self.scroll == Some((revision, generation, context))
+                    });
+                if !current_geometry || !(fresh || stable_scroll) {
                     return false;
                 }
                 if action == "down" {
@@ -469,6 +487,50 @@ impl Admission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wheel_burst_survives_row_changes_but_not_destination_changes() {
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0, 0, 100, 40,
+            )),
+            Viewport::default(),
+            1,
+        );
+        scene.scroll_interaction = Some(42);
+        let mut admission = Admission::default();
+        admission.target(1, 1, scene.interaction);
+        admission.scroll_target(1, 1, scene.scroll_interaction);
+        let pointer = |action: &str| Input::Pointer {
+            action: action.into(),
+            button: 0,
+            x: 5,
+            y: 8,
+            modifiers: 0,
+        };
+        // Deliberately withhold presentation: a slow renderer/SSH connection
+        // must not turn continuous wheel movement into dropped steps.
+        for id in 1..=120 {
+            scene.interaction += 1;
+            scene.revision += 1;
+            assert!(admission.admit(id, 1, 1, &scene, &pointer("scroll_down")));
+        }
+        assert!(!admission.admit(120, 1, 1, &scene, &pointer("scroll_down")));
+        assert!(!admission.admit(121, 1, 1, &scene, &pointer("down")));
+        assert!(!admission.admit(122, 1, 2, &scene, &pointer("scroll_down")));
+        scene.scroll_interaction = Some(43);
+        assert!(!admission.admit(123, 1, 1, &scene, &pointer("scroll_down")));
+        scene.scroll_interaction = None;
+        assert!(!admission.admit(124, 1, 1, &scene, &pointer("scroll_down")));
+        let mut wire = serde_json::to_value(&scene).unwrap();
+        wire.as_object_mut().unwrap().remove("scroll_interaction");
+        assert_eq!(
+            serde_json::from_value::<Scene>(wire)
+                .unwrap()
+                .scroll_interaction,
+            None
+        );
+    }
+
     #[test]
     fn bounds_and_truncated_messages() {
         assert!(Viewport {
@@ -489,6 +551,7 @@ mod tests {
         let s = Scene {
             revision: 5,
             interaction: 1,
+            scroll_interaction: None,
             viewport: Viewport::default(),
             background: String::new(),
             foreground: String::new(),
@@ -527,6 +590,7 @@ mod tests {
         let mut scene = Scene {
             revision: 10,
             interaction: 4,
+            scroll_interaction: None,
             viewport: Viewport::default(),
             background: String::new(),
             foreground: String::new(),
