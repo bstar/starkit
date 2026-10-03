@@ -206,17 +206,19 @@ pub fn index_at(heights: &[u16], above: u32) -> usize {
     heights.len().saturating_sub(1)
 }
 
-/// The one-column track on a panel's right border: the last column of
-/// `outer`, over the rows `list` occupies.
+/// The one-column track over the rows `list` occupies. Cell presentation
+/// uses the right border; padded native chrome uses the gutter just inside it.
+/// Drawing and pointer capture share this rectangle.
 ///
 /// An empty rect when the panel is too narrow to have a right border of its
 /// own to draw on.
 pub fn track(outer: Rect, list: Rect) -> Rect {
-    if outer.width < 2 {
+    let inset = if super::frame::padded() { 2 } else { 1 };
+    if outer.width <= inset {
         return Rect::default();
     }
     Rect {
-        x: outer.x + outer.width - 1,
+        x: outer.x + outer.width - inset,
         y: list.y,
         width: 1,
         height: list.height,
@@ -462,6 +464,23 @@ impl<K: Copy + Eq> Scrollbars<K> {
 mod tests {
     use super::*;
     use crate::vlist::VirtualList;
+
+    #[test]
+    fn native_track_is_inside_border_and_uses_the_same_drag_target() {
+        let outer = Rect::new(10, 5, 40, 20);
+        let list = Rect::new(12, 9, 36, 12);
+        assert_eq!(track(outer, list).x, outer.right() - 1);
+        {
+            let _scope = super::super::frame::padding_scope(true);
+            let inside = track(outer, list);
+            assert_eq!(inside.x, list.right());
+            assert_eq!(inside.right(), outer.right() - 1);
+            assert!(grab(inside, 100, 0, inside.x, inside.y).is_some());
+            assert!(grab(inside, 100, 0, outer.right() - 1, inside.y).is_none());
+            assert_eq!(track(Rect::new(0, 0, 2, 3), list), Rect::default());
+        }
+        assert_eq!(track(outer, list).x, outer.right() - 1);
+    }
 
     #[test]
     fn a_list_that_fits_has_no_thumb() {
