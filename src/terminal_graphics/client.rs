@@ -312,7 +312,12 @@ fn logical_coordinate(value: u16, physical: u16, logical: u16) -> u16 {
     (u32::from(value) * u32::from(logical) / u32::from(physical.max(1))) as u16
 }
 
-fn logical_drop(text: &str, grid: (u16, u16), viewport: Viewport) -> String {
+fn logical_drop(
+    text: &str,
+    grid: (u16, u16),
+    viewport: Viewport,
+    placements: &[super::placement::Placement],
+) -> String {
     let (header, payload) = text.split_once(';').unwrap_or((text, ""));
     if !header
         .split(':')
@@ -320,6 +325,36 @@ fn logical_drop(text: &str, grid: (u16, u16), viewport: Viewport) -> String {
     {
         return text.into();
     }
+    let coordinate = |axis: &str| {
+        header.split(':').find_map(|f| {
+            let (key, value) = f.split_once('=')?;
+            (key == axis).then(|| value.parse::<u16>().ok()).flatten()
+        })
+    };
+    let projected = coordinate("x").zip(coordinate("y")).map(|(x, y)| {
+        if placements.is_empty() {
+            (
+                i32::from(logical_coordinate(x, grid.0, viewport.columns)),
+                i32::from(logical_coordinate(y, grid.1, viewport.rows)),
+            )
+        } else if x >= grid.0 || y >= grid.1 {
+            (-1, -1)
+        } else {
+            let pixel = coordinate("X")
+                .zip(coordinate("Y"))
+                .map(|(x, y)| [u32::from(x), u32::from(y)])
+                .unwrap_or([
+                    terminal_pixel(x, grid.0, viewport.width),
+                    terminal_pixel(y, grid.1, viewport.height),
+                ]);
+            placements
+                .iter()
+                .rev()
+                .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
+                .map(|(x, y)| (i32::from(x), i32::from(y)))
+                .unwrap_or((-1, -1))
+        }
+    });
     let header = header
         .split(':')
         .map(|field| {
@@ -330,8 +365,8 @@ fn logical_drop(text: &str, grid: (u16, u16), viewport: Viewport) -> String {
                 return field.into();
             };
             match axis {
-                "x" => format!("x={}", logical_coordinate(value, grid.0, viewport.columns)),
-                "y" => format!("y={}", logical_coordinate(value, grid.1, viewport.rows)),
+                "x" => format!("x={}", projected.map_or(i32::from(value), |p| p.0)),
+                "y" => format!("y={}", projected.map_or(i32::from(value), |p| p.1)),
                 _ => field.into(),
             }
         })
@@ -783,7 +818,12 @@ fn run_impl(
                 _ => {}
             }
             if let Some(Input::Osc72 { text }) = input.as_mut() {
-                *text = logical_drop(text, terminal_grid, size);
+                *text = logical_drop(
+                    text,
+                    terminal_grid,
+                    size,
+                    last_scene.as_ref().map_or(&[], |s| s.placements.as_slice()),
+                );
             }
             let ready = last_scene.as_ref().is_some_and(|s| s.revision > 0)
                 && shown.is_some_and(|(revision, generation)| {
@@ -898,6 +938,38 @@ mod tests {
     }
 
     #[test]
+    fn desktop_drag_uses_pixel_pane_geometry_and_rejects_gutters() {
+        use super::super::placement::Placement;
+        use crate::native_surface::PixelRect;
+        let v = Viewport {
+            columns: 100,
+            rows: 40,
+            width: 1000,
+            height: 800,
+            generation: 1,
+        };
+        let p = Placement::new(
+            Rect {
+                x: 50,
+                y: 3,
+                width: 50,
+                height: 20,
+            },
+            PixelRect::new(510, 70, 480, 400),
+        );
+        let expected = p.pointer_pixels(625, 175, false).unwrap();
+        for ty in ["o", "m", "M"] {
+            let raw = format!("t={ty}:x=62:y=8:X=625:Y=175:o=1:i=1;text/uri-list");
+            let mapped = logical_drop(&raw, (100, 40), v, std::slice::from_ref(&p));
+            assert!(mapped.contains(&format!(":x={}:y={}:X=625:Y=175:", expected.0, expected.1)));
+        }
+        assert_eq!(
+            logical_drop("t=m:x=50:y=8:o=1;i", (100, 40), v, &[p]),
+            "t=m:x=-1:y=-1:o=1;i"
+        );
+    }
+
+    #[test]
     fn scaled_graphics_keep_mouse_and_desktop_drop_targets_aligned() {
         let viewport = scaled_viewport(
             Viewport {
@@ -916,15 +988,20 @@ mod tests {
             "outside remains outside"
         );
         assert_eq!(
-            logical_drop("t=M:x=120:y=60:o=1:i=1;text/uri-list", (240, 120), viewport),
+            logical_drop(
+                "t=M:x=120:y=60:o=1:i=1;text/uri-list",
+                (240, 120),
+                viewport,
+                &[]
+            ),
             "t=M:x=80:y=40:o=1:i=1;text/uri-list"
         );
         assert_eq!(
-            logical_drop("t=r:x=1:y=2;i=1", (240, 120), viewport),
+            logical_drop("t=r:x=1:y=2;i=1", (240, 120), viewport, &[]),
             "t=r:x=1:y=2;i=1"
         );
         assert_eq!(
-            logical_drop("t=m:x=-1:y=-1:i=1", (240, 120), viewport),
+            logical_drop("t=m:x=-1:y=-1:i=1", (240, 120), viewport, &[]),
             "t=m:x=-1:y=-1:i=1"
         );
         let minimum = scaled_viewport(
