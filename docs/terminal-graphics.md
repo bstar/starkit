@@ -137,3 +137,8 @@ is resized. Modal spans belong to a separate topmost layer; popup components fol
 first Menu/Dialog marker, including their scrollbars. Moving a popup
 cannot leave its old text in the background. Legacy clients retain the cell
 layout. Placements are limited to 16 regions and two viewport areas of painting.
+
+Native session tabs support an optional one-based `number`, rendered separately
+from the label. Active sessions use a soft filled rectangle and a bold label;
+inactive sessions remain unfilled and muted. Close/navigation/add controls keep
+their original independent hit targets. There is no tab underline.

@@ -140,6 +140,15 @@ fn resolve_font(db: &cosmic_text::fontdb::Database, requested: Option<&str>) -> 
 // color back to sRGB, as Kitty's modern text compositor does. Byte-space mixing
 // makes light text on dark backgrounds thin and uneven. LUTs avoid powf in the
 // raster loop; this affects glyphs only, never image preview pixels.
+fn mix_color(foreground: &str, background: &str, amount: f32) -> String {
+    let fg = rgb(foreground);
+    let bg = rgb(background);
+    let c: [u8; 3] = std::array::from_fn(|i| {
+        (f32::from(fg[i]) * amount + f32::from(bg[i]) * (1. - amount)).round() as u8
+    });
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
 fn blend_text_channel(fg: u8, bg: u8, coverage: u8) -> u8 {
     if coverage == 0 {
         return bg;
@@ -673,6 +682,7 @@ impl Painter {
                 }
                 Component::Tab {
                     label,
+                    number,
                     active,
                     close,
                     ..
@@ -683,9 +693,9 @@ impl Painter {
                         let tint = rgb(accent);
                         let tint = format!(
                             "#{:02x}{:02x}{:02x}",
-                            (f32::from(bg[0]) * 0.88 + f32::from(tint[0]) * 0.12) as u8,
-                            (f32::from(bg[1]) * 0.88 + f32::from(tint[1]) * 0.12) as u8,
-                            (f32::from(bg[2]) * 0.88 + f32::from(tint[2]) * 0.12) as u8
+                            (f32::from(bg[0]) * 0.82 + f32::from(tint[0]) * 0.18) as u8,
+                            (f32::from(bg[1]) * 0.82 + f32::from(tint[1]) * 0.18) as u8,
+                            (f32::from(bg[2]) * 0.82 + f32::from(tint[2]) * 0.18) as u8
                         );
                         rounded(
                             &mut canvas,
@@ -701,14 +711,41 @@ impl Painter {
                     }
                     let padding = 12f32.min(w / 4.);
                     let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
+                    let inactive = mix_color(&scene.foreground, &scene.background, 0.62);
+                    let label_color = if *active {
+                        &scene.foreground
+                    } else {
+                        &inactive
+                    };
+                    let number_width =
+                        number.map_or(0., |n| (n.to_string().len() as f32 + 1.) * cw);
+                    if let Some(n) = number {
+                        self.text(
+                            &mut canvas,
+                            &n.to_string(),
+                            [x + padding, y, number_width, h],
+                            TextStyle {
+                                size: (font - 2.).max(9.),
+                                color: if *active { accent } else { &inactive },
+                                bold: true,
+                                mono: true,
+                                ellipsis: false,
+                            },
+                        );
+                    }
                     self.text(
                         &mut canvas,
                         label,
-                        [x + padding, y, (end - x - padding - 4.).max(0.), h],
+                        [
+                            x + padding + number_width,
+                            y,
+                            (end - x - padding - number_width - 4.).max(0.),
+                            h,
+                        ],
                         TextStyle {
                             size: font,
-                            color: &scene.foreground,
-                            bold: false,
+                            color: label_color,
+                            bold: *active,
                             mono: false,
                             ellipsis: true,
                         },
@@ -723,7 +760,7 @@ impl Painter {
                                 f32::from(r.width) * cw,
                                 row_edge(r.y.saturating_add(r.height)) - row_edge(r.y),
                             ],
-                            &scene.foreground,
+                            label_color,
                         );
                     }
                 }
@@ -1148,6 +1185,40 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn numbered_tabs_keep_numbers_distinct_from_labels_and_controls() {
+        let mut scene = scene();
+        scene.components.push(Component::Tab {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 26,
+                height: 2,
+            },
+            label: "Downloads".into(),
+            number: Some(12),
+            active: true,
+            close: Some(Rect {
+                x: 22,
+                y: 0,
+                width: 3,
+                height: 2,
+            }),
+        });
+        let mut painter = Painter::new();
+        painter.render(&scene).unwrap();
+        assert!(painter.text.keys().any(|k| k.text == "12"));
+        assert!(painter.text.keys().any(|k| k.text == "Downloads" && k.bold));
+        let encoded = serde_json::to_value(&scene.components[0]).unwrap();
+        assert_eq!(encoded["number"], 12);
+        let mut old = encoded;
+        old.as_object_mut().unwrap().remove("number");
+        assert!(matches!(
+            serde_json::from_value::<Component>(old).unwrap(),
+            Component::Tab { number: None, .. }
+        ));
+    }
+
     #[test]
     fn text_coverage_uses_linear_light_on_dark_and_light_backgrounds() {
         assert_eq!(blend_text_channel(255, 0, 0), 0);

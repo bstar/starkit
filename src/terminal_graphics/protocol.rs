@@ -124,6 +124,9 @@ pub enum Component {
         rect: Rect,
         label: String,
         active: bool,
+        /// One-based session position, independent of scroll offset or tab ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u32>,
         #[serde(default)]
         close: Option<Rect>,
     },
