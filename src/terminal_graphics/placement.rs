@@ -63,6 +63,16 @@ impl Placement {
         }
         let px = (f64::from(x) + 0.5) * f64::from(viewport.width) / f64::from(viewport.columns);
         let py = (f64::from(y) + 0.5) * f64::from(viewport.height) / f64::from(viewport.rows);
+        self.pointer_position(px, py, clamp)
+    }
+    /// Use the unrounded terminal position when the client supplies one.
+    pub fn pointer_pixels(&self, x: u32, y: u32, clamp: bool) -> Option<(u16, u16)> {
+        self.pointer_position(f64::from(x), f64::from(y), clamp)
+    }
+    fn pointer_position(&self, px: f64, py: f64, clamp: bool) -> Option<(u16, u16)> {
+        if self.target.width == 0 || self.target.height == 0 || self.source.height == 0 {
+            return None;
+        }
         let t = self.target;
         if !clamp
             && (px < f64::from(t.x)

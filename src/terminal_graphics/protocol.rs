@@ -300,6 +300,10 @@ pub enum Input {
         button: u8,
         x: u16,
         y: u16,
+        /// Original terminal cell centre in viewport pixels, before UI scaling.
+        /// Older peers can ignore this and keep using x/y logical cells.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pixel: Option<[u32; 2]>,
         modifiers: u8,
     },
     Paste {
@@ -513,6 +517,7 @@ mod tests {
         admission.target(1, 1, scene.interaction);
         admission.scroll_target(1, 1, scene.scroll_interaction);
         let pointer = |action: &str| Input::Pointer {
+            pixel: None,
             action: action.into(),
             button: 0,
             x: 5,
@@ -553,6 +558,7 @@ mod tests {
             1,
         );
         let pointer = |action: &str| Input::Pointer {
+            pixel: None,
             action: action.into(),
             button: 0,
             x: 4,
@@ -607,6 +613,7 @@ mod tests {
             placements: vec![],
         };
         let pointer = |action: &str| Input::Pointer {
+            pixel: None,
             action: action.into(),
             button: 0,
             x: 0,
@@ -648,6 +655,7 @@ mod tests {
         let mut admission = Admission::default();
         admission.target(9, 1, 4);
         let press = Input::Pointer {
+            pixel: None,
             action: "down".into(),
             button: 0,
             x: 2,

@@ -301,6 +301,13 @@ fn scaled_viewport(mut viewport: Viewport, percent: u16) -> Viewport {
     viewport
 }
 
+// Keep the original position through logical font scaling. Mapping via a
+// rounded logical cell can move a click across a menu/action row boundary.
+fn terminal_pixel(cell: u16, cells: u16, pixels: u32) -> u32 {
+    (((u64::from(cell) * 2 + 1) * u64::from(pixels)) / (u64::from(cells.max(1)) * 2))
+        .min(u64::from(pixels.saturating_sub(1))) as u32
+}
+
 fn logical_coordinate(value: u16, physical: u16, logical: u16) -> u16 {
     (u32::from(value) * u32::from(logical) / u32::from(physical.max(1))) as u16
 }
@@ -724,6 +731,10 @@ fn run_impl(
                         _ => 0,
                     };
                     input = Some(Input::Pointer {
+                        pixel: Some([
+                            terminal_pixel(m.column, terminal_grid.0, size.width),
+                            terminal_pixel(m.row, terminal_grid.1, size.height),
+                        ]),
                         action: action.into(),
                         button,
                         x: logical_coordinate(m.column, terminal_grid.0, size.columns),
@@ -802,6 +813,59 @@ fn control_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_hits_keep_original_terminal_centres_at_every_font_scale() {
+        use super::super::placement::Placement;
+        use crate::native_surface::PixelRect;
+        let physical = Viewport {
+            columns: 251,
+            rows: 60,
+            width: 1757,
+            height: 960,
+            generation: 1,
+        };
+        let placement = Placement::new(
+            Rect {
+                x: 50,
+                y: 20,
+                width: 70,
+                height: 6,
+            },
+            PixelRect::new(500, 475, 560, 108),
+        );
+        let mut rounding_misses = 0;
+        for scale in [100, 115, 125, 150, 200] {
+            let scaled = scaled_viewport(physical, scale);
+            for row in 0..physical.rows {
+                let px = terminal_pixel(100, physical.columns, physical.width);
+                let py = terminal_pixel(row, physical.rows, physical.height);
+                let expected = if (475..583).contains(&py) {
+                    Some((50 + ((px - 500) / 8) as u16, 20 + ((py - 475) / 18) as u16))
+                } else {
+                    None
+                };
+                assert_eq!(
+                    placement.pointer_pixels(px, py, false),
+                    expected,
+                    "scale={scale} row={row}"
+                );
+                if placement.pointer(
+                    scaled,
+                    logical_coordinate(100, physical.columns, scaled.columns),
+                    logical_coordinate(row, physical.rows, scaled.rows),
+                    false,
+                ) != expected
+                {
+                    rounding_misses += 1;
+                }
+            }
+        }
+        assert!(
+            rounding_misses > 0,
+            "fixture must exercise the original double-rounding bug"
+        );
+    }
 
     #[test]
     fn scaled_graphics_keep_mouse_and_desktop_drop_targets_aligned() {
