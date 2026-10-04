@@ -1351,6 +1351,7 @@ mod tests {
             spans: vec![],
             placements: vec![],
             resize_handles: vec![],
+            pointer_regions: vec![],
             components: vec![],
         }
     }

@@ -211,6 +211,9 @@ pub struct Scene {
     /// Physical hit regions for local, latency-free pointer feedback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resize_handles: Vec<crate::native_surface::PixelRect>,
+    /// Logical clickable regions for local hand-pointer feedback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pointer_regions: Vec<Rect>,
 }
 impl Scene {
     pub fn from_buffer(
@@ -297,10 +300,12 @@ impl Scene {
             components: vec![],
             placements: vec![],
             resize_handles: vec![],
+            pointer_regions: vec![],
         }
     }
     pub fn same_content(&self, other: &Self) -> bool {
         self.resize_handles == other.resize_handles
+            && self.pointer_regions == other.pointer_regions
             && self.interaction == other.interaction
             && self.scroll_interaction == other.scroll_interaction
             && self.viewport == other.viewport
@@ -371,6 +376,8 @@ pub enum ClientMessage {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Scenes already own their variable-sized payloads; keep the wire envelope inline.
+#[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
     Hello {
         version: u16,
@@ -638,6 +645,7 @@ mod tests {
             components: vec![],
             placements: vec![],
             resize_handles: vec![],
+            pointer_regions: vec![],
         };
         let pointer = |action: &str| Input::Pointer {
             pixel: None,
@@ -679,6 +687,7 @@ mod tests {
             components: vec![],
             placements: vec![],
             resize_handles: vec![],
+            pointer_regions: vec![],
         };
         let mut admission = Admission::default();
         admission.target(9, 1, 4);

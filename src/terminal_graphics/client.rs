@@ -470,6 +470,8 @@ fn run_impl(
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut pointer = super::pointer::Pointer::default();
     let mut resize_handles = Vec::new();
+    let mut pointer_regions = Vec::new();
+    let mut pointer_placements: Vec<super::placement::Placement> = Vec::new();
     let mut assets = std::collections::HashMap::<String, String>::new();
     let mut epoch: Option<String> = None;
     // Keep startup outside the pixel renderer. Its first capture must belong
@@ -595,6 +597,8 @@ fn run_impl(
                 ServerMessage::Closed => {
                     pointer.reset(&mut io::stdout().lock())?;
                     resize_handles.clear();
+                    pointer_regions.clear();
+                    pointer_placements.clear();
                     closed = true;
                     break;
                 }
@@ -650,6 +654,8 @@ fn run_impl(
                         .filter(|s| connected && s.revision == revision)
                     {
                         resize_handles.clone_from(&scene.resize_handles);
+                        pointer_regions.clone_from(&scene.pointer_regions);
+                        pointer_placements.clone_from(&scene.placements);
                     }
                     tracing::debug!(
                         revision,
@@ -703,10 +709,13 @@ fn run_impl(
             connected = false;
             pointer.reset(&mut io::stdout().lock())?;
             resize_handles.clear();
+            pointer_regions.clear();
+            pointer_placements.clear();
             shown = None;
             reconnect = Instant::now() + Duration::from_secs(5);
             if let Some(mut scene) = last_scene.clone() {
                 scene.resize_handles.clear();
+                scene.pointer_regions.clear();
                 scene.spans.push(Span{x:1,y:size.rows.saturating_sub(1),text:"Disconnected · remote operations continue · Ctrl+R reconnect · Ctrl+Q detach".into(),foreground:"#f38ba8".into(),background:scene.background.clone(),bold:true});
                 renderer.scene(&scene)?;
             }
@@ -785,11 +794,25 @@ fn run_impl(
                         terminal_pixel(m.column, terminal_grid.0, size.width),
                         terminal_pixel(m.row, terminal_grid.1, size.height),
                     ];
+                    let logical = if pointer_placements.is_empty() {
+                        Some((
+                            logical_coordinate(m.column, terminal_grid.0, size.columns),
+                            logical_coordinate(m.row, terminal_grid.1, size.rows),
+                        ))
+                    } else {
+                        pointer_placements
+                            .iter()
+                            .rev()
+                            .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
+                    };
+                    let clickable = logical
+                        .is_some_and(|(x, y)| pointer_regions.iter().any(|r| r.contains(x, y)));
                     pointer.update(
                         action,
                         button == 0,
                         pixel,
                         &resize_handles,
+                        clickable,
                         &mut io::stdout().lock(),
                     )?;
                     input = Some(Input::Pointer {
@@ -809,6 +832,8 @@ fn run_impl(
                 Event::Resize(..) => {
                     pointer.reset(&mut io::stdout().lock())?;
                     resize_handles.clear();
+                    pointer_regions.clear();
+                    pointer_placements.clear();
                     size = viewport(size.generation + 1, cell)?;
                     terminal_grid = (size.columns, size.rows);
                     size = scaled_viewport(size, scale);

@@ -5,6 +5,7 @@ use std::io::Write;
 #[derive(Default)]
 pub(super) struct Pointer {
     resizing: bool,
+    pointing: bool,
     captured: bool,
 }
 impl Pointer {
@@ -14,6 +15,7 @@ impl Pointer {
         left: bool,
         pixel: [u32; 2],
         handles: &[PixelRect],
+        clickable: bool,
         out: &mut impl Write,
     ) -> std::io::Result<()> {
         let hit = handles.iter().any(|r| {
@@ -28,23 +30,27 @@ impl Pointer {
         if action == "up" {
             self.captured = false;
         }
-        self.set(self.captured || hit, out)
+        self.set(self.captured || hit, clickable, out)
     }
-    fn set(&mut self, resizing: bool, out: &mut impl Write) -> std::io::Result<()> {
-        if resizing != self.resizing {
+    fn set(&mut self, resizing: bool, pointing: bool, out: &mut impl Write) -> std::io::Result<()> {
+        let pointing = pointing && !resizing;
+        if resizing != self.resizing || pointing != self.pointing {
             out.write_all(if resizing {
                 b"\x1b]22;ns-resize\x1b\\"
+            } else if pointing {
+                b"\x1b]22;pointer\x1b\\"
             } else {
                 b"\x1b]22;\x1b\\"
             })?;
             out.flush()?;
             self.resizing = resizing;
+            self.pointing = pointing;
         }
         Ok(())
     }
     pub fn reset(&mut self, out: &mut impl Write) -> std::io::Result<()> {
         self.captured = false;
-        self.set(false, out)
+        self.set(false, false, out)
     }
 }
 impl Drop for Pointer {
@@ -56,21 +62,38 @@ impl Drop for Pointer {
 mod tests {
     use super::*;
     #[test]
+    fn clickable_hover_uses_hand_and_resets_without_repeated_output() {
+        let mut p = Pointer::default();
+        let mut out = vec![];
+        p.update("move", false, [1, 1], &[], true, &mut out)
+            .unwrap();
+        assert_eq!(out, b"\x1b]22;pointer\x1b\\");
+        let len = out.len();
+        p.update("move", false, [1, 1], &[], true, &mut out)
+            .unwrap();
+        assert_eq!(out.len(), len);
+        p.update("move", false, [1, 1], &[], false, &mut out)
+            .unwrap();
+        assert!(out.ends_with(b"\x1b]22;\x1b\\"));
+    }
+    #[test]
     fn hover_capture_release_and_reset_use_fixed_sequences_only() {
         let mut p = Pointer::default();
         let mut out = vec![];
         let regions = [PixelRect::new(0, 10, 100, 16)];
-        p.update("move", false, [50, 15], &regions, &mut out)
+        p.update("move", false, [50, 15], &regions, false, &mut out)
             .unwrap();
         assert_eq!(out, b"\x1b]22;ns-resize\x1b\\");
-        p.update("down", true, [50, 15], &regions, &mut out)
+        p.update("down", true, [50, 15], &regions, false, &mut out)
             .unwrap();
-        p.update("drag", true, [50, 90], &[], &mut out).unwrap();
+        p.update("drag", true, [50, 90], &[], false, &mut out)
+            .unwrap();
         assert!(p.resizing);
         assert_eq!(out.len(), b"\x1b]22;ns-resize\x1b\\".len());
-        p.update("up", true, [50, 90], &regions, &mut out).unwrap();
+        p.update("up", true, [50, 90], &regions, false, &mut out)
+            .unwrap();
         assert!(!p.resizing);
-        p.update("down", true, [50, 15], &regions, &mut out)
+        p.update("down", true, [50, 15], &regions, false, &mut out)
             .unwrap();
         p.reset(&mut out).unwrap();
         assert!(!p.captured && !p.resizing);
