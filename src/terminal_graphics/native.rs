@@ -9,7 +9,7 @@ use cosmic_text::{
 };
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-use super::protocol::{Component, Rect, Scene};
+use super::protocol::{Component, ImageScale, Rect, Scene};
 use crate::image::{ImageDecoder as _, RgbaImage};
 
 const FONTS: [&[u8]; 4] = [
@@ -38,7 +38,7 @@ struct TextStyle<'a> {
 struct Asset {
     encoded: String,
     pixels: Arc<RgbaImage>,
-    scaled: Option<((u32, u32), Pixmap)>,
+    scaled: Option<((u32, u32, ImageScale), Pixmap)>,
 }
 pub(super) struct Painter {
     fonts: FontSystem,
@@ -724,7 +724,7 @@ impl Painter {
                     fill(&mut canvas, [caret, y + 3., 1., (h - 6.).max(0.)], accent);
                     fill(&mut canvas, [x, y + h - 1., w, 1.], accent);
                 }
-                Component::Image { id, png, .. } => {
+                Component::Image { id, png, scale, .. } => {
                     used.insert(id.clone());
                     if let Some(encoded) = png {
                         if self
@@ -775,6 +775,7 @@ impl Painter {
                             &mut canvas,
                             asset,
                             area,
+                            *scale,
                             128_000_000usize.saturating_sub(retained),
                         )?;
                     }
@@ -790,13 +791,25 @@ impl Painter {
     }
 }
 
-fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: usize) -> Result<()> {
+fn draw_image(
+    canvas: &mut Pixmap,
+    asset: &mut Asset,
+    area: [f32; 4],
+    scale: ImageScale,
+    budget: usize,
+) -> Result<()> {
     let [x, y, w, h] = area;
     if w <= 0. || h <= 0. {
         return Ok(());
     }
     let image = &asset.pixels;
     let ratio = (w / image.width() as f32).min(h / image.height() as f32);
+    let ratio = match scale {
+        ImageScale::Smooth => ratio,
+        ImageScale::Pixels if ratio >= 1. => ratio.floor(),
+        ImageScale::Pixels => 1. / (1. / ratio).ceil(),
+        ImageScale::One => ratio.min(1.),
+    };
     let width = (image.width() as f32 * ratio).round().max(1.) as u32;
     let height = (image.height() as f32 * ratio).round().max(1.) as u32;
     anyhow::ensure!(
@@ -807,13 +820,16 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
     if asset
         .scaled
         .as_ref()
-        .is_none_or(|(size, _)| *size != (width, height))
+        .is_none_or(|(size, _)| *size != (width, height, scale))
     {
         let mut pixels = crate::image::imageops::resize(
             image.as_ref(),
             width,
             height,
-            crate::image::imageops::FilterType::Triangle,
+            match scale {
+                ImageScale::Smooth => crate::image::imageops::FilterType::Triangle,
+                _ => crate::image::imageops::FilterType::Nearest,
+            },
         )
         .into_raw();
         for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -824,7 +840,7 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
         }
         asset.scaled =
             Pixmap::from_vec(pixels, tiny_skia::IntSize::from_wh(width, height).unwrap())
-                .map(|p| ((width, height), p));
+                .map(|p| ((width, height, scale), p));
     }
     if let Some((_, pixmap)) = &asset.scaled {
         canvas.draw_pixmap(
@@ -1016,6 +1032,57 @@ mod tests {
     }
 
     #[test]
+    fn pixel_preview_uses_exact_blocks_and_invalidates_sampling_cache() {
+        let mut source = RgbaImage::new(2, 1);
+        source.put_pixel(0, 0, crate::image::Rgba([255, 0, 0, 255]));
+        source.put_pixel(1, 0, crate::image::Rgba([0, 0, 255, 255]));
+        let mut asset = Asset {
+            encoded: String::new(),
+            pixels: Arc::new(source),
+            scaled: None,
+        };
+        let mut canvas = Pixmap::new(9, 5).unwrap();
+        draw_image(
+            &mut canvas,
+            &mut asset,
+            [0., 0., 9., 5.],
+            ImageScale::Pixels,
+            1000,
+        )
+        .unwrap();
+        let (size, pixels) = asset.scaled.as_ref().unwrap();
+        assert_eq!(*size, (8, 4, ImageScale::Pixels));
+        for y in 0..4 {
+            for x in 0..8 {
+                let pixel = pixels.pixel(x, y).unwrap();
+                assert_eq!(
+                    (pixel.red(), pixel.blue()),
+                    if x < 4 { (255, 0) } else { (0, 255) }
+                );
+            }
+        }
+        draw_image(
+            &mut canvas,
+            &mut asset,
+            [0., 0., 8., 4.],
+            ImageScale::Smooth,
+            1000,
+        )
+        .unwrap();
+        let pixel = asset.scaled.as_ref().unwrap().1.pixel(3, 0).unwrap();
+        assert!(pixel.red() > 0 && pixel.blue() > 0);
+        draw_image(
+            &mut canvas,
+            &mut asset,
+            [0., 0., 9., 5.],
+            ImageScale::One,
+            1000,
+        )
+        .unwrap();
+        assert_eq!(asset.scaled.as_ref().unwrap().0, (2, 1, ImageScale::One));
+    }
+
+    #[test]
     fn pixel_layers_share_preview_cache_when_payloads_are_omitted() {
         use super::super::placement::Placement;
         use crate::native_surface::PixelRect;
@@ -1037,6 +1104,7 @@ mod tests {
                 rect,
                 id: format!("asset-{i}"),
                 png: Some(png),
+                scale: Default::default(),
             });
             scene
                 .placements
@@ -1208,6 +1276,7 @@ mod tests {
             rect,
             id: "photo".into(),
             png: Some(png),
+            scale: Default::default(),
         });
         let first = painter.render(&scene).unwrap();
         assert_eq!(first.get_pixel(240, 300).0, [30, 200, 80, 255]);
@@ -1319,6 +1388,7 @@ mod tests {
             },
             id: "broken".into(),
             png: Some("invalid".into()),
+            scale: Default::default(),
         });
         assert!(painter.render(&scene).is_err());
         scene.viewport.width = 9000;

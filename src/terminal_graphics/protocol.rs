@@ -142,10 +142,22 @@ pub enum Component {
         rect: Rect,
         id: String,
         png: Option<String>,
+        #[serde(default)]
+        scale: ImageScale,
     },
     Terminal {
         rect: Rect,
     },
+}
+
+/// Pixel resampling policy. Missing fields retain older clients' smooth fit.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageScale {
+    #[default]
+    Smooth,
+    Pixels,
+    One,
 }
 
 impl Component {

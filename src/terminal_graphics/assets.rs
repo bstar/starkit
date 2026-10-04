@@ -18,7 +18,13 @@ impl Default for Thumbnailer {
         let old = output.clone();
         std::thread::spawn(move || {
             while let Ok((id, image)) = rx.recv() {
-                let image = DynamicImage::ImageRgba8((*image).clone()).thumbnail(1280, 1280);
+                let image = DynamicImage::ImageRgba8((*image).clone());
+                // Never enlarge a source before the renderer chooses its sampling policy.
+                let image = if image.width() > 1280 || image.height() > 1280 {
+                    image.thumbnail(1280, 1280)
+                } else {
+                    image
+                };
                 let mut png = Cursor::new(vec![]);
                 if image.write_to(&mut png, ImageFormat::Png).is_err() {
                     continue;
@@ -82,4 +88,26 @@ pub fn validate_png(png: &str) -> anyhow::Result<()> {
         "Preview asset dimensions exceed limit"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn tiny_preview_retains_source_dimensions_and_colors() {
+        let source = RgbaImage::from_fn(2, 1, |x, _| {
+            crate::image::Rgba([x as u8 * 255, 20, 30, 255])
+        });
+        let worker = Thumbnailer::default();
+        worker.request("pixel-art".into(), Arc::new(source.clone()));
+        let (_, png) = worker
+            .output
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap();
+        let decoded = crate::image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(decoded, source);
+    }
 }

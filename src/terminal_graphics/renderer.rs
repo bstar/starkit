@@ -468,6 +468,7 @@ mod tests {
             },
             id: "broken".into(),
             png: Some("invalid".into()),
+            scale: Default::default(),
         });
         renderer.scene(&scene).unwrap();
         assert!(matches!(

@@ -29,6 +29,7 @@ pub fn preview(rect: Rect) -> Component {
         rect,
         id: "shared-demo-preview".into(),
         png: Some(png.clone()),
+        scale: Default::default(),
     }
 }
 pub fn handles() -> bool {
