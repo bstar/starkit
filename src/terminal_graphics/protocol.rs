@@ -116,6 +116,9 @@ pub enum Component {
         background: String,
         selected: bool,
         marked: bool,
+        /// Show empty mark circles only while the controller is marking files.
+        #[serde(default)]
+        marking: bool,
     },
     Tab {
         rect: Rect,

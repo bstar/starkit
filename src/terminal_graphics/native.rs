@@ -549,13 +549,16 @@ impl Painter {
                     background,
                     selected,
                     marked,
+                    marking,
                     ..
                 } => {
                     fill(&mut canvas, area, background);
                     if *selected {
                         fill(&mut canvas, [x + 1., y + 2., 2., (h - 4.).max(0.)], accent);
                     }
-                    let mark = PathBuilder::from_circle(x + 6., y + h / 2., 4.5);
+                    let mark = (*marking || *marked)
+                        .then(|| PathBuilder::from_circle(x + 6., y + h / 2., 4.5))
+                        .flatten();
                     if let Some(mark) = mark {
                         if *marked {
                             canvas.fill_path(
@@ -1183,6 +1186,33 @@ mod tests {
     }
 
     #[test]
+    fn mark_circles_appear_only_during_marking() {
+        let mut painter = Painter::new();
+        let mut scene = scene();
+        for (marking, marked) in [(false, false), (true, false), (true, true), (false, true)] {
+            scene.components = vec![Component::ListRow {
+                rect: Rect {
+                    x: 2,
+                    y: 2,
+                    width: 30,
+                    height: 1,
+                },
+                label: "file".into(),
+                icon: "file".into(),
+                foreground: "#ffffff".into(),
+                background: scene.background.clone(),
+                selected: false,
+                marked,
+                marking,
+            }];
+            let pixels = painter.render(&scene).unwrap();
+            let visible =
+                (24..36).any(|x| (40..60).any(|y| pixels.get_pixel(x, y).0 != [30, 30, 46, 255]));
+            assert_eq!(visible, marking || marked);
+        }
+    }
+
+    #[test]
     fn filenames_are_single_line_clipped_and_secret_fields_are_masked() {
         let mut painter = Painter::new();
         let mut scene = scene();
@@ -1199,6 +1229,7 @@ mod tests {
             background: "#334455".into(),
             selected: true,
             marked: true,
+            marking: true,
         });
         let rendered = painter.render(&scene).unwrap();
         // Text must not escape the row on either the right or lower edge.

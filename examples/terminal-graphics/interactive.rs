@@ -251,6 +251,7 @@ impl Controller for Demo {
                 .into(),
                 selected: index == self.cursor,
                 marked: self.marked.contains(&index),
+                marking: !self.marked.is_empty(),
             });
         }
         scene.components.push(Component::Meter {

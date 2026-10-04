@@ -358,6 +358,7 @@ mod tests {
             background: "#111111".into(),
             selected: true,
             marked: true,
+            marking: true,
         });
         scene.spans.push(Span {
             x: 1,
@@ -426,6 +427,7 @@ mod tests {
             background: "#111111".into(),
             selected: true,
             marked: true,
+            marking: true,
         });
         let output = buffer(&scene);
         assert_eq!(output[(1, 1)].symbol(), "●");

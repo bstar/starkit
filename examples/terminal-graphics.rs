@@ -78,6 +78,7 @@ fn main() -> anyhow::Result<()> {
             background: if i == 3 { "#45475a" } else { "#1e1e2e" }.into(),
             selected: i == 3,
             marked: i == 7,
+            marking: true,
         });
     }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
