@@ -25,6 +25,7 @@ fn main() -> anyhow::Result<()> {
         spans: vec![],
         placements: vec![],
         resize_handles: vec![],
+        pointer_regions: vec![],
         components: vec![
             Component::Panel {
                 rect: Rect {
