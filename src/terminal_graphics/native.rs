@@ -700,7 +700,7 @@ impl Painter {
                         rounded(
                             &mut canvas,
                             [x + 2., y + 2., (w - 5.).max(0.), (h - 4.).max(0.)],
-                            5.,
+                            4.,
                             &tint,
                             false,
                         );
@@ -709,7 +709,7 @@ impl Painter {
                         tab_control(&mut canvas, label, area, &scene.foreground);
                         continue;
                     }
-                    let padding = 12f32.min(w / 4.);
+                    let padding = 14f32.min(w / 4.);
                     let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
                     let inactive = mix_color(&scene.foreground, &scene.background, 0.62);
                     let label_color = if *active {
@@ -718,7 +718,7 @@ impl Painter {
                         &inactive
                     };
                     let number_width =
-                        number.map_or(0., |n| (n.to_string().len() as f32 + 1.) * cw);
+                        number.map_or(0., |n| (n.to_string().len() as f32 * cw + 10.).max(17.));
                     if let Some(n) = number {
                         self.text(
                             &mut canvas,
