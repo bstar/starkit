@@ -607,40 +607,42 @@ impl Painter {
                 } => {
                     fill(&mut canvas, area, &scene.background);
                     if *active {
+                        let bg = rgb(&scene.background);
+                        let tint = rgb(accent);
+                        let tint = format!(
+                            "#{:02x}{:02x}{:02x}",
+                            (f32::from(bg[0]) * 0.84 + f32::from(tint[0]) * 0.16) as u8,
+                            (f32::from(bg[1]) * 0.84 + f32::from(tint[1]) * 0.16) as u8,
+                            (f32::from(bg[2]) * 0.84 + f32::from(tint[2]) * 0.16) as u8
+                        );
                         rounded(
                             &mut canvas,
-                            [x, y + 4., (w - 4.).max(0.), (h - 8.).max(0.)],
-                            4.,
-                            border,
+                            [x + 2., y + 3., (w - 6.).max(0.), (h - 6.).max(0.)],
+                            7.,
+                            &tint,
                             false,
                         );
-                        fill(
-                            &mut canvas,
-                            [x + 4., y + h - 6., (w - 12.).max(0.), 2.],
-                            accent,
-                        );
                     }
-                    let padding = 12f32.min(w / 4.);
+                    if close.is_none() && matches!(label.as_str(), "‹" | "›" | "+") {
+                        tab_control(&mut canvas, label, area, &scene.foreground);
+                        continue;
+                    }
+                    let padding = 18f32.min(w / 4.);
                     let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
                     self.text(
                         &mut canvas,
                         label,
-                        [
-                            x + padding,
-                            y + 2.,
-                            (end - x - 2. * padding).max(0.),
-                            (h - 4.).max(0.),
-                        ],
+                        [x + padding, y, (end - x - padding - 8.).max(0.), h],
                         TextStyle {
-                            size: font,
+                            size: font + 1.,
                             color: &scene.foreground,
-                            bold: false,
+                            bold: *active,
                             mono: false,
                             ellipsis: true,
                         },
                     );
                     if let Some(r) = close {
-                        self.text(
+                        tab_control(
                             &mut canvas,
                             "×",
                             [
@@ -649,16 +651,11 @@ impl Painter {
                                 f32::from(r.width) * cw,
                                 row_edge(r.y.saturating_add(r.height)) - row_edge(r.y),
                             ],
-                            TextStyle {
-                                size: font,
-                                color: &scene.foreground,
-                                bold: false,
-                                mono: false,
-                                ellipsis: false,
-                            },
+                            &scene.foreground,
                         );
                     }
                 }
+
                 Component::Scrollbar { thumb, .. } => {
                     // Erase the cell block glyphs before drawing an unbroken pixel thumb.
                     fill(&mut canvas, area, &scene.background);
@@ -840,6 +837,56 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
         );
     }
     Ok(())
+}
+
+/// Tab controls use centred vector strokes so their weight and click area
+/// stay consistent across fonts and terminal scales.
+fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
+    let [x, y, w, h] = rect;
+    let size = 18f32.min(w - 8.).min(h - 8.);
+    if size <= 0. {
+        return;
+    }
+    let cx = x + w / 2.;
+    let cy = y + h / 2.;
+    let r = size / 2.;
+    let mut p = PathBuilder::new();
+    match label {
+        "+" => {
+            p.move_to(cx - r, cy);
+            p.line_to(cx + r, cy);
+            p.move_to(cx, cy - r);
+            p.line_to(cx, cy + r);
+        }
+        "×" => {
+            let r = r * 0.75;
+            p.move_to(cx - r, cy - r);
+            p.line_to(cx + r, cy + r);
+            p.move_to(cx + r, cy - r);
+            p.line_to(cx - r, cy + r);
+        }
+        "‹" | "›" => {
+            let dir = if label == "‹" { -1. } else { 1. };
+            p.move_to(cx - dir * r * 0.4, cy - r);
+            p.line_to(cx + dir * r * 0.4, cy);
+            p.line_to(cx - dir * r * 0.4, cy + r);
+        }
+        _ => return,
+    }
+    if let Some(path) = p.finish() {
+        canvas.stroke_path(
+            &path,
+            &paint(color),
+            &Stroke {
+                width: 2.4,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                ..Stroke::default()
+            },
+            Transform::identity(),
+            None,
+        );
+    }
 }
 
 fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: &str) {
