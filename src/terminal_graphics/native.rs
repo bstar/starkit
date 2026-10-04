@@ -71,6 +71,9 @@ fn fill(canvas: &mut Pixmap, rect: [f32; 4], color: &str) {
     }
 }
 fn rounded(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: bool) {
+    rounded_width(canvas, r, radius, color, if stroke { 2. } else { 0. });
+}
+fn rounded_width(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: f32) {
     let [x, y, w, h] = r;
     if w <= 0. || h <= 0. {
         return;
@@ -88,12 +91,12 @@ fn rounded(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: b
     path.quad_to(x, y, x + radius, y);
     path.close();
     if let Some(path) = path.finish() {
-        if stroke {
+        if stroke > 0. {
             canvas.stroke_path(
                 &path,
                 &paint(color),
                 &Stroke {
-                    width: 2.,
+                    width: stroke,
                     ..Stroke::default()
                 },
                 Transform::identity(),
@@ -521,12 +524,12 @@ impl Painter {
                     surface.validate()?;
                     self.surface(&mut canvas, surface, area);
                 }
-                Component::Panel { active, .. } => rounded(
+                Component::Panel { active, .. } => rounded_width(
                     &mut canvas,
-                    [x + 1., y + 1., w - 2., h - 2.],
+                    [x + 1.5, y + 1.5, w - 3., h - 3.],
                     9.,
                     if *active { accent } else { border },
-                    true,
+                    3.,
                 ),
                 Component::Menu { .. } | Component::Dialog { .. } => {
                     fill(&mut canvas, area, &scene.background);
@@ -1046,7 +1049,8 @@ mod tests {
         }
         assert_eq!(image.get_pixel(8, 100).0, [69, 71, 90, 255]);
         assert_eq!(image.get_pixel(9, 100).0, [69, 71, 90, 255]);
-        assert_eq!(image.get_pixel(10, 100).0, [30, 30, 46, 255]);
+        assert_eq!(image.get_pixel(10, 100).0, [69, 71, 90, 255]);
+        assert_eq!(image.get_pixel(11, 100).0, [30, 30, 46, 255]);
         // A popup can cross a pane boundary without erasing the base scene or
         // using a different projection for its text and its hit region.
         let rect = Rect {
@@ -1090,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn borders_are_two_pixels_and_scrollbar_has_no_cell_gaps() {
+    fn borders_are_three_pixels_and_scrollbar_has_no_cell_gaps() {
         let mut painter = Painter::new();
         let mut scene = scene();
         scene.components.push(Component::Panel {
@@ -1127,7 +1131,8 @@ mod tests {
         let pixels = painter.render(&scene).unwrap();
         assert_eq!(pixels.get_pixel(60, 40).0, [69, 71, 90, 255]);
         assert_eq!(pixels.get_pixel(60, 41).0, [69, 71, 90, 255]);
-        assert_eq!(pixels.get_pixel(60, 42).0, [30, 30, 46, 255]);
+        assert_eq!(pixels.get_pixel(60, 42).0, [69, 71, 90, 255]);
+        assert_eq!(pixels.get_pixel(60, 43).0, [30, 30, 46, 255]);
         // Every interior pixel is continuous across the three terminal rows.
         for y in 82..138 {
             assert_eq!(pixels.get_pixel(245, y).0, [137, 180, 250, 255]);
