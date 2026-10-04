@@ -440,6 +440,15 @@ impl Admission {
         self.presented == Some((revision, generation, current.interaction))
             && generation == current.viewport.generation
     }
+    /// A captured gesture owns its release even when rows were repainted.
+    /// Resize still invalidates its coordinate system and must cancel it.
+    pub(super) fn cancel_release(&self, revision: u64, generation: u64, current: &Scene) -> bool {
+        if self.press == Some(generation) && generation == current.viewport.generation {
+            false
+        } else {
+            !self.matches(revision, generation, current)
+        }
+    }
     pub fn admit(
         &mut self,
         id: u64,
@@ -529,6 +538,39 @@ mod tests {
                 .scroll_interaction,
             None
         );
+    }
+
+    #[test]
+    fn captured_drop_survives_repaint_but_resize_and_uncaptured_release_cancel() {
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0, 0, 100, 40,
+            )),
+            Viewport::default(),
+            1,
+        );
+        let pointer = |action: &str| Input::Pointer {
+            action: action.into(),
+            button: 0,
+            x: 4,
+            y: 8,
+            modifiers: 0,
+        };
+        let mut admission = Admission::default();
+        admission.target(1, 1, scene.interaction);
+        assert!(admission.admit(1, 1, 1, &scene, &pointer("down")));
+        scene.revision = 2;
+        scene.interaction += 1;
+        assert!(!admission.matches(1, 1, &scene));
+        assert!(!admission.cancel_release(1, 1, &scene));
+        assert!(admission.admit(2, 1, 1, &scene, &pointer("drag")));
+        assert!(admission.admit(3, 1, 1, &scene, &pointer("up")));
+        assert!(admission.cancel_release(1, 1, &scene));
+        admission.target(2, 1, scene.interaction);
+        assert!(admission.admit(4, 2, 1, &scene, &pointer("down")));
+        scene.viewport.generation = 2;
+        assert!(admission.cancel_release(2, 1, &scene));
+        assert!(admission.cancel_release(2, 2, &scene));
     }
 
     #[test]

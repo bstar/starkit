@@ -417,7 +417,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     };
                     let admission = clients.get_mut(client).expect("registered client");
                     let stale_release = matches!(&input,Input::Pointer{action,..} if action=="up")
-                        && !admission.matches(revision, generation, &scene);
+                        && admission.cancel_release(revision, generation, &scene);
                     let accepted = admission.admit(id, revision, generation, &scene, &input);
                     tracing::debug!(id, accepted, "Graphical input admitted");
                     let input = if stale_release {
