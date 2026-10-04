@@ -80,16 +80,19 @@ struct Geometry {
 /// `None` when there is nothing to scroll -- the content fits in the track,
 /// or there is no track to draw on.
 fn geometry(track: u16, total: u32) -> Option<Geometry> {
-    if track == 0 || u64::from(total) <= u64::from(track) {
+    geometry_visible(track, total, u32::from(track))
+}
+fn geometry_visible(track: u16, total: u32, visible: u32) -> Option<Geometry> {
+    if track == 0 || visible == 0 || total <= visible {
         return None;
     }
     let track64 = u64::from(track);
     let total64 = u64::from(total);
     let max_len = std::cmp::max(1, track / THUMB_MAX_DIV);
-    let len = ((track64 * track64) / total64).clamp(1, u64::from(max_len)) as u16;
+    let len = ((track64 * u64::from(visible)) / total64).clamp(1, u64::from(max_len)) as u16;
     let room = track - len;
     // total > track was just checked, so this is strictly positive.
-    let scrolled = total64 - track64;
+    let scrolled = total64 - u64::from(visible);
     Some(Geometry {
         len,
         room,
@@ -124,7 +127,10 @@ fn start_for(track: Rect, room: u16, grip: u16, y: u16) -> u16 {
 /// or there is no track to draw on -- which callers take as "do not draw a
 /// scrollbar" rather than a zero-length one.
 pub fn thumb(track: u16, total: u32, above: u32) -> Option<Thumb> {
-    let g = geometry(track, total)?;
+    thumb_visible(track, total, above, u32::from(track))
+}
+fn thumb_visible(track: u16, total: u32, above: u32, visible: u32) -> Option<Thumb> {
+    let g = geometry_visible(track, total, visible)?;
     let above = std::cmp::min(u64::from(above), g.scrolled);
     // Rounded to the nearest row rather than truncated, so that `above ==
     // scrolled` (the view scrolled all the way) lands the thumb flush with
@@ -283,6 +289,7 @@ pub struct Grab {
     track: Rect,
     total: u32,
     grip: u16,
+    visible: u32,
 }
 
 /// A left press at `(x, y)` against a bar drawn on `track` for content
@@ -297,22 +304,48 @@ pub struct Grab {
 /// -- and `above` is that jump applied now, in the same call, rather than
 /// waiting for the drag that will usually follow immediately after.
 pub fn grab(track: Rect, total: u32, above: u32, x: u16, y: u16) -> Option<(Grab, u32)> {
+    grab_visible(track, total, above, x, y, u32::from(track.height))
+}
+fn grab_visible(
+    track: Rect,
+    total: u32,
+    above: u32,
+    x: u16,
+    y: u16,
+    visible: u32,
+) -> Option<(Grab, u32)> {
     if x < track.x || x >= track.x + track.width || y < track.y || y >= track.y + track.height {
         return None;
     }
-    let g = geometry(track.height, total)?;
-    let t = thumb(track.height, total, above)?;
+    let g = geometry_visible(track.height, total, visible)?;
+    let t = thumb_visible(track.height, total, above, visible)?;
     let row = y - track.y;
 
     if row >= t.start && row < t.start + t.len {
         let grip = row - t.start;
-        return Some((Grab { track, total, grip }, above));
+        return Some((
+            Grab {
+                track,
+                total,
+                grip,
+                visible,
+            },
+            above,
+        ));
     }
 
     let grip = t.len / 2;
     let start = start_for(track, g.room, grip, y);
     let above = above_for(start, g.room, g.scrolled);
-    Some((Grab { track, total, grip }, above))
+    Some((
+        Grab {
+            track,
+            total,
+            grip,
+            visible,
+        },
+        above,
+    ))
 }
 
 /// The pointer at row `y` while holding `g`: the `above` the content should
@@ -321,7 +354,7 @@ pub fn grab(track: Rect, total: u32, above: u32, x: u16, y: u16) -> Option<(Grab
 /// grab, which is what lets a reader fling the thumb to the top or bottom
 /// without lining the pointer up with the track's exact last row.
 pub fn drag(g: &Grab, y: u16) -> u32 {
-    let Some(geo) = geometry(g.track.height, g.total) else {
+    let Some(geo) = geometry_visible(g.track.height, g.total, g.visible) else {
         return 0;
     };
     let start = start_for(g.track, geo.room, g.grip, y);
@@ -363,6 +396,7 @@ struct Bar<K> {
     track: Rect,
     total: u32,
     above: u32,
+    visible: u32,
 }
 
 impl<K: Copy + Eq> Default for Scrollbars<K> {
@@ -389,11 +423,18 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// Remember a bar somebody else drew, or is about to draw with its own
     /// call to [`render`], so the mouse methods know it is there.
     pub fn record(&mut self, key: K, track: Rect, total: u32, above: u32) {
+        self.record_viewport(key, track, total, above, u32::from(track.height));
+    }
+
+    /// Native rows may be denser than the terminal cells making up the track.
+    pub fn record_viewport(&mut self, key: K, track: Rect, total: u32, above: u32, visible: u32) {
+        self.drawn.retain(|bar| bar.key != key);
         self.drawn.push(Bar {
             key,
             track,
             total,
             above,
+            visible,
         });
     }
 
@@ -415,7 +456,8 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// Visible track and thumb geometry, shared with native pixel presentation.
     pub fn visible(&self) -> impl Iterator<Item = (Rect, Thumb)> + '_ {
         self.drawn.iter().filter_map(|bar| {
-            thumb(bar.track.height, bar.total, bar.above).map(|thumb| (bar.track, thumb))
+            thumb_visible(bar.track.height, bar.total, bar.above, bar.visible)
+                .map(|thumb| (bar.track, thumb))
         })
     }
 
@@ -431,7 +473,9 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// the press is not this scrollbar's to answer.
     pub fn press(&mut self, x: u16, y: u16) -> Option<(K, u32)> {
         for bar in &self.drawn {
-            if let Some((g, above)) = grab(bar.track, bar.total, bar.above, x, y) {
+            if let Some((g, above)) =
+                grab_visible(bar.track, bar.total, bar.above, x, y, bar.visible)
+            {
                 let key = bar.key;
                 self.held = Some((key, g));
                 return Some((key, above));
@@ -464,6 +508,19 @@ impl<K: Copy + Eq> Scrollbars<K> {
 mod tests {
     use super::*;
     use crate::vlist::VirtualList;
+
+    #[test]
+    fn compact_native_rows_use_content_capacity_for_drag_limits() {
+        let mut bars = Scrollbars::<u8>::new();
+        let track = Rect::new(5, 10, 1, 10);
+        bars.record_viewport(1, track, 40, 0, 16);
+        assert_eq!(bars.press(5, 10).unwrap(), (1, 0));
+        assert_eq!(bars.drag(100).unwrap(), (1, 24));
+        bars.release();
+        bars.record_viewport(1, track, 12, 0, 16);
+        assert_eq!(bars.visible().count(), 0);
+        assert!(bars.press(5, 10).is_none());
+    }
 
     #[test]
     fn native_track_is_inside_border_and_uses_the_same_drag_target() {
