@@ -136,6 +136,43 @@ fn resolve_font(db: &cosmic_text::fontdb::Database, requested: Option<&str>) -> 
     "Liberation Mono".into()
 }
 
+// Glyph coverage is linear. Blend in linear light, then encode the resulting
+// color back to sRGB, as Kitty's modern text compositor does. Byte-space mixing
+// makes light text on dark backgrounds thin and uneven. LUTs avoid powf in the
+// raster loop; this affects glyphs only, never image preview pixels.
+fn blend_text_channel(fg: u8, bg: u8, coverage: u8) -> u8 {
+    if coverage == 0 {
+        return bg;
+    }
+    if coverage == 255 {
+        return fg;
+    }
+    static LUT: std::sync::OnceLock<([f32; 256], [u8; 4097])> = std::sync::OnceLock::new();
+    let (decode, encode) = LUT.get_or_init(|| {
+        let decode = std::array::from_fn(|i| {
+            let s = i as f32 / 255.;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        });
+        let encode = std::array::from_fn(|i| {
+            let l = i as f32 / 4096.;
+            let s = if l <= 0.0031308 {
+                l * 12.92
+            } else {
+                1.055 * l.powf(1. / 2.4) - 0.055
+            };
+            (s * 255.).round() as u8
+        });
+        (decode, encode)
+    });
+    let alpha = f32::from(coverage) / 255.;
+    let linear = decode[usize::from(fg)] * alpha + decode[usize::from(bg)] * (1. - alpha);
+    encode[(linear * 4096.).round().clamp(0., 4096.) as usize]
+}
+
 impl Painter {
     fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
         use super::surface::Primitive;
@@ -278,7 +315,10 @@ impl Painter {
             b
         });
         let text_width = buffer.layout_runs().map(|r| r.line_w).fold(0., f32::max);
-        let clipped = ellipsis && text_width > w;
+        // Single glyph surfaces are used for menu mnemonics. Fractional font
+        // advances can exceed their integer cell by a fraction of a pixel;
+        // replacing each letter with an ellipsis destroys the entire menu.
+        let clipped = ellipsis && value.chars().count() > 1 && w >= size && text_width > w + 0.5;
         let clip_w = if clipped { (w - size).max(0.) } else { w };
         let offset_y = (h - size * 1.2) / 2.;
         let [r, g, b] = rgb(color);
@@ -305,12 +345,8 @@ impl Painter {
                 }
                 let offset = ((dy as u32 * width + dx as u32) * 4) as usize;
                 let rgba = color.as_rgba();
-                let alpha = u32::from(rgba[3]);
                 for c in 0..3 {
-                    pixels[offset + c] = ((u32::from(rgba[c]) * alpha
-                        + u32::from(pixels[offset + c]) * (255 - alpha)
-                        + 127)
-                        / 255) as u8;
+                    pixels[offset + c] = blend_text_channel(rgba[c], pixels[offset + c], rgba[3]);
                 }
             },
         );
@@ -320,7 +356,7 @@ impl Painter {
                 "…",
                 [x + w - size, y, size, h],
                 TextStyle {
-                    size,
+                    size: size / self.font_factor,
                     color,
                     bold,
                     mono,
@@ -1112,6 +1148,72 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_coverage_uses_linear_light_on_dark_and_light_backgrounds() {
+        assert_eq!(blend_text_channel(255, 0, 0), 0);
+        assert_eq!(blend_text_channel(255, 0, 255), 255);
+        assert!((186..=189).contains(&blend_text_channel(255, 0, 128)));
+        assert!((186..=189).contains(&blend_text_channel(0, 255, 128)));
+        for v in 0..=255 {
+            assert!((i16::from(blend_text_channel(v, v, 128)) - i16::from(v)).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn narrow_menu_letters_remain_glyphs_at_nine_point_terminal_size() {
+        let mut painter = Painter::with_font(super::super::font::Font {
+            name: Some("Liberation Mono".into()),
+            pixels: Some(12.),
+            cell: Some((7, 16)),
+        });
+        let mut canvas = Pixmap::new(7, 16).unwrap();
+        painter.text(
+            &mut canvas,
+            "h",
+            [0., 0., 7., 16.],
+            TextStyle {
+                size: 11.,
+                color: "#ffffff",
+                bold: false,
+                mono: true,
+                ellipsis: true,
+            },
+        );
+        assert!(!painter.text.keys().any(|k| k.text == "…"));
+        let ink_rows = canvas
+            .data()
+            .as_chunks::<28>()
+            .0
+            .iter()
+            .filter(|row| row.iter().any(|b| *b > 0))
+            .count();
+        assert!(ink_rows >= 6, "letter collapsed to an ellipsis or vanished");
+    }
+
+    #[test]
+    fn truncation_does_not_scale_the_ellipsis_twice() {
+        let mut painter = Painter::with_font(super::super::font::Font {
+            name: Some("Liberation Mono".into()),
+            pixels: Some(12.),
+            cell: Some((7, 16)),
+        });
+        let mut canvas = Pixmap::new(40, 16).unwrap();
+        painter.text(
+            &mut canvas,
+            "long filename",
+            [0., 0., 40., 16.],
+            TextStyle {
+                size: 11.,
+                color: "#ffffff",
+                bold: false,
+                mono: true,
+                ellipsis: true,
+            },
+        );
+        let ellipsis = painter.text.keys().find(|k| k.text == "…").unwrap();
+        assert!((f32::from_bits(ellipsis.size) - 12.).abs() < 0.001);
+    }
+
     #[test]
     fn font_resolution_accepts_terminal_postscript_names_and_family_overrides() {
         let mut db = cosmic_text::fontdb::Database::new();

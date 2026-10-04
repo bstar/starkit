@@ -45,7 +45,11 @@ SSH attachments use the local client's fonts, not fonts on the remote host.
 names also work); `STAR_GRAPHICS_FONT_SIZE=16` overrides the raster size in pixels.
 Without a usable query/font, an installed monospace face or bundled Liberation
 Mono supplies the fallback. Rasterization uses Swash, so antialiasing/hinting can
-differ from Kitty even with the same font and size. Terminal font zoom follows
+differ from Kitty even with the same font and size. Glyph coverage is composited
+in linear light with sRGB output, matching the modern Linux Kitty default’s
+blending model ([renderer reference](https://github.com/kovidgoyal/kitty/blob/master/kitty/shaders/cell.slang)).
+This preserves light strokes on dark themes without making every label bold.
+Kitty’s custom contrast settings and FreeType/CoreText hinting are not replicated. Terminal font zoom follows
 cell-size changes; a changed font family takes effect on reattachment.
 Bundled Liberation fonts provide startup without a required font installation. Their SIL Open Font License is included
 in `assets/fonts/LICENSE`. Installed fonts provide Unicode fallback on Linux
