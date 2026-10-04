@@ -26,9 +26,10 @@ image = ["dep:ratatui-image", "dep:image"]
 # Animated GIFs are starcord's; staramp has no use for them and should not
 # carry the decoder.
 gif = ["image", "image/gif"]
-# Winamp skin import is staramp's, and it is the only thing that needs a ZIP
-# reader or a BMP decoder.
-wsz = ["dep:zip", "image", "image/bmp"]
+# BMP previews are used by STAR/FOLD as well as Winamp skin import.
+bmp = ["image", "image/bmp"]
+# Winamp skin import also needs the ZIP reader.
+wsz = ["dep:zip", "bmp"]
 # WebP is what news sites serve now; starwire draws the pictures inside an
 # article, and the other applications have no reason to carry the decoder.
 webp = ["image", "image/webp"]
@@ -58,7 +59,7 @@ ratatui-image = { version = "11.0.6", default-features = false, features = [
     "crossterm",
 ], optional = true }
 # Decoders, chosen rather than defaulted: PNG and JPEG cover album art, avatars
-# and attachments; GIF, BMP and WebP arrive through the `gif`, `wsz` and
+# and attachments; GIF, BMP and WebP arrive through the `gif`, `bmp` and
 # `webp` features where they are actually wanted.
 image = { version = "0.25", default-features = false, features = [
     "png",
