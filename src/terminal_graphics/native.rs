@@ -724,7 +724,13 @@ impl Painter {
                     fill(&mut canvas, [caret, y + 3., 1., (h - 6.).max(0.)], accent);
                     fill(&mut canvas, [x, y + h - 1., w, 1.], accent);
                 }
-                Component::Image { id, png, scale, .. } => {
+                Component::Image {
+                    id,
+                    png,
+                    scale,
+                    zoom,
+                    ..
+                } => {
                     used.insert(id.clone());
                     if let Some(encoded) = png {
                         if self
@@ -776,6 +782,7 @@ impl Painter {
                             asset,
                             area,
                             *scale,
+                            *zoom,
                             128_000_000usize.saturating_sub(retained),
                         )?;
                     }
@@ -796,6 +803,7 @@ fn draw_image(
     asset: &mut Asset,
     area: [f32; 4],
     scale: ImageScale,
+    zoom: u16,
     budget: usize,
 ) -> Result<()> {
     let [x, y, w, h] = area;
@@ -810,8 +818,29 @@ fn draw_image(
         ImageScale::Pixels => 1. / (1. / ratio).ceil(),
         ImageScale::One => ratio.min(1.),
     };
-    let width = (image.width() as f32 * ratio).round().max(1.) as u32;
-    let height = (image.height() as f32 * ratio).round().max(1.) as u32;
+    let zoom = zoom.clamp(25, 800);
+    let ratio = ratio * f32::from(zoom) / 100.;
+    let ratio = if scale == ImageScale::Pixels {
+        if ratio >= 1. {
+            ratio.round().max(1.)
+        } else {
+            1. / (1. / ratio).round().max(1.)
+        }
+    } else {
+        ratio
+    };
+    // Zoomed previews sample the bounded source directly and clip to the viewport.
+    // Never allocate an image whose dimensions grow with the zoom factor.
+    let width = if zoom != 100 {
+        image.width()
+    } else {
+        (image.width() as f32 * ratio).round().max(1.) as u32
+    };
+    let height = if zoom != 100 {
+        image.height()
+    } else {
+        (image.height() as f32 * ratio).round().max(1.) as u32
+    };
     anyhow::ensure!(
         u64::from(width) * u64::from(height) * 4 <= budget as u64,
         "Scaled preview cache exceeds limit"
@@ -843,6 +872,38 @@ fn draw_image(
                 .map(|p| ((width, height, scale), p));
     }
     if let Some((_, pixmap)) = &asset.scaled {
+        if zoom != 100 {
+            let mut mask = tiny_skia::Mask::new(canvas.width(), canvas.height())
+                .context("Allocate preview clip")?;
+            if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+                mask.fill_path(
+                    &PathBuilder::from_rect(rect),
+                    FillRule::Winding,
+                    false,
+                    Transform::identity(),
+                );
+            }
+            let transform = Transform::from_scale(ratio, ratio).post_translate(
+                (x + (w - width as f32 * ratio) / 2.).round(),
+                (y + (h - height as f32 * ratio) / 2.).round(),
+            );
+            canvas.draw_pixmap(
+                0,
+                0,
+                pixmap.as_ref(),
+                &tiny_skia::PixmapPaint {
+                    quality: if scale == ImageScale::Smooth {
+                        tiny_skia::FilterQuality::Bilinear
+                    } else {
+                        tiny_skia::FilterQuality::Nearest
+                    },
+                    ..Default::default()
+                },
+                transform,
+                Some(&mask),
+            );
+            return Ok(());
+        }
         canvas.draw_pixmap(
             (x + (w - width as f32) / 2.).round() as i32,
             (y + (h - height as f32) / 2.).round() as i32,
@@ -1033,6 +1094,40 @@ mod tests {
     }
 
     #[test]
+    fn zoom_clips_to_preview_and_does_not_allocate_at_enlarged_dimensions() {
+        let source = RgbaImage::from_pixel(2, 1, crate::image::Rgba([255, 0, 0, 255]));
+        let mut asset = Asset {
+            encoded: String::new(),
+            pixels: Arc::new(source),
+            scaled: None,
+        };
+        let mut canvas = Pixmap::new(20, 20).unwrap();
+        draw_image(
+            &mut canvas,
+            &mut asset,
+            [5., 5., 10., 10.],
+            ImageScale::Pixels,
+            800,
+            8,
+        )
+        .unwrap();
+        assert_eq!(asset.scaled.as_ref().unwrap().1.data().len(), 8);
+        for y in 0..20 {
+            for x in 0..20 {
+                let p = canvas.pixel(x, y).unwrap();
+                assert_eq!(
+                    p.alpha(),
+                    if (5..15).contains(&x) && (5..15).contains(&y) {
+                        255
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pixel_preview_uses_exact_blocks_and_invalidates_sampling_cache() {
         let mut source = RgbaImage::new(2, 1);
         source.put_pixel(0, 0, crate::image::Rgba([255, 0, 0, 255]));
@@ -1048,6 +1143,7 @@ mod tests {
             &mut asset,
             [0., 0., 9., 5.],
             ImageScale::Pixels,
+            100,
             1000,
         )
         .unwrap();
@@ -1067,6 +1163,7 @@ mod tests {
             &mut asset,
             [0., 0., 8., 4.],
             ImageScale::Smooth,
+            100,
             1000,
         )
         .unwrap();
@@ -1077,6 +1174,7 @@ mod tests {
             &mut asset,
             [0., 0., 9., 5.],
             ImageScale::One,
+            100,
             1000,
         )
         .unwrap();
@@ -1106,6 +1204,7 @@ mod tests {
                 id: format!("asset-{i}"),
                 png: Some(png),
                 scale: Default::default(),
+                zoom: 100,
             });
             scene
                 .placements
@@ -1278,6 +1377,7 @@ mod tests {
             id: "photo".into(),
             png: Some(png),
             scale: Default::default(),
+            zoom: 100,
         });
         let first = painter.render(&scene).unwrap();
         assert_eq!(first.get_pixel(240, 300).0, [30, 200, 80, 255]);
@@ -1390,6 +1490,7 @@ mod tests {
             id: "broken".into(),
             png: Some("invalid".into()),
             scale: Default::default(),
+            zoom: 100,
         });
         assert!(painter.render(&scene).is_err());
         scene.viewport.width = 9000;

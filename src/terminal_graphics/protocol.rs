@@ -144,10 +144,16 @@ pub enum Component {
         png: Option<String>,
         #[serde(default)]
         scale: ImageScale,
+        #[serde(default = "default_image_zoom")]
+        zoom: u16,
     },
     Terminal {
         rect: Rect,
     },
+}
+
+fn default_image_zoom() -> u16 {
+    100
 }
 
 /// Pixel resampling policy. Missing fields retain older clients' smooth fit.
