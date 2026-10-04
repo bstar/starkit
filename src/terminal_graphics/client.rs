@@ -15,9 +15,9 @@ enum Frontend {
     Cells(super::cells::Cells),
 }
 impl Frontend {
-    fn spawn(pixels: bool) -> Result<Self> {
+    fn spawn(pixels: bool, font: super::font::Font) -> Result<Self> {
         if pixels {
-            Ok(Self::Pixels(Renderer::spawn()?))
+            Ok(Self::Pixels(Renderer::spawn_with_font(font)?))
         } else {
             Ok(Self::Cells(super::cells::Cells::default()))
         }
@@ -384,11 +384,13 @@ fn run_impl(
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
     }
+    let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let capabilities = super::capabilities::Capabilities::detected(&graphics);
     tracing::info!(?capabilities, "Terminal presentation capabilities");
     let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     let cell = graphics.cell_size().unwrap_or((10, 20));
+    font.cell = Some(cell);
     let mut size = viewport(1, cell)?;
     let mut terminal_grid = (size.columns, size.rows);
     let scale = if pixels {
@@ -396,7 +398,7 @@ fn run_impl(
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .filter(|n| (100..=200).contains(n))
-            .unwrap_or(115)
+            .unwrap_or(100)
     } else {
         100
     };
@@ -411,7 +413,7 @@ fn run_impl(
         eprintln!("Graphics unavailable; using the terminal interface for this session.");
     }
     let started = Instant::now();
-    let mut renderer = Frontend::spawn(pixels)?;
+    let mut renderer = Frontend::spawn(pixels, font)?;
     let mut connection = Some(Connection::spawn(&launch, control)?);
     let client = format!(
         "{}-{}",

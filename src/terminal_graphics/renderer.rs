@@ -33,6 +33,9 @@ pub struct Renderer {
 }
 impl Renderer {
     pub fn spawn() -> Result<Self> {
+        Self::spawn_with_font(super::font::Font::default().configured())
+    }
+    pub(crate) fn spawn_with_font(font: super::font::Font) -> Result<Self> {
         let (input, scenes) = bounded::<Scene>(1);
         let stale = scenes.clone();
         let (frames, output) = bounded(2);
@@ -40,7 +43,7 @@ impl Renderer {
         let worker = std::thread::Builder::new()
             .name("star-native-renderer".into())
             .spawn(move || {
-                let mut painter = super::native::Painter::new();
+                let mut painter = super::native::Painter::with_font(font);
                 while let Ok(scene) = scenes.recv() {
                     let scene = scenes.try_iter().last().unwrap_or(scene);
                     let started = std::time::Instant::now();

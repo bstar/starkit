@@ -42,6 +42,7 @@ struct Asset {
 }
 pub(super) struct Painter {
     fonts: FontSystem,
+    font_factor: f32,
     glyphs: SwashCache,
     text: HashMap<TextKey, Buffer>,
     text_bytes: usize,
@@ -114,6 +115,27 @@ fn rounded_width(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, str
     }
 }
 
+// Resolve Kitty's PostScript name or an explicit family against the local font
+// database. The client owns this choice, so SSH never needs font files remotely.
+fn resolve_font(db: &cosmic_text::fontdb::Database, requested: Option<&str>) -> String {
+    for name in requested
+        .into_iter()
+        .chain(["DejaVu Sans Mono", "Menlo", "Liberation Mono"])
+    {
+        if let Some(face) = db.faces().find(|f| {
+            f.post_script_name.eq_ignore_ascii_case(name)
+                || f.families
+                    .iter()
+                    .any(|(family, _)| family.eq_ignore_ascii_case(name))
+        }) {
+            if let Some((family, _)) = face.families.first() {
+                return family.clone();
+            }
+        }
+    }
+    "Liberation Mono".into()
+}
+
 impl Painter {
     fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
         use super::surface::Primitive;
@@ -171,6 +193,9 @@ impl Painter {
         }
     }
     pub fn new() -> Self {
+        Self::with_font(super::font::Font::default())
+    }
+    pub(crate) fn with_font(font: super::font::Font) -> Self {
         let mut db = cosmic_text::fontdb::Database::new();
         for bytes in FONTS {
             db.load_font_data(bytes.to_vec());
@@ -180,10 +205,20 @@ impl Painter {
         if std::env::var("STAR_GRAPHICS_SYSTEM_FONTS").as_deref() != Ok("0") {
             db.load_system_fonts();
         }
-        db.set_sans_serif_family("Liberation Sans");
-        db.set_monospace_family("Liberation Mono");
+        let family = resolve_font(&db, font.name.as_deref());
+        db.set_sans_serif_family(&family);
+        db.set_monospace_family(&family);
+        let font_factor = font
+            .pixels
+            .zip(font.cell)
+            .map(|(pixels, (cw, ch))| {
+                pixels / f32::from(crate::native_surface::Metrics::from_cell(cw, ch).font)
+            })
+            .unwrap_or(1.);
+        tracing::info!(requested = ?font.name, %family, pixels = ?font.pixels, font_factor, "Native terminal font selected");
         Self {
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
+            font_factor,
             glyphs: SwashCache::new(),
             text: HashMap::new(),
             text_bytes: 0,
@@ -199,6 +234,7 @@ impl Painter {
             mono,
             ellipsis,
         } = style;
+        let size = (size * self.font_factor).clamp(1., 128.);
         let [x, y, w, h] = rect;
         if value.trim().is_empty() || w <= 0. || h <= 0. {
             return;
@@ -1076,6 +1112,59 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn font_resolution_accepts_terminal_postscript_names_and_family_overrides() {
+        let mut db = cosmic_text::fontdb::Database::new();
+        for font in FONTS {
+            db.load_font_data(font.to_vec());
+        }
+        assert_eq!(resolve_font(&db, Some("LiberationMono")), "Liberation Mono");
+        assert_eq!(
+            resolve_font(&db, Some("Liberation Mono")),
+            "Liberation Mono"
+        );
+        assert_eq!(resolve_font(&db, Some("Missing Font")), "Liberation Mono");
+        assert_eq!(resolve_font(&db, None), "Liberation Mono");
+    }
+
+    #[test]
+    fn terminal_font_size_applies_to_both_cell_and_surface_text() {
+        let mut painter = Painter::with_font(super::super::font::Font {
+            name: Some("Liberation Mono".into()),
+            pixels: Some(15.),
+            cell: Some((9, 20)),
+        });
+        let base = f32::from(crate::native_surface::Metrics::from_cell(9, 20).font);
+        let mut canvas = Pixmap::new(200, 30).unwrap();
+        for mono in [true, false] {
+            painter.text(
+                &mut canvas,
+                "Terminal text",
+                [0., 0., 200., 30.],
+                TextStyle {
+                    size: base,
+                    color: "#ffffff",
+                    bold: false,
+                    mono,
+                    ellipsis: false,
+                },
+            );
+        }
+        assert!(painter
+            .text
+            .keys()
+            .all(|k| (f32::from_bits(k.size) - 15.).abs() < 0.001));
+        let widths: Vec<_> = painter
+            .text
+            .values()
+            .map(|b| b.layout_runs().next().unwrap().line_w)
+            .collect();
+        assert_eq!(
+            widths[0], widths[1],
+            "native labels and cell text must use the same face"
+        );
+    }
+
     fn scene() -> Scene {
         Scene {
             revision: 1,

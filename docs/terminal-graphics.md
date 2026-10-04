@@ -35,8 +35,19 @@ Only changed terminal regions are encoded and uploaded; old placements retire
 within a synchronized terminal update. Presentation acknowledgements follow
 terminal writes, preserve generation guards and coalesce remote scenes.
 
-Bundled Liberation Sans and Mono regular/bold fonts provide consistent startup
-without a required font installation. Their SIL Open Font License is included
+The presenting client queries Kitty's current PostScript font name and point size
+using [XTGETTCAP](https://sw.kovidgoyal.net/kitty/kittens/query_terminal/), and
+resolves that face in its local font database. Text throughout the native UI uses
+this face with natural shaping; font size is converted using Kitty's reported DPI.
+The bounded query runs before UI input begins and needs no remote-control permission.
+SSH attachments use the local client's fonts, not fonts on the remote host.
+`STAR_GRAPHICS_FONT="JetBrainsMono Nerd Font"` overrides the family (PostScript
+names also work); `STAR_GRAPHICS_FONT_SIZE=16` overrides the raster size in pixels.
+Without a usable query/font, an installed monospace face or bundled Liberation
+Mono supplies the fallback. Rasterization uses Swash, so antialiasing/hinting can
+differ from Kitty even with the same font and size. Terminal font zoom follows
+cell-size changes; a changed font family takes effect on reattachment.
+Bundled Liberation fonts provide startup without a required font installation. Their SIL Open Font License is included
 in `assets/fonts/LICENSE`. Installed fonts provide Unicode fallback on Linux
 and macOS. `STAR_GRAPHICS_SYSTEM_FONTS=0` disables discovery for reproducible
 font tests; scripts needing CJK or emoji should leave discovery enabled.
@@ -54,7 +65,7 @@ is capped at 64 MB and resized preview cache at 128 MB. Text and glyph caches
 are bounded. Invalid geometry/assets return an error; terminal guards restore
 the terminal. Worker failure leaves the remote session intact for reattachment.
 
-The graphical layout defaults to 115% scale. `STAR_GRAPHICS_SCALE=150` enlarges
+The graphical layout defaults to 100% scale. `STAR_GRAPHICS_SCALE=150` enlarges
 the layout; values 100–200 are accepted. Input and OSC 72 coordinates
 are translated to the logical layout while image placements retain the terminal's
 physical cell grid. Existing 60×21 layout limits remain.
