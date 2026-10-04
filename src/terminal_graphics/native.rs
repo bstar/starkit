@@ -1029,7 +1029,7 @@ fn draw_image(
 /// stay consistent across fonts and terminal scales.
 fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
     let [x, y, w, h] = rect;
-    let size = 14f32.min(w - 6.).min(h - 6.);
+    let size = 11f32.min(w - 6.).min(h - 6.);
     if size <= 0. {
         return;
     }
@@ -1064,7 +1064,7 @@ fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
             &path,
             &paint(color),
             &Stroke {
-                width: 2.,
+                width: 1.6,
                 line_cap: tiny_skia::LineCap::Round,
                 line_join: tiny_skia::LineJoin::Round,
                 ..Stroke::default()
