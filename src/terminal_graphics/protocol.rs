@@ -199,6 +199,9 @@ pub struct Scene {
     pub components: Vec<Component>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placements: Vec<super::placement::Placement>,
+    /// Physical hit regions for local, latency-free pointer feedback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resize_handles: Vec<crate::native_surface::PixelRect>,
 }
 impl Scene {
     pub fn from_buffer(
@@ -284,10 +287,12 @@ impl Scene {
             spans,
             components: vec![],
             placements: vec![],
+            resize_handles: vec![],
         }
     }
     pub fn same_content(&self, other: &Self) -> bool {
-        self.interaction == other.interaction
+        self.resize_handles == other.resize_handles
+            && self.interaction == other.interaction
             && self.scroll_interaction == other.scroll_interaction
             && self.viewport == other.viewport
             && self.background == other.background
@@ -623,6 +628,7 @@ mod tests {
             spans: vec![],
             components: vec![],
             placements: vec![],
+            resize_handles: vec![],
         };
         let pointer = |action: &str| Input::Pointer {
             pixel: None,
@@ -663,6 +669,7 @@ mod tests {
             spans: vec![],
             components: vec![],
             placements: vec![],
+            resize_handles: vec![],
         };
         let mut admission = Admission::default();
         admission.target(9, 1, 4);

@@ -1027,6 +1027,7 @@ mod tests {
             border: "#45475a".into(),
             spans: vec![],
             placements: vec![],
+            resize_handles: vec![],
             components: vec![],
         }
     }

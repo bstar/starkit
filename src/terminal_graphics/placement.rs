@@ -198,6 +198,7 @@ impl Placement {
             spans,
             components,
             placements: Vec::new(),
+            resize_handles: vec![],
             revision: scene.revision,
             interaction: scene.interaction,
             scroll_interaction: None,

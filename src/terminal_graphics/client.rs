@@ -431,6 +431,8 @@ fn run_impl(
     let _guard = TerminalGuard;
     use std::io::Write;
     let mut presenter = PresenterGuard(KittyPresenter::default());
+    let mut pointer = super::pointer::Pointer::default();
+    let mut resize_handles = Vec::new();
     let mut assets = std::collections::HashMap::<String, String>::new();
     let mut epoch: Option<String> = None;
     // Keep startup outside the pixel renderer. Its first capture must belong
@@ -554,6 +556,8 @@ fn run_impl(
                     break;
                 }
                 ServerMessage::Closed => {
+                    pointer.reset(&mut io::stdout().lock())?;
+                    resize_handles.clear();
                     closed = true;
                     break;
                 }
@@ -604,6 +608,12 @@ fn run_impl(
                     }
                     frames += 1;
                     shown = Some((revision, generation));
+                    if let Some(scene) = last_scene
+                        .as_ref()
+                        .filter(|s| connected && s.revision == revision)
+                    {
+                        resize_handles.clone_from(&scene.resize_handles);
+                    }
                     tracing::debug!(
                         revision,
                         generation,
@@ -654,9 +664,12 @@ fn run_impl(
             }
             connection = None;
             connected = false;
+            pointer.reset(&mut io::stdout().lock())?;
+            resize_handles.clear();
             shown = None;
             reconnect = Instant::now() + Duration::from_secs(5);
             if let Some(mut scene) = last_scene.clone() {
+                scene.resize_handles.clear();
                 scene.spans.push(Span{x:1,y:size.rows.saturating_sub(1),text:"Disconnected · remote operations continue · Ctrl+R reconnect · Ctrl+Q detach".into(),foreground:"#f38ba8".into(),background:scene.background.clone(),bold:true});
                 renderer.scene(&scene)?;
             }
@@ -699,6 +712,7 @@ fn run_impl(
             let mut input = custom(&event);
             match event {
                 Event::Key(k) if k.kind == crate::crossterm::event::KeyEventKind::Press => {
+                    pointer.reset(&mut io::stdout().lock())?;
                     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('q') {
                         break;
                     }
@@ -730,11 +744,19 @@ fn run_impl(
                         Some(MouseButton::Middle) => 2,
                         _ => 0,
                     };
+                    let pixel = [
+                        terminal_pixel(m.column, terminal_grid.0, size.width),
+                        terminal_pixel(m.row, terminal_grid.1, size.height),
+                    ];
+                    pointer.update(
+                        action,
+                        button == 0,
+                        pixel,
+                        &resize_handles,
+                        &mut io::stdout().lock(),
+                    )?;
                     input = Some(Input::Pointer {
-                        pixel: Some([
-                            terminal_pixel(m.column, terminal_grid.0, size.width),
-                            terminal_pixel(m.row, terminal_grid.1, size.height),
-                        ]),
+                        pixel: Some(pixel),
                         action: action.into(),
                         button,
                         x: logical_coordinate(m.column, terminal_grid.0, size.columns),
@@ -743,7 +765,13 @@ fn run_impl(
                     });
                 }
                 Event::Paste(text) => input = Some(Input::Paste { text }),
+                Event::FocusLost => {
+                    pointer.reset(&mut io::stdout().lock())?;
+                    input = Some(Input::CancelPointer);
+                }
                 Event::Resize(..) => {
+                    pointer.reset(&mut io::stdout().lock())?;
+                    resize_handles.clear();
                     size = viewport(size.generation + 1, cell)?;
                     terminal_grid = (size.columns, size.rows);
                     size = scaled_viewport(size, scale);

@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
         border: "#45475a".into(),
         spans: vec![],
         placements: vec![],
+        resize_handles: vec![],
         components: vec![
             Component::Panel {
                 rect: Rect {
