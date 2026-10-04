@@ -611,14 +611,14 @@ impl Painter {
                         let tint = rgb(accent);
                         let tint = format!(
                             "#{:02x}{:02x}{:02x}",
-                            (f32::from(bg[0]) * 0.84 + f32::from(tint[0]) * 0.16) as u8,
-                            (f32::from(bg[1]) * 0.84 + f32::from(tint[1]) * 0.16) as u8,
-                            (f32::from(bg[2]) * 0.84 + f32::from(tint[2]) * 0.16) as u8
+                            (f32::from(bg[0]) * 0.88 + f32::from(tint[0]) * 0.12) as u8,
+                            (f32::from(bg[1]) * 0.88 + f32::from(tint[1]) * 0.12) as u8,
+                            (f32::from(bg[2]) * 0.88 + f32::from(tint[2]) * 0.12) as u8
                         );
                         rounded(
                             &mut canvas,
-                            [x + 2., y + 3., (w - 6.).max(0.), (h - 6.).max(0.)],
-                            7.,
+                            [x + 2., y + 2., (w - 5.).max(0.), (h - 4.).max(0.)],
+                            5.,
                             &tint,
                             false,
                         );
@@ -627,16 +627,16 @@ impl Painter {
                         tab_control(&mut canvas, label, area, &scene.foreground);
                         continue;
                     }
-                    let padding = 18f32.min(w / 4.);
+                    let padding = 12f32.min(w / 4.);
                     let end = close.map_or(x + w, |r| f32::from(r.x) * cw);
                     self.text(
                         &mut canvas,
                         label,
-                        [x + padding, y, (end - x - padding - 8.).max(0.), h],
+                        [x + padding, y, (end - x - padding - 4.).max(0.), h],
                         TextStyle {
-                            size: font + 1.,
+                            size: font,
                             color: &scene.foreground,
-                            bold: *active,
+                            bold: false,
                             mono: false,
                             ellipsis: true,
                         },
@@ -843,7 +843,7 @@ fn draw_image(canvas: &mut Pixmap, asset: &mut Asset, area: [f32; 4], budget: us
 /// stay consistent across fonts and terminal scales.
 fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
     let [x, y, w, h] = rect;
-    let size = 18f32.min(w - 8.).min(h - 8.);
+    let size = 14f32.min(w - 6.).min(h - 6.);
     if size <= 0. {
         return;
     }
@@ -878,7 +878,7 @@ fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
             &path,
             &paint(color),
             &Stroke {
-                width: 2.4,
+                width: 2.,
                 line_cap: tiny_skia::LineCap::Round,
                 line_join: tiny_skia::LineJoin::Round,
                 ..Stroke::default()
