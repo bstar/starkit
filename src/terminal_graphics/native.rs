@@ -662,7 +662,6 @@ impl Painter {
                     fill(&mut canvas, area, &scene.background);
                     let width = w.min(6.);
                     let left = x + (w - width) / 2.;
-                    rounded(&mut canvas, [left, y, width, h], width / 2., border, false);
                     let top = row_edge(thumb.y).max(y);
                     let bottom = row_edge(thumb.y.saturating_add(thumb.height)).min(y + h);
                     if bottom > top {
@@ -1133,7 +1132,8 @@ mod tests {
         for y in 82..138 {
             assert_eq!(pixels.get_pixel(245, y).0, [137, 180, 250, 255]);
         }
-        assert_eq!(pixels.get_pixel(245, 65).0, [69, 71, 90, 255]);
+        // The track outside the thumb blends into the panel.
+        assert_eq!(pixels.get_pixel(245, 65).0, [30, 30, 46, 255]);
         assert_eq!(pixels.get_pixel(241, 90).0, [30, 30, 46, 255]);
     }
 
