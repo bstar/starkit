@@ -547,15 +547,11 @@ impl Painter {
                     icon,
                     foreground,
                     background,
-                    selected,
                     marked,
                     marking,
                     ..
                 } => {
                     fill(&mut canvas, area, background);
-                    if *selected {
-                        fill(&mut canvas, [x + 1., y + 2., 2., (h - 4.).max(0.)], accent);
-                    }
                     let mark = (*marking || *marked)
                         .then(|| PathBuilder::from_circle(x + 6., y + h / 2., 4.5))
                         .flatten();
