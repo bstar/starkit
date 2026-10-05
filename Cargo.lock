@@ -2040,6 +2040,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "image",
+ "png 0.18.1",
  "proptest",
  "ratatui",
  "ratatui-image",

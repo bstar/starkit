@@ -44,8 +44,28 @@ impl Renderer {
             .name("star-native-renderer".into())
             .spawn(move || {
                 let mut painter = super::native::Painter::with_font(font);
-                while let Ok(scene) = scenes.recv() {
-                    let scene = scenes.try_iter().last().unwrap_or(scene);
+                let mut previous = None;
+                loop {
+                    let received = if painter.animating() {
+                        scenes.recv_timeout(std::time::Duration::from_millis(20))
+                    } else {
+                        scenes
+                            .recv()
+                            .map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected)
+                    };
+                    let mut scene = match received {
+                        Ok(scene) => scenes.try_iter().last().unwrap_or(scene),
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout)
+                            if painter.animation_due() =>
+                        {
+                            let Some(scene) = previous.clone() else {
+                                continue;
+                            };
+                            scene
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                    };
                     let started = std::time::Instant::now();
                     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         painter.render(&scene)
@@ -70,6 +90,14 @@ impl Renderer {
                         render_us = started.elapsed().as_micros(),
                         "Native scene rasterized"
                     );
+                    // The painter owns decoded assets now. Timer frames must not
+                    // clone or recompare a potentially large encoded animation.
+                    for component in &mut scene.components {
+                        if let super::protocol::Component::Image { png, .. } = component {
+                            *png = None;
+                        }
+                    }
+                    previous = Some(scene);
                     let failed = matches!(message, RenderMessage::Error { .. });
                     if let Err(crossbeam_channel::TrySendError::Full(message)) =
                         frames.try_send(message)

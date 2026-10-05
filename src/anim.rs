@@ -54,12 +54,17 @@ pub struct FrameSequence {
     pub id: u64,
     /// Whether `max_frames` stopped the decode early.
     pub truncated: bool,
+    /// Number of plays; zero means repeat indefinitely.
+    pub plays: u32,
 }
 
 impl FrameSequence {
     /// Which frame is showing `elapsed` after the animation started, looping.
     pub fn at(&self, elapsed: Duration) -> (usize, &Frame) {
         debug_assert!(!self.frames.is_empty());
+        if self.finished(elapsed) {
+            return (self.frames.len() - 1, self.frames.last().unwrap());
+        }
         if self.frames.len() == 1 || self.total.is_zero() {
             return (0, &self.frames[0]);
         }
@@ -75,10 +80,14 @@ impl FrameSequence {
         (last, &self.frames[last])
     }
 
+    pub fn finished(&self, elapsed: Duration) -> bool {
+        self.plays > 0 && elapsed >= self.total.saturating_mul(self.plays)
+    }
+
     /// How long until the frame after `elapsed`, so a caller can set its
     /// event-loop timeout to the earliest thing that needs redrawing.
     pub fn until_next(&self, elapsed: Duration) -> Duration {
-        if self.frames.len() == 1 || self.total.is_zero() {
+        if self.finished(elapsed) || self.frames.len() == 1 || self.total.is_zero() {
             return Duration::MAX;
         }
         let mut t = Duration::from_nanos((elapsed.as_nanos() % self.total.as_nanos()) as u64);
@@ -150,7 +159,22 @@ pub fn decode_gif(
     max_frames: usize,
     max_pixels: u64,
 ) -> Result<FrameSequence, AnimError> {
+    decode_gif_until(bytes, id, max_frames, max_pixels, || false)
+}
+
+/// Decode on a worker, checking cancellation/deadlines between composited frames.
+pub fn decode_gif_until(
+    bytes: &[u8],
+    id: u64,
+    max_frames: usize,
+    max_pixels: u64,
+    mut stop: impl FnMut() -> bool,
+) -> Result<FrameSequence, AnimError> {
     let decoder = GifDecoder::new(Cursor::new(bytes))?;
+    let plays = match decoder.loop_count() {
+        image::metadata::LoopCount::Infinite => 0,
+        image::metadata::LoopCount::Finite(n) => n.get(),
+    };
     let (w, h) = decoder.dimensions();
     let pixels = u64::from(w) * u64::from(h);
     if pixels > max_pixels {
@@ -164,6 +188,14 @@ pub fn decode_gif(
     let mut total = Duration::ZERO;
     let mut truncated = false;
     for frame in decoder.into_frames() {
+        if stop() {
+            return Err(AnimError::Decode(image::ImageError::IoError(
+                std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "Animation preview cancelled or timed out",
+                ),
+            )));
+        }
         if frames.len() >= max_frames {
             truncated = true;
             break;
@@ -187,6 +219,7 @@ pub fn decode_gif(
         total,
         id,
         truncated,
+        plays,
     })
 }
 
@@ -301,6 +334,21 @@ mod tests {
             Duration::from_millis(30),
             "and it loops with at()"
         );
+    }
+
+    #[test]
+    fn finite_playback_stops_on_the_last_frame() {
+        let mut seq = decode_gif(&gif(&[100, 200]), 0, 16, 100).unwrap();
+        seq.plays = 2;
+        assert_eq!(seq.at(Duration::from_millis(350)).0, 0);
+        assert_eq!(seq.at(Duration::from_millis(600)).0, 1);
+        assert!(seq.finished(Duration::from_millis(600)));
+        assert_eq!(seq.until_next(Duration::from_secs(1)), Duration::MAX);
+    }
+
+    #[test]
+    fn cancelled_decode_returns_an_error() {
+        assert!(decode_gif_until(&gif(&[100, 100]), 0, 16, 100, || true).is_err());
     }
 
     #[test]

@@ -36,6 +36,9 @@ struct TextStyle<'a> {
 }
 
 struct Asset {
+    animation: Option<crate::anim::FrameSequence>,
+    started: std::time::Instant,
+    frame: usize,
     encoded: String,
     pixels: Arc<RgbaImage>,
     scaled: Option<((u32, u32, ImageScale), Pixmap)>,
@@ -183,6 +186,20 @@ fn blend_text_channel(fg: u8, bg: u8, coverage: u8) -> u8 {
 }
 
 impl Painter {
+    pub(super) fn animation_due(&self) -> bool {
+        self.assets.values().any(|a| {
+            a.animation
+                .as_ref()
+                .is_some_and(|seq| seq.at(a.started.elapsed()).0 != a.frame)
+        })
+    }
+    pub(super) fn animating(&self) -> bool {
+        self.assets.values().any(|a| {
+            a.animation
+                .as_ref()
+                .is_some_and(|seq| seq.len() > 1 && !seq.finished(a.started.elapsed()))
+        })
+    }
     fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
         use super::surface::Primitive;
         let [x, y, width, height] = area;
@@ -856,23 +873,86 @@ impl Painter {
                             let mut limits = crate::image::Limits::default();
                             limits.max_alloc = Some(64_000_000);
                             decoder.set_limits(limits)?;
-                            let pixels =
-                                crate::image::DynamicImage::from_decoder(decoder)?.into_rgba8();
+                            let (animation, pixels) = if decoder.is_apng()? {
+                                use crate::image::AnimationDecoder as _;
+                                let decoder = decoder.apng()?;
+                                let plays = match decoder.loop_count() {
+                                    crate::image::metadata::LoopCount::Infinite => 0,
+                                    crate::image::metadata::LoopCount::Finite(n) => n.get(),
+                                };
+                                let mut frames = Vec::new();
+                                let mut total = std::time::Duration::ZERO;
+                                let mut bytes = 0usize;
+                                for frame in decoder.into_frames() {
+                                    let frame = frame?;
+                                    bytes = bytes.saturating_add(frame.buffer().as_raw().len());
+                                    anyhow::ensure!(
+                                        bytes <= 64_000_000 && frames.len() < 1024,
+                                        "Animation cache exceeds limit"
+                                    );
+                                    let (n, d) = frame.delay().numer_denom_ms();
+                                    let delay = std::time::Duration::from_millis(u64::from(
+                                        n.checked_div(d).unwrap_or(0),
+                                    ))
+                                    .max(crate::anim::MIN_DELAY);
+                                    total += delay;
+                                    frames.push(crate::anim::Frame {
+                                        img: Arc::new(frame.into_buffer()),
+                                        delay,
+                                    });
+                                }
+                                anyhow::ensure!(!frames.is_empty(), "Animation has no frames");
+                                let pixels = Arc::clone(&frames[0].img);
+                                (
+                                    Some(crate::anim::FrameSequence {
+                                        frames,
+                                        total,
+                                        id: 0,
+                                        truncated: false,
+                                        plays,
+                                    }),
+                                    pixels,
+                                )
+                            } else {
+                                (
+                                    None,
+                                    Arc::new(
+                                        crate::image::DynamicImage::from_decoder(decoder)?
+                                            .into_rgba8(),
+                                    ),
+                                )
+                            };
                             let retained_bytes = self
                                 .assets
                                 .iter()
                                 .filter(|(old, _)| *old != id)
-                                .map(|(_, asset)| asset.pixels.as_raw().len())
+                                .map(|(_, asset)| {
+                                    asset
+                                        .animation
+                                        .as_ref()
+                                        .map_or(asset.pixels.as_raw().len(), |seq| {
+                                            seq.frames.iter().map(|f| f.img.as_raw().len()).sum()
+                                        })
+                                })
                                 .sum::<usize>();
                             anyhow::ensure!(
-                                retained_bytes + pixels.as_raw().len() <= 64_000_000,
+                                retained_bytes
+                                    + animation.as_ref().map_or(pixels.as_raw().len(), |seq| seq
+                                        .frames
+                                        .iter()
+                                        .map(|f| f.img.as_raw().len())
+                                        .sum())
+                                    <= 64_000_000,
                                 "Preview cache exceeds limit"
                             );
                             self.assets.insert(
                                 id.clone(),
                                 Asset {
                                     encoded: encoded.clone(),
-                                    pixels: Arc::new(pixels),
+                                    pixels,
+                                    animation,
+                                    started: std::time::Instant::now(),
+                                    frame: 0,
                                     scaled: None,
                                 },
                             );
@@ -886,6 +966,14 @@ impl Painter {
                         .map(|(_, pixels)| pixels.data().len())
                         .sum::<usize>();
                     if let Some(asset) = self.assets.get_mut(id) {
+                        if let Some(seq) = &asset.animation {
+                            let (index, frame) = seq.at(asset.started.elapsed());
+                            if index != asset.frame {
+                                asset.frame = index;
+                                asset.pixels = Arc::clone(&frame.img);
+                                asset.scaled = None;
+                            }
+                        }
                         draw_image(
                             &mut canvas,
                             asset,
@@ -1357,9 +1445,105 @@ mod tests {
     }
 
     #[test]
+    fn renderer_plays_animation_without_new_controller_scenes_and_stops() {
+        use super::super::renderer::{RenderMessage, Renderer};
+        let delay = std::time::Duration::from_millis(200);
+        let seq = crate::anim::FrameSequence {
+            frames: vec![
+                crate::anim::Frame {
+                    img: Arc::new(RgbaImage::from_pixel(
+                        2,
+                        2,
+                        crate::image::Rgba([255, 0, 0, 255]),
+                    )),
+                    delay,
+                },
+                crate::anim::Frame {
+                    img: Arc::new(RgbaImage::from_pixel(
+                        2,
+                        2,
+                        crate::image::Rgba([0, 255, 0, 255]),
+                    )),
+                    delay,
+                },
+            ],
+            total: delay * 2,
+            plays: 1,
+            id: 0,
+            truncated: false,
+        };
+        let mut scene = scene();
+        scene.viewport = super::super::Viewport {
+            columns: 20,
+            rows: 10,
+            width: 200,
+            height: 100,
+            generation: 1,
+        };
+        scene.components.push(Component::Image {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 10,
+            },
+            id: "gif".into(),
+            png: Some(super::super::assets::encode_animation(&seq).unwrap()),
+            zoom: 100,
+            scale: ImageScale::Pixels,
+        });
+        let mut renderer = Renderer::spawn().unwrap();
+        renderer.scene(&scene).unwrap();
+        let mut colors = Vec::new();
+        for _ in 0..2 {
+            let message = renderer
+                .output
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let RenderMessage::Frame {
+                revision,
+                pixels: Some(pixels),
+                ..
+            } = message
+            else {
+                panic!("{message:?}")
+            };
+            assert_eq!(revision, 1);
+            colors.push(*pixels.get_pixel(100, 50));
+        }
+        assert_eq!(
+            colors,
+            vec![
+                crate::image::Rgba([255, 0, 0, 255]),
+                crate::image::Rgba([0, 255, 0, 255])
+            ]
+        );
+        assert!(renderer
+            .output
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err());
+        scene.components.clear();
+        renderer.scene(&scene).unwrap();
+        assert!(matches!(
+            renderer
+                .output
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            RenderMessage::Frame { .. }
+        ));
+        assert!(renderer
+            .output
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err());
+    }
+
+    #[test]
     fn zoom_clips_to_preview_and_does_not_allocate_at_enlarged_dimensions() {
         let source = RgbaImage::from_pixel(2, 1, crate::image::Rgba([255, 0, 0, 255]));
         let mut asset = Asset {
+            animation: None,
+            started: std::time::Instant::now(),
+            frame: 0,
             encoded: String::new(),
             pixels: Arc::new(source),
             scaled: None,
@@ -1396,6 +1580,9 @@ mod tests {
         source.put_pixel(0, 0, crate::image::Rgba([255, 0, 0, 255]));
         source.put_pixel(1, 0, crate::image::Rgba([0, 0, 255, 255]));
         let mut asset = Asset {
+            animation: None,
+            started: std::time::Instant::now(),
+            frame: 0,
             encoded: String::new(),
             pixels: Arc::new(source),
             scaled: None,

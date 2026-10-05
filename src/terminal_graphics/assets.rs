@@ -5,34 +5,39 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use std::io::Cursor;
 use std::sync::Arc;
 
+enum Source {
+    Still(Arc<RgbaImage>),
+    Animation(Arc<crate::anim::FrameSequence>),
+}
+
 pub struct Thumbnailer {
-    request: Sender<(String, Arc<RgbaImage>)>,
-    stale: Receiver<(String, Arc<RgbaImage>)>,
+    request: Sender<(String, Source)>,
+    stale: Receiver<(String, Source)>,
     pub output: Receiver<(String, String)>,
 }
 impl Default for Thumbnailer {
     fn default() -> Self {
-        let (request, rx) = bounded::<(String, Arc<RgbaImage>)>(1);
+        let (request, rx) = bounded::<(String, Source)>(1);
         let stale = rx.clone();
         let (tx, output) = bounded(1);
         let old = output.clone();
         std::thread::spawn(move || {
             while let Ok((id, image)) = rx.recv() {
-                let image = DynamicImage::ImageRgba8((*image).clone());
-                // Never enlarge a source before the renderer chooses its sampling policy.
-                let image = if image.width() > 1280 || image.height() > 1280 {
-                    image.thumbnail(1280, 1280)
-                } else {
-                    image
+                let encoded = match image {
+                    Source::Still(image) => {
+                        let image = DynamicImage::ImageRgba8((*image).clone());
+                        let image = if image.width() > 1280 || image.height() > 1280 {
+                            image.thumbnail(1280, 1280)
+                        } else {
+                            image
+                        };
+                        encode_png(&image.to_rgba8())
+                    }
+                    Source::Animation(animation) => encode_animation(&animation)
+                        .or_else(|_| encode_png(&animation.frames[0].img)),
                 };
-                let mut png = Cursor::new(vec![]);
-                if image.write_to(&mut png, ImageFormat::Png).is_err() {
-                    continue;
-                }
-                let result = (
-                    id,
-                    base64::engine::general_purpose::STANDARD.encode(png.into_inner()),
-                );
+                let Ok(png) = encoded else { continue };
+                let result = (id, png);
                 if let Err(crossbeam_channel::TrySendError::Full(result)) = tx.try_send(result) {
                     let _ = old.try_recv();
                     let _ = tx.try_send(result);
@@ -47,7 +52,13 @@ impl Default for Thumbnailer {
     }
 }
 impl Thumbnailer {
+    pub fn request_animation(&self, id: String, animation: Arc<crate::anim::FrameSequence>) {
+        self.submit(id, Source::Animation(animation));
+    }
     pub fn request(&self, id: String, image: Arc<RgbaImage>) {
+        self.submit(id, Source::Still(image));
+    }
+    fn submit(&self, id: String, image: Source) {
         if let Err(crossbeam_channel::TrySendError::Full(request)) =
             self.request.try_send((id, image))
         {
@@ -109,5 +120,120 @@ mod tests {
             .unwrap();
         let decoded = crate::image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(decoded, source);
+    }
+}
+
+/// Transfer composited frames once; playback runs in the local native renderer.
+pub fn encode_animation(animation: &crate::anim::FrameSequence) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        !animation.frames.is_empty() && animation.len() <= 1024,
+        "Invalid animation frame count"
+    );
+    let first = &animation.frames[0].img;
+    anyhow::ensure!(
+        animation
+            .frames
+            .iter()
+            .all(|f| f.img.dimensions() == first.dimensions()),
+        "Animation dimensions differ"
+    );
+    let mut target = first.width().max(first.height()).min(1280);
+    loop {
+        let images: Vec<_> = animation
+            .frames
+            .iter()
+            .map(|frame| {
+                let image = DynamicImage::ImageRgba8((*frame.img).clone());
+                if image.width().max(image.height()) > target {
+                    image.thumbnail(target, target).into_rgba8()
+                } else {
+                    image.into_rgba8()
+                }
+            })
+            .collect();
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, images[0].width(), images[0].height());
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(images.len() as u32, animation.plays)?;
+            encoder.set_blend_op(png::BlendOp::Source)?;
+            encoder.set_dispose_op(png::DisposeOp::None)?;
+            let mut writer = encoder.write_header()?;
+            for (frame, image) in animation.frames.iter().zip(images.iter()) {
+                let mut numerator = frame.delay.as_millis().min(65_535_000) as u32;
+                let mut denominator = 1000u32;
+                let (mut a, mut b) = (numerator, denominator);
+                while b != 0 {
+                    (a, b) = (b, a % b);
+                }
+                numerator /= a.max(1);
+                denominator /= a.max(1);
+                if numerator > 65535 {
+                    numerator /= denominator;
+                    denominator = 1;
+                }
+                writer.set_frame_delay(numerator as u16, denominator as u16)?;
+                writer.write_image_data(image.as_raw())?;
+            }
+            writer.finish()?;
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        if validate_png(&encoded).is_ok() {
+            return Ok(encoded);
+        }
+        anyhow::ensure!(target > 1, "Animation exceeds transport limit");
+        target = (target / 2).max(1);
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+    use crate::image::AnimationDecoder as _;
+    #[test]
+    fn animation_transport_preserves_alpha_timing_and_finite_loops() {
+        let frames = vec![
+            crate::anim::Frame {
+                img: Arc::new(RgbaImage::from_pixel(
+                    2,
+                    2,
+                    crate::image::Rgba([250, 20, 30, 255]),
+                )),
+                delay: std::time::Duration::from_millis(100),
+            },
+            crate::anim::Frame {
+                img: Arc::new(RgbaImage::from_pixel(
+                    2,
+                    2,
+                    crate::image::Rgba([0, 0, 0, 0]),
+                )),
+                delay: std::time::Duration::from_millis(200),
+            },
+        ];
+        let seq = crate::anim::FrameSequence {
+            frames,
+            total: std::time::Duration::from_millis(300),
+            plays: 2,
+            id: 0,
+            truncated: false,
+        };
+        let encoded = encode_animation(&seq).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let decoder = crate::image::codecs::png::PngDecoder::new(Cursor::new(bytes))
+            .unwrap()
+            .apng()
+            .unwrap();
+        assert!(
+            matches!(decoder.loop_count(), crate::image::metadata::LoopCount::Finite(n) if n.get() == 2)
+        );
+        let decoded = decoder.into_frames().collect_frames().unwrap();
+        for (actual, expected) in decoded.iter().zip(&seq.frames) {
+            assert_eq!(actual.buffer(), expected.img.as_ref());
+            let (n, d) = actual.delay().numer_denom_ms();
+            assert_eq!(u128::from(n / d), expected.delay.as_millis());
+        }
     }
 }
