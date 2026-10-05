@@ -1,6 +1,6 @@
 //! Low latency MPEG-TS / H.264 / AAC preview encoder. Never downloads a file.
 use super::*;
-use av::{codec, encoder, format, frame, media, Dictionary, Packet, Rational};
+use av::{codec, encoder, format, frame, media, Dictionary, Packet, Rational, Rescale};
 use std::io::Write;
 
 struct Video {
@@ -74,6 +74,7 @@ impl Audio {
     }
     fn filtered(&mut self, out: &mut format::context::Output) -> Result<()> {
         let mut f = frame::Audio::empty();
+        let time = self.filter.get("out").unwrap().sink().time_base();
         while self.filter.get("out").unwrap().sink().frame(&mut f).is_ok() {
             anyhow::ensure!(
                 f.format() == self.encoder.format()
@@ -81,6 +82,12 @@ impl Audio {
                     && f.rate() == self.encoder.rate(),
                 "Audio filter returned an incompatible frame"
             );
+            // A format-preserving filter can retain Matroska's millisecond
+            // clock; AAC always expects sample units, even without resampling.
+            let pts = f
+                .pts()
+                .map(|pts| pts.rescale(time, self.encoder.time_base()));
+            f.set_pts(pts);
             self.encoder.send_frame(&f)?;
             self.packets(out)?;
         }

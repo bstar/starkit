@@ -247,7 +247,7 @@ mod integration {
     fn native_poster_proxy_seek_and_playback() {
         // ffmpeg is only a fixture generator; production uses libav in process.
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.mp4");
+        let source = dir.path().join("source.mkv");
         let status = std::process::Command::new("ffmpeg")
             .args([
                 "-v",
@@ -267,7 +267,9 @@ mod integration {
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
-                "aac",
+                "ac3",
+                "-ac",
+                "2",
                 "-y",
             ])
             .arg(&source)
@@ -305,6 +307,23 @@ mod integration {
             av::codec::Id::AAC
         );
         drop(input);
+        let mut check = av::format::input(&proxy).unwrap();
+        let audio = check.streams().best(av::media::Type::Audio).unwrap();
+        let audio_index = audio.index();
+        let audio_time = audio.time_base();
+        let timestamps: Vec<_> = check
+            .packets()
+            .filter(|(stream, _)| stream.index() == audio_index)
+            .filter_map(|(_, packet)| packet.pts())
+            .take(4)
+            .map(|pts| pts as f64 * f64::from(audio_time))
+            .collect();
+        assert_eq!(timestamps.len(), 4);
+        assert!(
+            timestamps[3] - timestamps[0] > 0.06,
+            "MKV millisecond timestamps must be rescaled to AAC sample units: {timestamps:?}"
+        );
+        drop(check);
         let player = playback::Player::stream(std::fs::File::open(&proxy).unwrap(), 0.8).unwrap();
         let first = player
             .frames
