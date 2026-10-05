@@ -110,6 +110,8 @@ impl Player {
                     if let Some(wait) = buffering_since.take() {
                         base += wait.elapsed();
                     }
+                    // A paused seek still presents its first decoded frame.
+                    let initial = first.is_none();
                     let origin = *first.get_or_insert(f.seconds);
                     if first == Some(f.seconds) && c.position_ms.load(Ordering::Relaxed) == 0 {
                         base = Instant::now();
@@ -118,7 +120,7 @@ impl Player {
                         if c.cancelled.load(Ordering::Relaxed) {
                             return;
                         }
-                        if c.paused.load(Ordering::Relaxed) {
+                        if !initial && c.paused.load(Ordering::Relaxed) {
                             let t = Instant::now();
                             std::thread::sleep(Duration::from_millis(10));
                             base += t.elapsed();

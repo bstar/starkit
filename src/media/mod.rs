@@ -272,6 +272,24 @@ mod integration {
             .recv_timeout(std::time::Duration::from_millis(150))
             .is_err());
 
+        let paused_controls = playback::Controls::new();
+        paused_controls.paused.store(true, Ordering::Relaxed);
+        let paused_seek = playback::Player::stream_with_controls(
+            std::fs::File::open(&proxy).unwrap(),
+            0.8,
+            paused_controls,
+        )
+        .unwrap();
+        paused_seek
+            .frames
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("Paused seek must display its first frame");
+        assert!(paused_seek
+            .frames
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_err());
+        drop(paused_seek);
+
         let local_seek = playback::Player::file(source.clone(), 1.0).unwrap();
         let frame = local_seek
             .frames
