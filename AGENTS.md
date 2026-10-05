@@ -188,3 +188,13 @@ Muxer writes are often small TS packets, not 32 KiB buffers. Aggregate them
 before charging the byte credit window; otherwise eight small packets can fill
 the bounded decoder channel while unused byte credits keep the sender running.
 `StreamIo` flushes the final partial chunk when its output context is released.
+
+## SSH audio relay
+
+`terminal_graphics::audio` plays negotiated `audio_relay` PCM on the frontend.
+Its separate opaque session and epoch never carry host paths. Blocks are
+bounded 48 kHz stereo i16, converted by FFmpeg to the local device format on a
+worker. CPAL's callback only drains a ring. Eight block credits bound transport;
+credits return after conversion enters the bounded playback ring. New epochs,
+route close and disconnect cancel and join the worker. A failed local device
+reports an error to the host; it must not silently switch to host playback.

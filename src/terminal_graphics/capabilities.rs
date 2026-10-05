@@ -28,6 +28,8 @@ pub enum PointerPrecision {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     #[serde(default)]
+    pub audio_relay: bool,
+    #[serde(default)]
     pub video: bool,
     #[serde(default)]
     pub local_media: bool,
@@ -55,6 +57,7 @@ impl Capabilities {
         let measured = crate::crossterm::terminal::window_size()
             .is_ok_and(|size| size.width > 0 && size.height > 0);
         Self {
+            audio_relay: true,
             video: true,
             local_media: false,
             image_transport: if graphics.name() == "kitty" {
@@ -89,6 +92,7 @@ mod tests {
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
+            audio_relay: true,
             video: true,
             local_media: false,
             image_transport: ImageTransport::Kitty,

@@ -17,6 +17,18 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {
+    AudioOpen {
+        session: u64,
+        epoch: u64,
+    },
+    AudioChunk {
+        session: u64,
+        epoch: u64,
+        samples: Vec<i16>,
+    },
+    AudioClose {
+        session: u64,
+    },
     Open {
         session: u64,
         generation: u64,
@@ -53,6 +65,16 @@ pub enum ToClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToHost {
+    AudioCredit {
+        session: u64,
+        epoch: u64,
+        blocks: usize,
+    },
+    AudioError {
+        session: u64,
+        epoch: u64,
+        message: String,
+    },
     Credit {
         session: u64,
         generation: u64,
@@ -374,19 +396,28 @@ struct Active {
 pub struct Frontend {
     active: Option<Active>,
     local: bool,
+    audio: super::audio::Frontend,
 }
 impl Frontend {
     pub fn reset(&mut self) {
         self.active = None;
+        self.audio.reset();
     }
     pub fn new(local: bool) -> Self {
         Self {
             active: None,
             local,
+            audio: super::audio::Frontend::default(),
         }
     }
     pub fn receive(&mut self, msg: ToClient, out: &Sender<ClientMessage>) -> anyhow::Result<()> {
+        if self.audio.receive(&msg)? {
+            return Ok(());
+        }
         match msg {
+            ToClient::AudioOpen { .. }
+            | ToClient::AudioChunk { .. }
+            | ToClient::AudioClose { .. } => unreachable!(),
             ToClient::Open {
                 session,
                 generation,
@@ -551,6 +582,7 @@ impl Frontend {
         &mut self,
         out: &Sender<ClientMessage>,
     ) -> Option<(String, Arc<crate::image::RgbaImage>)> {
+        self.audio.tick(out);
         let a = self.active.as_mut()?;
         a.pending_credit += a.consumed.try_iter().sum::<usize>();
         if a.pending_credit > 0
