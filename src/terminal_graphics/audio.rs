@@ -56,6 +56,7 @@ impl Frontend {
                     .spawn(move || {
                         if let Err(error) = play(receive, credit, cancel.clone()) {
                             if !cancel.load(Ordering::Relaxed) {
+                                cancel.store(true, Ordering::Relaxed);
                                 let _ = warning.try_send(format!("Local audio: {error:#}"));
                             }
                         }
@@ -83,9 +84,18 @@ impl Frontend {
                     .as_mut()
                     .filter(|a| a.session == *session && a.epoch == *epoch)
                 {
-                    active.blocks.try_send(samples.clone()).map_err(|_| {
-                        anyhow::anyhow!("Audio receiver exceeded its credit window")
-                    })?;
+                    if !active.stop.load(Ordering::Relaxed) {
+                        match active.blocks.try_send(samples.clone()) {
+                            Ok(()) => {}
+                            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                                active.stop.store(true, Ordering::Relaxed);
+                                active.failure = Some("Local audio output stopped".into());
+                            }
+                            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                                anyhow::bail!("Audio receiver exceeded its credit window")
+                            }
+                        }
+                    }
                 }
             }
             ToClient::AudioClose { session } => {
@@ -315,6 +325,41 @@ mod tests {
             }
         ));
         assert!(frontend.active.as_ref().unwrap().failure.is_none());
+    }
+    #[test]
+    fn failed_worker_does_not_abort_the_graphical_connection() {
+        let (blocks, receiver) = bounded(8);
+        drop(receiver);
+        let (_, credits) = bounded(8);
+        let (_, warnings) = bounded(1);
+        let mut frontend = Frontend {
+            active: Some(Active {
+                session: 1,
+                epoch: 2,
+                blocks,
+                credits,
+                warnings,
+                stop: Arc::new(AtomicBool::new(false)),
+                worker: None,
+                pending: 8,
+                failure: None,
+            }),
+        };
+        assert!(frontend
+            .receive(&ToClient::AudioChunk {
+                session: 1,
+                epoch: 2,
+                samples: vec![0; 2]
+            })
+            .unwrap());
+        let (out, receive) = bounded(1);
+        frontend.tick(&out);
+        assert!(matches!(
+            receive.recv().unwrap(),
+            ClientMessage::Media {
+                message: ToHost::AudioError { .. }
+            }
+        ));
     }
     proptest::proptest! {
     #[test]
