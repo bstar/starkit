@@ -419,6 +419,8 @@ fn run_impl(
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
     }
+    let mut drop_bridge =
+        super::drop_bridge::Bridge::new(launch.host.is_some() && terminal_extensions);
     let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let capabilities = super::capabilities::Capabilities::detected(&graphics);
@@ -579,13 +581,16 @@ fn run_impl(
                         fatal = Some("Invalid drag/drop message".into());
                         break;
                     }
-                    let mut out = io::stdout().lock();
-                    write!(out, "\x1b]72;{meta}")?;
-                    if let Some(payload) = payload {
-                        write!(out, ";{payload}")?;
+                    let payload = drop_bridge.identity(&meta).map(str::to_owned).or(payload);
+                    if !drop_bridge.request(&meta)? {
+                        let mut out = io::stdout().lock();
+                        write!(out, "\x1b]72;{meta}")?;
+                        if let Some(payload) = payload {
+                            write!(out, ";{payload}")?;
+                        }
+                        out.write_all(b"\x1b\\")?;
+                        out.flush()?;
                     }
-                    out.write_all(b"\x1b\\")?;
-                    out.flush()?;
                     if let Some(c) = &connection {
                         c.send(ClientMessage::EffectAck { id: effect_id })?;
                     }
@@ -705,6 +710,9 @@ fn run_impl(
                 fatal = Some("Could not start graphical session. Check the feature-enabled host executable and its session log.".into());
                 break;
             }
+            drop_bridge.reset();
+            io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+            io::stdout().flush()?;
             connection = None;
             connected = false;
             pointer.reset(&mut io::stdout().lock())?;
@@ -740,6 +748,46 @@ fn run_impl(
                 Err(error) => tracing::warn!(%error,"session reconnect failed"),
             }
             reconnect = Instant::now() + Duration::from_secs(5);
+        }
+        // Bounded file streaming leaves queue capacity for pointer/key input.
+        // Disk reads and source cleanup never run on the presentation thread.
+        if connected {
+            if let Some(c) = &connection {
+                for _ in 0..8 {
+                    if c.input.len() >= 4 {
+                        break;
+                    }
+                    let Ok(output) = drop_bridge.responses().try_recv() else {
+                        break;
+                    };
+                    let current = drop_bridge.current(output.epoch);
+                    match output.event {
+                        super::drop_bridge::Event::Ready { client } if current => {
+                            write!(io::stdout(), "\x1b]72;t=r:o=0:i={client}\x1b\\")?;
+                            io::stdout().flush()?;
+                            tracing::debug!("SSH drop captured; desktop pointer released");
+                        }
+                        super::drop_bridge::Event::Wire(text)
+                            if current || text.starts_with("t=L:") =>
+                        {
+                            if text.starts_with("t=R:") {
+                                io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+                                io::stdout().flush()?;
+                                drop_bridge.reset();
+                            }
+                            id += 1;
+                            let (revision, generation) = shown.unwrap_or((0, size.generation));
+                            c.send(ClientMessage::Input {
+                                id,
+                                revision,
+                                generation,
+                                input: Input::Osc72 { text },
+                            })?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
         // Renderer/socket readiness is independent of terminal input. During
         // interaction avoid stacking a whole idle poll onto each frame; return
@@ -843,12 +891,23 @@ fn run_impl(
                 _ => {}
             }
             if let Some(Input::Osc72 { text }) = input.as_mut() {
-                *text = logical_drop(
-                    text,
-                    terminal_grid,
-                    size,
-                    last_scene.as_ref().map_or(&[], |s| s.placements.as_slice()),
-                );
+                match drop_bridge.terminal(text) {
+                    Ok(false) => input = None,
+                    Ok(true) => {
+                        *text = logical_drop(
+                            text,
+                            terminal_grid,
+                            size,
+                            last_scene.as_ref().map_or(&[], |s| s.placements.as_slice()),
+                        );
+                    }
+                    Err(error) => {
+                        io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+                        io::stdout().flush()?;
+                        drop_bridge.reset();
+                        *text = format!("t=R:i=1;EIO:{error}");
+                    }
+                }
             }
             let ready = last_scene.as_ref().is_some_and(|s| s.revision > 0)
                 && shown.is_some_and(|(revision, generation)| {
@@ -877,6 +936,9 @@ fn run_impl(
             input: Input::Detach,
         });
     }
+    drop_bridge.reset();
+    io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+    io::stdout().flush()?;
     presenter.clear(&mut io::stdout().lock())?;
     tracing::info!(
         frames,

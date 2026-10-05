@@ -142,3 +142,26 @@ Native session tabs support an optional one-based `number`, rendered separately
 from the label. Active sessions use a soft filled rectangle and a bold label;
 inactive sessions remain unfilled and muted. Close/navigation/add controls keep
 their original independent hit targets. There is no tab underline.
+
+### Local file capabilities for graphical SSH drops
+
+For a Linux client launched with `Launch.host`, the extension-aware frontend
+advertises its own OSC 72 machine identity to Kitty. Only a terminal-confirmed
+local URI list can activate the bridge. A bounded worker captures source handles,
+then ends the desktop drop before the application waits for Copy/Move. It serves
+regular files, symlink text, and directory handles over the existing SSH input
+transport. Remote requests specify indices and handles, never filesystem paths.
+Rendering and terminal input do not perform filesystem reads or source removal.
+
+URI replies carry `X=1:B=1`: the host imports bytes instead of accessing client
+paths. Successful Move completion carries a host operation ID in `C`; the local
+worker validates the sent manifest, removes the original sources, and returns
+`t=L:C=...:o=1` (success) or `o=0` with a failure description. The application
+must retain cleanup failures in its operations history. Copy, cancellation,
+skipped entries, replaced/modified sources, and incomplete transfers cannot
+authorize source removal. Stale transfer generations discard queued file data.
+
+macOS promises, Kitty's cached `dnd-drag-*` files, and clients running on a
+machine different from Kitty retain the existing terminal file-transfer path.
+To get the local bridge, launch the graphical client locally with its SSH host
+option rather than launching the client inside an already remote shell.

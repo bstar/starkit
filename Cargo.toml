@@ -37,12 +37,13 @@ webp = ["image", "image/webp"]
 # only wanted a theme engine.
 net = ["dep:ureq"]
 # Optional native Rust pixel renderer and SSH scene relay.
-terminal-graphics = ["image", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix"]
+terminal-graphics = ["image", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"], optional = true }
 
 [dependencies]
+sha2 = { version = "0.10", optional = true }
 tiny-skia = { version = "0.11", optional = true }
 cosmic-text = { version = "0.14.2", default-features = false, features = ["std", "swash"], optional = true }
 # TUI. crossterm as a direct dependency, not only via ratatui's re-export,

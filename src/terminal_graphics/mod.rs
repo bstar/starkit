@@ -6,6 +6,7 @@ pub mod assets;
 pub mod capabilities;
 pub mod cells;
 pub mod client;
+mod drop_bridge;
 mod font;
 mod native;
 pub mod placement;
