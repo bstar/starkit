@@ -106,7 +106,8 @@ impl Launch {
     }
 }
 struct Connection {
-    child: Child,
+    child: Option<Child>,
+    socket: Option<std::os::unix::net::UnixStream>,
     input: Sender<ClientMessage>,
     messages: Receiver<ServerMessage>,
     frames: Receiver<Scene>,
@@ -119,8 +120,26 @@ impl Connection {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()?;
-        let mut stdin = child.stdin.take().context("session stdin unavailable")?;
+        let stdin = child.stdin.take().context("session stdin unavailable")?;
         let stdout = child.stdout.take().context("session stdout unavailable")?;
+        Self::streams(stdin, stdout, Some(child), None)
+    }
+    fn terminal_socket(path: &std::path::Path) -> Result<Self> {
+        let mut socket = std::os::unix::net::UnixStream::connect(path)?;
+        use std::io::Write;
+        let nonce = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .context("Invalid terminal socket")?;
+        writeln!(socket, "STAR_KIT_CLIENT {nonce}")?;
+        Self::streams(socket.try_clone()?, socket.try_clone()?, None, Some(socket))
+    }
+    fn streams(
+        mut stdin: impl io::Write + Send + 'static,
+        stdout: impl io::Read + Send + 'static,
+        child: Option<Child>,
+        socket: Option<std::os::unix::net::UnixStream>,
+    ) -> Result<Self> {
         let (input, rx) = bounded(64);
         std::thread::spawn(move || {
             for message in rx {
@@ -132,6 +151,7 @@ impl Connection {
         let (control, messages) = bounded(64);
         let (scene_tx, frames) = bounded(1);
         let old = frames.clone();
+        let terminal = socket.is_some();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
@@ -155,7 +175,12 @@ impl Connection {
                             return;
                         }
                     }
-                    Ok(None) => break,
+                    Ok(None) => {
+                        if terminal {
+                            let _ = control.send(ServerMessage::Closed);
+                        }
+                        break;
+                    }
                     Err(error) => {
                         let _ = control.send(ServerMessage::Error {
                             message: error.to_string(),
@@ -167,6 +192,7 @@ impl Connection {
         });
         Ok(Self {
             child,
+            socket,
             input,
             messages,
             frames,
@@ -180,8 +206,13 @@ impl Connection {
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 struct TerminalGuard;
@@ -404,23 +435,41 @@ pub fn key(code: KeyCode) -> String {
 }
 
 pub fn run(launch: Launch) -> Result<()> {
-    run_impl(launch, |_| None, false)
+    run_impl(launch, |_| None, false, None)
 }
 
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
-    run_impl(launch, custom, true)
+    run_impl(launch, custom, true, None)
+}
+
+/// Frontend owned by a local terminal integration, attached through the existing SSH TTY.
+pub fn run_terminal_socket_with_events(
+    path: &std::path::Path,
+    custom: fn(&Event) -> Option<Input>,
+) -> Result<()> {
+    let launch = Launch {
+        executable: String::new(),
+        host: None,
+        ssh_config: None,
+        session: "terminal".into(),
+        directory: None,
+        attach_only: true,
+    };
+    run_impl(launch, custom, true, Some(path))
 }
 
 fn run_impl(
     launch: Launch,
     custom: fn(&Event) -> Option<Input>,
     terminal_extensions: bool,
+    terminal_socket: Option<&std::path::Path>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
     }
-    let mut drop_bridge =
-        super::drop_bridge::Bridge::new(launch.host.is_some() && terminal_extensions);
+    let mut drop_bridge = super::drop_bridge::Bridge::new(
+        (launch.host.is_some() || terminal_socket.is_some()) && terminal_extensions,
+    );
     let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let capabilities = super::capabilities::Capabilities::detected(&graphics);
@@ -451,7 +500,11 @@ fn run_impl(
     }
     let started = Instant::now();
     let mut renderer = Frontend::spawn(pixels, font)?;
-    let mut connection = Some(Connection::spawn(&launch, control)?);
+    let connect = || match terminal_socket {
+        Some(path) => Connection::terminal_socket(path),
+        None => Connection::spawn(&launch, control),
+    };
+    let mut connection = Some(connect()?);
     let client = format!(
         "{}-{}",
         std::process::id(),
@@ -701,11 +754,19 @@ fn run_impl(
             && (timed_out
                 || connection
                     .as_mut()
-                    .map(|c| c.child.try_wait())
+                    .and_then(|c| c.child.as_mut())
+                    .map(|child| child.try_wait())
                     .transpose()?
                     .flatten()
                     .is_some());
         if dead {
+            if terminal_socket.is_some() {
+                fatal = Some(
+                    "Terminal bridge disconnected; remote operations continue. Relaunch to attach."
+                        .into(),
+                );
+                break;
+            }
             if epoch.is_none() {
                 fatal = Some("Could not start graphical session. Check the feature-enabled host executable and its session log.".into());
                 break;

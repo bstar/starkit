@@ -16,5 +16,7 @@ pub mod renderer;
 pub use crate::native_surface as surface;
 #[cfg(unix)]
 pub mod session;
+#[cfg(unix)]
+pub mod terminal_bridge;
 
 pub use protocol::{Component, Input, Rect, Scene, Viewport};
