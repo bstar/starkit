@@ -22,6 +22,12 @@
 
         # One version, read rather than repeated.
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        alsaPluginDir = if pkgs.stdenv.hostPlatform.isLinux then pkgs.runCommand "star-media-alsa-plugins" {} ''
+          mkdir -p $out
+          ln -s ${pkgs.pipewire}/lib/alsa-lib/*.so $out/
+          ln -s ${pkgs.alsa-plugins}/lib/alsa-lib/*.so $out/
+        '' else "";
+
       in
       {
         # There is nothing to install -- this is a library. The package exists
@@ -36,6 +42,10 @@
           version = cargoToml.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.clang ];
+          buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
 
           cargoBuildFlags = [ "--all-features" ];
           cargoTestFlags = [ "--all-features" ];
@@ -65,7 +75,14 @@
         formatter = pkgs.nixpkgs-fmt;
 
         devShells.default = pkgs.mkShell {
+          ALSA_PLUGIN_DIR = alsaPluginDir;
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
+          buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
           packages = with pkgs; [
+            pkg-config
+            clang
+            ffmpeg
             rustc
             cargo
             rustfmt

@@ -255,6 +255,19 @@ impl Painter {
             }
         }
     }
+    pub(crate) fn live_image(&mut self, id: String, pixels: Arc<RgbaImage>) {
+        self.assets.insert(
+            id,
+            Asset {
+                animation: None,
+                started: std::time::Instant::now(),
+                frame: 0,
+                encoded: "\0live".into(),
+                pixels,
+                scaled: None,
+            },
+        );
+    }
     pub fn new() -> Self {
         Self::with_font(super::font::Font::default())
     }
@@ -862,7 +875,7 @@ impl Painter {
                         if self
                             .assets
                             .get(id)
-                            .is_none_or(|old| old.encoded != *encoded)
+                            .is_none_or(|old| old.encoded != "\0live" && old.encoded != *encoded)
                         {
                             super::assets::validate_png(encoded)?;
                             let bytes =

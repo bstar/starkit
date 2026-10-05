@@ -26,6 +26,8 @@ pub enum RenderMessage {
 }
 
 pub struct Renderer {
+    live: Sender<(String, Arc<RgbaImage>)>,
+    old_live: Receiver<(String, Arc<RgbaImage>)>,
     input: Option<Sender<Scene>>,
     stale: Receiver<Scene>,
     pub output: Receiver<RenderMessage>,
@@ -38,6 +40,8 @@ impl Renderer {
     pub(crate) fn spawn_with_font(font: super::font::Font) -> Result<Self> {
         let (input, scenes) = bounded::<Scene>(1);
         let stale = scenes.clone();
+        let (live, images) = bounded::<(String, Arc<RgbaImage>)>(1);
+        let old_live = images.clone();
         let (frames, output) = bounded(2);
         let old = output.clone();
         let worker = std::thread::Builder::new()
@@ -46,12 +50,14 @@ impl Renderer {
                 let mut painter = super::native::Painter::with_font(font);
                 let mut previous = None;
                 loop {
-                    let received = if painter.animating() {
-                        scenes.recv_timeout(std::time::Duration::from_millis(20))
-                    } else {
-                        scenes
-                            .recv()
-                            .map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected)
+                    let timeout = if painter.animating() { std::time::Duration::from_millis(20) } else { std::time::Duration::from_secs(3600) };
+                    let received = crossbeam_channel::select_biased! {
+                        recv(scenes) -> result => result.map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected),
+                        recv(images) -> result => {
+                            if let Ok((id, pixels)) = result { painter.live_image(id, pixels); }
+                            if let Some(scene) = previous.clone() { Ok(scene) } else { continue; }
+                        },
+                        default(timeout) => Err(crossbeam_channel::RecvTimeoutError::Timeout),
                     };
                     let mut scene = match received {
                         Ok(scene) => scenes.try_iter().last().unwrap_or(scene),
@@ -112,11 +118,19 @@ impl Renderer {
             })?;
         tracing::info!("Native Rust graphical renderer started");
         Ok(Self {
+            live,
+            old_live,
             input: Some(input),
             stale,
             output,
             worker: Some(worker),
         })
+    }
+    pub fn live_image(&mut self, id: String, pixels: Arc<RgbaImage>) {
+        if let Err(crossbeam_channel::TrySendError::Full(item)) = self.live.try_send((id, pixels)) {
+            let _ = self.old_live.try_recv();
+            let _ = self.live.try_send(item);
+        }
     }
     pub fn scene(&mut self, scene: &Scene) -> Result<()> {
         let input = self.input.as_ref().context("Native renderer closed")?;

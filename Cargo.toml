@@ -36,12 +36,17 @@ webp = ["image", "image/webp"]
 # only wanted a theme engine.
 net = ["dep:ureq"]
 # Optional native Rust pixel renderer and SSH scene relay.
-terminal-graphics = ["gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
+terminal-graphics = ["media", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
+
+media = ["image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"], optional = true }
 
 [dependencies]
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling", "filter"], optional = true }
+cpal = { version = "0.16", optional = true }
+rtrb = { version = "0.3", optional = true }
 png = { version = "0.18", optional = true }
 sha2 = { version = "0.10", optional = true }
 tiny-skia = { version = "0.11", optional = true }

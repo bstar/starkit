@@ -55,3 +55,16 @@ The `experiment/terminal-graphics` branch adds an optional shared native Rust
 renderer and persistent SSH scene relay. Neither the local renderer nor remote application needs a browser or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
 launch, verification and compatibility details. The ordinary TUI remains the
 standard build.
+
+### Experimental native media previews
+
+The `media` feature provides bounded native FFmpeg poster decoding. The
+`terminal-graphics` feature additionally provides local video scheduling, CPAL
+audio, a native timeline surface and credit-based H.264/AAC preview streaming
+over the existing SSH scene transport. Codec/audio contexts stay on workers;
+the pixel renderer receives RGBA frames without serializing scenes per frame.
+Applications own file selection and lifecycle, not codec or audio backends.
+
+Build optional media through `nix develop` (FFmpeg, clang/libclang, pkg-config;
+ALSA and matching audio plugins on Linux). `--no-default-features` continues to
+link no decoder. Physical macOS audio/Kitty verification remains outstanding.

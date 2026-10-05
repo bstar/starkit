@@ -26,6 +26,10 @@ pub trait Controller {
     fn output_pending(&mut self, _pending: bool) {}
     fn scene(&mut self, viewport: Viewport) -> Scene;
     fn input(&mut self, input: Input);
+    fn media(&mut self, _message: super::media::ToHost) {}
+    fn media_chunks(&mut self) -> Vec<ServerMessage> {
+        vec![]
+    }
     fn effects(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
@@ -116,6 +120,7 @@ struct Peer {
     socket: UnixStream,
     messages: Receiver<Option<ClientMessage>>,
     control: Sender<ServerMessage>,
+    media: Sender<ServerMessage>,
     frames: Sender<ServerMessage>,
     old_frame: Receiver<ServerMessage>,
     client: Option<String>,
@@ -163,6 +168,7 @@ impl Peer {
             })?;
         let (control, rx) = bounded(64);
         let (frames, frame_rx) = bounded(1);
+        let (media, media_rx) = bounded(8);
         let old_frame = frame_rx.clone();
         std::thread::Builder::new()
             .name("star-session-output".into())
@@ -170,6 +176,7 @@ impl Peer {
                 let message = crossbeam_channel::select_biased! {
                     recv(rx)->m=>match m {Ok(m)=>m,Err(_)=>return},
                     recv(frame_rx)->m=>match m {Ok(m)=>m,Err(_)=>return},
+                    recv(media_rx)->m=>match m {Ok(m)=>m,Err(_)=>return},
                 };
                 if write_message(&message, &mut writer).is_err() {
                     let _ = writer.shutdown(std::net::Shutdown::Both);
@@ -182,6 +189,7 @@ impl Peer {
             socket,
             messages,
             control,
+            media,
             frames,
             old_frame,
             client: None,
@@ -370,6 +378,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                 break;
             };
             match message {
+                ClientMessage::Media { message } => controller.media(message),
                 ClientMessage::Hello {
                     version,
                     viewport: v,
@@ -471,6 +480,13 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
         }
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
+        if let Some(p) = &peer {
+            if p.media.len() <= 6 {
+                for message in controller.media_chunks() {
+                    let _ = p.media.try_send(message);
+                }
+            }
+        }
         if peer.as_ref().is_some_and(|p| p.client.is_some())
             && ((attached
                 && peer

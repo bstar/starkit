@@ -10,6 +10,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added
 
+- Experimental native media previews: bounded FFmpeg posters, H.264/AAC SSH
+  proxy, local video scheduling and CPAL audio, generation-scoped seek/cancel,
+  priority media transport and a shared native seek timeline.
+
 - **A `webp` feature.** The `image` decoder for WebP, which is what news
   sites serve now, behind its own feature the way GIF and BMP are, so only
   an application that draws pictures out of web pages carries it.

@@ -20,3 +20,5 @@ pub mod session;
 pub mod terminal_bridge;
 
 pub use protocol::{Component, Input, Rect, Scene, Viewport};
+
+pub mod media;

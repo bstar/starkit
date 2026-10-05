@@ -169,3 +169,22 @@ insets. Pointer projection and raster row edges must stay identical. Preserve
 terminal-derived font sizes when placing regions; do not resize text bitmaps.
 Native surfaces carry physical text sizes, so resizing their host changes their
 layout boxes without scaling the glyphs. `pixel_layout` is separately negotiated.
+
+
+## Native video preview experiment
+
+`media` owns native FFmpeg poster/proxy/decoding and CPAL output. Terminal
+`media` messages negotiate video and trusted local file access separately; a
+remote frontend must never open a host-supplied local path. Generations scope
+chunks, credits and status. Session output prioritizes control and scenes over
+media. Keep cancellation out of UI locks and audio callbacks free of allocation.
+
+FFmpeg 9 filter sink setters can silently fail to constrain channel layouts.
+The AAC proxy uses an explicit `aformat` filter and checks format/rate/channels
+before encoding; passing a mono plane to a stereo AAC encoder caused a confirmed
+segfault during development. Keep that guard and the mono-source integration test.
+
+Muxer writes are often small TS packets, not 32 KiB buffers. Aggregate them
+before charging the byte credit window; otherwise eight small packets can fill
+the bounded decoder channel while unused byte credits keep the sender running.
+`StreamIo` flushes the final partial chunk when its output context is released.

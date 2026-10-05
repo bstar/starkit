@@ -28,6 +28,11 @@ impl Frontend {
             Self::Cells(r) => r.scene(scene),
         }
     }
+    fn live_image(&mut self, id: String, pixels: std::sync::Arc<crate::image::RgbaImage>) {
+        if let Self::Pixels(r) = self {
+            r.live_image(id, pixels);
+        }
+    }
     fn clipboard(&mut self, text: &str) -> Result<()> {
         match self {
             Self::Pixels(r) => r.clipboard(text),
@@ -472,7 +477,9 @@ fn run_impl(
     );
     let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
-    let capabilities = super::capabilities::Capabilities::detected(&graphics);
+    let mut capabilities = super::capabilities::Capabilities::detected(&graphics);
+    capabilities.local_media = launch.host.is_none() && terminal_socket.is_none();
+    capabilities.video = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     tracing::info!(?capabilities, "Terminal presentation capabilities");
     let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     let cell = graphics.cell_size().unwrap_or((10, 20));
@@ -500,6 +507,7 @@ fn run_impl(
     }
     let started = Instant::now();
     let mut renderer = Frontend::spawn(pixels, font)?;
+    let mut media = super::media::Frontend::new(capabilities.local_media);
     let connect = || match terminal_socket {
         Some(path) => Connection::terminal_socket(path),
         None => Connection::spawn(&launch, control),
@@ -553,6 +561,11 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                ServerMessage::Media { message } => {
+                    if let Some(c) = &connection {
+                        media.receive(message, &c.input)?;
+                    }
+                }
                 ServerMessage::Hello {
                     version, epoch: e, ..
                 } => {
@@ -682,6 +695,11 @@ fn run_impl(
                 last_scene = Some(scene);
             }
         }
+        if let Some(c) = &connection {
+            if let Some((id, pixels)) = media.tick(&c.input) {
+                renderer.live_image(id, pixels);
+            }
+        }
         for message in renderer.output().try_iter().collect::<Vec<_>>() {
             match message {
                 RenderMessage::Frame {
@@ -760,6 +778,7 @@ fn run_impl(
                     .flatten()
                     .is_some());
         if dead {
+            media.reset();
             if terminal_socket.is_some() {
                 fatal = Some(
                     "Terminal bridge disconnected; remote operations continue. Relaunch to attach."

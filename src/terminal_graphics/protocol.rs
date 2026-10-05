@@ -352,6 +352,9 @@ pub enum Input {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    Media {
+        message: super::media::ToHost,
+    },
     Hello {
         version: u16,
         viewport: Viewport,
@@ -379,6 +382,9 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    Media {
+        message: super::media::ToClient,
+    },
     Hello {
         version: u16,
         session: String,
