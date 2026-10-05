@@ -5,6 +5,7 @@ use base64::Engine as _;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::io;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -382,7 +383,7 @@ mod worker {
     struct Node {
         parent: Arc<OwnedFd>,
         name: OsString,
-        fd: Arc<OwnedFd>,
+        fd: Option<Arc<OwnedFd>>,
         stat: rustix::fs::Stat,
         children: Option<Vec<usize>>,
         served: bool,
@@ -390,13 +391,7 @@ mod worker {
     }
     impl Node {
         fn capture(parent: Arc<OwnedFd>, name: OsString, depth: usize) -> io::Result<Self> {
-            let fd = Arc::new(rustix::fs::openat(
-                &*parent,
-                &name,
-                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )?);
-            let stat = rustix::fs::fstat(&*fd)?;
+            let stat = rustix::fs::statat(&*parent, &name, AtFlags::SYMLINK_NOFOLLOW)?;
             if !matches!(
                 FileType::from_raw_mode(stat.st_mode),
                 FileType::RegularFile | FileType::Directory | FileType::Symlink
@@ -409,7 +404,7 @@ mod worker {
             Ok(Self {
                 parent,
                 name,
-                fd,
+                fd: None,
                 stat,
                 children: None,
                 served: false,
@@ -444,14 +439,22 @@ mod worker {
     impl Files {
         fn capture(paths: &[PathBuf]) -> io::Result<Self> {
             let mut nodes: Vec<Node> = Vec::new();
+            let mut parents = HashMap::new();
             for path in paths {
-                let parent = Arc::new(rustix::fs::open(
-                    path.parent().ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "Missing source parent")
-                    })?,
-                    OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )?);
+                let parent_path = path.parent().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "Missing source parent")
+                })?;
+                let parent = if let Some(parent) = parents.get(parent_path) {
+                    Arc::clone(parent)
+                } else {
+                    let parent = Arc::new(rustix::fs::open(
+                        parent_path,
+                        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )?);
+                    parents.insert(parent_path.to_owned(), Arc::clone(&parent));
+                    parent
+                };
                 let node = Node::capture(parent, path.file_name().unwrap().to_owned(), 0)?;
                 if nodes
                     .iter()
@@ -526,10 +529,28 @@ mod worker {
                 ));
             }
             self.nodes[index].unchanged()?;
+            if self.nodes[index].fd.is_none() {
+                let node = &self.nodes[index];
+                let fd = rustix::fs::openat(
+                    &*node.parent,
+                    &node.name,
+                    OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )?;
+                let actual = rustix::fs::fstat(&fd)?;
+                if actual.st_dev != node.stat.st_dev || actual.st_ino != node.stat.st_ino {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Drop source was replaced",
+                    ));
+                }
+                self.nodes[index].fd = Some(Arc::new(fd));
+            }
             let node = &self.nodes[index];
+            let fd = node.fd.as_ref().unwrap();
             match FileType::from_raw_mode(node.stat.st_mode) {
                 FileType::RegularFile => {
-                    let mut file = File::open(format!("/proc/self/fd/{}", node.fd.as_raw_fd()))?;
+                    let mut file = File::open(format!("/proc/self/fd/{}", fd.as_raw_fd()))?;
                     let mut buffer = vec![0u8; CHUNK];
                     loop {
                         if cancel.load(Ordering::Acquire) {
@@ -556,7 +577,7 @@ mod worker {
                     emit(out, Event::Wire(format!("{meta}:X=0:m=0;")), cancel)?;
                 }
                 FileType::Symlink => {
-                    let target = rustix::fs::readlinkat(&*node.fd, "", Vec::new())?;
+                    let target = rustix::fs::readlinkat(&**fd, "", Vec::new())?;
                     emit_data(out, &format!("{meta}:X=1"), target.as_bytes(), cancel)?;
                 }
                 FileType::Directory => {
@@ -566,13 +587,13 @@ mod worker {
                             "Drop tree too deep",
                         ));
                     }
-                    let mut names = fs::read_dir(format!("/proc/self/fd/{}", node.fd.as_raw_fd()))?
+                    let mut names = fs::read_dir(format!("/proc/self/fd/{}", fd.as_raw_fd()))?
                         .map(|e| e.map(|e| e.file_name()))
                         .collect::<io::Result<Vec<_>>>()?;
                     names.sort();
                     let mut data = Vec::new();
                     let mut children = Vec::new();
-                    let parent = Arc::clone(&node.fd);
+                    let parent = Arc::clone(fd);
                     let depth = node.depth + 1;
                     for name in names {
                         if cancel.load(Ordering::Acquire) {
@@ -605,6 +626,9 @@ mod worker {
                 _ => unreachable!(),
             }
             self.nodes[index].served = true;
+            if FileType::from_raw_mode(self.nodes[index].stat.st_mode) != FileType::Directory {
+                self.nodes[index].fd = None;
+            }
             Ok(())
         }
         fn remove_sources(&self) -> io::Result<()> {
@@ -646,8 +670,9 @@ mod worker {
         cancel: &AtomicBool,
         completion: Option<u64>,
     ) {
+        let reason = reason.to_string();
+        tracing::warn!(%reason, client, operation = ?completion, "Local SSH drop failed");
         let description: String = reason
-            .to_string()
             .chars()
             .filter(|c| !c.is_control())
             .take(2048)
@@ -669,13 +694,6 @@ mod worker {
         output: OutputSender,
         cancel: Arc<AtomicBool>,
     ) {
-        let mut files = match Files::capture(&paths) {
-            Ok(files) => files,
-            Err(e) => {
-                error(&output, pending.client, e, &cancel, None);
-                return;
-            }
-        };
         if emit(
             &output,
             Event::Ready {
@@ -697,6 +715,13 @@ mod worker {
         {
             return;
         }
+        let mut files = match Files::capture(&paths) {
+            Ok(files) => files,
+            Err(e) => {
+                error(&output, pending.client, e, &cancel, None);
+                return;
+            }
+        };
         for raw in requests {
             if cancel.load(Ordering::Acquire) {
                 return;

@@ -147,8 +147,8 @@ their original independent hit targets. There is no tab underline.
 
 For a Linux client launched with `Launch.host`, the extension-aware frontend
 advertises its own OSC 72 machine identity to Kitty. Only a terminal-confirmed
-local URI list can activate the bridge. A bounded worker captures source handles,
-then ends the desktop drop before the application waits for Copy/Move. It serves
+local URI list can activate the bridge. The desktop drop ends after capturing the URI list, before any source disk IO.
+A bounded worker captures source identities and lazily opens file handles. It serves
 regular files, symlink text, and directory handles over the existing SSH input
 transport. Remote requests specify indices and handles, never filesystem paths.
 Rendering and terminal input do not perform filesystem reads or source removal.
