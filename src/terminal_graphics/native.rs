@@ -36,7 +36,7 @@ struct TextStyle<'a> {
 }
 
 struct Asset {
-    animation: Option<crate::anim::FrameSequence>,
+    animation: Option<crate::animation::Animation>,
     started: std::time::Instant,
     frame: usize,
     encoded: String,
@@ -190,7 +190,7 @@ impl Painter {
         self.assets.values().any(|a| {
             a.animation
                 .as_ref()
-                .is_some_and(|seq| seq.at(a.started.elapsed()).0 != a.frame)
+                .is_some_and(|seq| seq.index(a.started.elapsed()) != a.frame)
         })
     }
     pub(super) fn animating(&self) -> bool {
@@ -880,39 +880,19 @@ impl Painter {
                                     crate::image::metadata::LoopCount::Infinite => 0,
                                     crate::image::metadata::LoopCount::Finite(n) => n.get(),
                                 };
-                                let mut frames = Vec::new();
-                                let mut total = std::time::Duration::ZERO;
-                                let mut bytes = 0usize;
-                                for frame in decoder.into_frames() {
-                                    let frame = frame?;
-                                    bytes = bytes.saturating_add(frame.buffer().as_raw().len());
-                                    anyhow::ensure!(
-                                        bytes <= 64_000_000 && frames.len() < 1024,
-                                        "Animation cache exceeds limit"
-                                    );
-                                    let (n, d) = frame.delay().numer_denom_ms();
-                                    let delay = std::time::Duration::from_millis(u64::from(
-                                        n.checked_div(d).unwrap_or(0),
-                                    ))
-                                    .max(crate::anim::MIN_DELAY);
-                                    total += delay;
-                                    frames.push(crate::anim::Frame {
-                                        img: Arc::new(frame.into_buffer()),
-                                        delay,
-                                    });
-                                }
-                                anyhow::ensure!(!frames.is_empty(), "Animation has no frames");
-                                let pixels = Arc::clone(&frames[0].img);
-                                (
-                                    Some(crate::anim::FrameSequence {
-                                        frames,
-                                        total,
-                                        id: 0,
-                                        truncated: false,
-                                        plays,
-                                    }),
-                                    pixels,
-                                )
+                                let started = std::time::Instant::now();
+                                let animation = crate::animation::Animation::collect(
+                                    decoder.into_frames(),
+                                    plays,
+                                    64_000_000,
+                                    || started.elapsed() > std::time::Duration::from_secs(15),
+                                )?;
+                                anyhow::ensure!(
+                                    !animation.truncated,
+                                    "Animation cache exceeds limit"
+                                );
+                                let pixels = animation.frame(0)?;
+                                (Some(animation), pixels)
                             } else {
                                 (
                                     None,
@@ -930,18 +910,14 @@ impl Painter {
                                     asset
                                         .animation
                                         .as_ref()
-                                        .map_or(asset.pixels.as_raw().len(), |seq| {
-                                            seq.frames.iter().map(|f| f.img.as_raw().len()).sum()
-                                        })
+                                        .map_or(asset.pixels.as_raw().len(), |seq| seq.bytes())
                                 })
                                 .sum::<usize>();
                             anyhow::ensure!(
                                 retained_bytes
-                                    + animation.as_ref().map_or(pixels.as_raw().len(), |seq| seq
-                                        .frames
-                                        .iter()
-                                        .map(|f| f.img.as_raw().len())
-                                        .sum())
+                                    + animation
+                                        .as_ref()
+                                        .map_or(pixels.as_raw().len(), |seq| seq.bytes())
                                     <= 64_000_000,
                                 "Preview cache exceeds limit"
                             );
@@ -967,10 +943,10 @@ impl Painter {
                         .sum::<usize>();
                     if let Some(asset) = self.assets.get_mut(id) {
                         if let Some(seq) = &asset.animation {
-                            let (index, frame) = seq.at(asset.started.elapsed());
+                            let index = seq.index(asset.started.elapsed());
                             if index != asset.frame {
                                 asset.frame = index;
-                                asset.pixels = Arc::clone(&frame.img);
+                                asset.pixels = seq.frame(index)?;
                                 asset.scaled = None;
                             }
                         }
@@ -1472,6 +1448,25 @@ mod tests {
             id: 0,
             truncated: false,
         };
+        let frames = seq
+            .frames
+            .iter()
+            .map(|f| {
+                Ok(crate::image::Frame::from_parts(
+                    (*f.img).clone(),
+                    0,
+                    0,
+                    crate::image::Delay::from_numer_denom_ms(f.delay.as_millis() as u32, 1),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let seq = crate::animation::Animation::collect(
+            crate::image::Frames::new(Box::new(frames.into_iter())),
+            1,
+            64_000_000,
+            || false,
+        )
+        .unwrap();
         let mut scene = scene();
         scene.viewport = super::super::Viewport {
             columns: 20,

@@ -40,6 +40,9 @@ pub struct Capabilities {
     pub native_surfaces: bool,
     #[serde(default)]
     pub pixel_layout: bool,
+    /// Decode and play animation assets locally without new controller scenes.
+    #[serde(default)]
+    pub animated_images: bool,
 }
 
 impl Capabilities {
@@ -68,6 +71,7 @@ impl Capabilities {
             presentation_ack: interactive,
             native_surfaces: true,
             pixel_layout: true,
+            animated_images: true,
         }
     }
 }
@@ -87,6 +91,7 @@ mod tests {
             presentation_ack: true,
             native_surfaces: true,
             pixel_layout: true,
+            animated_images: true,
         };
         let report = serde_json::to_value(capabilities).unwrap();
         assert_eq!(report["image_transport"], "kitty");

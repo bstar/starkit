@@ -51,6 +51,8 @@ pub use ureq;
 // whatever else was landing at the same time is a single hunk.
 #[cfg(feature = "gif")]
 pub mod anim;
+#[cfg(feature = "gif")]
+pub mod animation;
 pub mod dock;
 pub mod input;
 pub mod vlist;
