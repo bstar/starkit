@@ -25,7 +25,7 @@ class Session:
         from kitty.fast_data_types import add_timer
         from kitty.launch import launch, parse_launch_args
         self.boss, self.window, self.nonce = boss, window, nonce
-        self.root = tempfile.mkdtemp(prefix='star-kit-terminal-')
+        self.root = tempfile.mkdtemp(prefix='star-kit-terminal-', dir='/tmp')
         self.listener = socket.socket(socket.AF_UNIX)
         path = os.path.join(self.root, nonce)
         self.listener.bind(path)
@@ -38,6 +38,8 @@ class Session:
         self.frame = bytearray()
         self.output = deque()
         self.output_size = 0
+        self.pending_inputs = {}
+        self.pending_input_bytes = 0
         self.closed = False
         self.overlay = None
         self.deadline = time.monotonic() + 20
@@ -81,7 +83,9 @@ class Session:
             self.frame.extend(chunk)
         elif op == 'end':
             # Reject raw newlines/escape injection into the local transport.
-            json.loads(self.frame)
+            message = json.loads(self.frame)
+            if message.get('type') == 'ack':
+                self.pending_input_bytes -= self.pending_inputs.pop(message.get('id'), 0)
             if b'\n' in self.frame or self.output_size + len(self.frame) + 1 > MAX_MESSAGE * 2:
                 raise ValueError('Terminal bridge queue exceeds limit')
             value = bytes(self.frame) + b'\n'
@@ -103,6 +107,8 @@ class Session:
                     return
             # Bound work on Kitty's main loop, leaving time for pointer events.
             for _ in range(8):
+                if len(self.incoming) > 256 * 1024 and b'\n' in self.incoming:
+                    break
                 try:
                     chunk = self.peer.recv(65536)
                 except BlockingIOError:
@@ -118,14 +124,24 @@ class Session:
                 if end < 0:
                     break
                 line = bytes(self.incoming[:end])
-                del self.incoming[:end + 1]
                 if not self.authenticated:
                     if line != f'STAR_KIT_CLIENT {self.nonce}'.encode():
                         raise ValueError('Invalid terminal bridge capability')
                     self.authenticated = True
                 else:
-                    json.loads(line)
+                    message = json.loads(line)
+                    # Credits keep a slow SSH/drive from filling Kitty's PTY
+                    # write queue. Host admission acknowledges every Input.
+                    if message.get('type') == 'input':
+                        if self.pending_input_bytes and self.pending_input_bytes + len(line) > 256 * 1024:
+                            break
+                        identity = message['id']
+                        if identity in self.pending_inputs:
+                            raise ValueError('Duplicate native input identity')
+                        self.pending_inputs[identity] = len(line)
+                        self.pending_input_bytes += len(line)
                     self.reply(line.decode())
+                del self.incoming[:end + 1]
             if self.authenticated:
                 for _ in range(8):
                     if not self.output:

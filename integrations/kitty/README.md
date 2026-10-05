@@ -32,7 +32,18 @@ executable, local path, or target window. Each session has a random capability,
 private directory and Unix socket. Payloads and queues are bounded, and socket
 IO on Kitty's main loop is nonblocking. Genuine desktop drops are handled by the
 local Rust client, preserving source capability checks and deferred Move cleanup.
+Input credits are released by host acknowledgements, so slow connections and
+drives backpressure file streaming without an unbounded Kitty PTY write queue.
 
 This requires installation on each client machine and the updated application
 on the SSH host. It does not require enabling general Kitty remote control.
 It is an experimental terminal integration, not a feature of unmodified Kitty.
+Verified on Linux with Kitty 0.48.2, using a real SSH TTY and Nautilus mouse drops
+for regular files, directories and symlinks. macOS is supported by the Unix
+transport implementation but has not been exercised in the desktop fixture.
+
+Run transport isolation/backpressure checks without desktop access:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 integrations/kitty/test_star_kit.py
+```
