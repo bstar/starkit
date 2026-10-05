@@ -77,12 +77,48 @@ pub(crate) fn dimensions(w: u32, h: u32, limit: u32) -> (u32, u32) {
         ((f64::from(h) * factor) as u32 / 2 * 2).max(2),
     )
 }
+// Stream headers may not describe a pixel format until the first decoded frame.
+// Passing that unknown format to FFmpeg 9's scaler aborts the entire process.
+pub(crate) fn scale_frame(
+    frame: &av::frame::Video,
+    scale: &mut Option<av::software::scaling::Context>,
+    format: av::format::Pixel,
+    width: u32,
+    height: u32,
+) -> Result<av::frame::Video> {
+    anyhow::ensure!(
+        frame.format() != av::format::Pixel::None
+            && frame.width() > 0
+            && frame.height() > 0
+            && u64::from(frame.width()) * u64::from(frame.height()) <= 32_000_000,
+        "Invalid decoded video format or dimensions"
+    );
+    if scale.as_ref().is_none_or(|context| {
+        let input = context.input();
+        input.format != frame.format()
+            || input.width != frame.width()
+            || input.height != frame.height()
+    }) {
+        *scale = Some(av::software::scaling::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            format,
+            width,
+            height,
+            av::software::scaling::Flags::BILINEAR,
+        )?);
+    }
+    let mut out = av::frame::Video::empty();
+    scale.as_mut().unwrap().run(frame, &mut out)?;
+    Ok(out)
+}
 pub(crate) fn rgba(
     frame: &av::frame::Video,
-    scale: &mut av::software::scaling::Context,
+    scale: &mut Option<av::software::scaling::Context>,
+    bounds: (u32, u32),
 ) -> Result<crate::image::RgbaImage> {
-    let mut out = av::frame::Video::empty();
-    scale.run(frame, &mut out)?;
+    let out = scale_frame(frame, scale, av::format::Pixel::RGBA, bounds.0, bounds.1)?;
     let mut pixels = Vec::with_capacity(out.width() as usize * out.height() as usize * 4);
     for row in out
         .data(0)
@@ -114,15 +150,7 @@ pub fn poster(path: &Path, cancel: Arc<AtomicBool>) -> Result<Poster> {
         "Video dimensions exceed preview limits"
     );
     let (w, h) = dimensions(decoder.width(), decoder.height(), 480);
-    let mut scale = av::software::scaling::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        av::format::Pixel::RGBA,
-        w,
-        h,
-        av::software::scaling::Flags::BILINEAR,
-    )?;
+    let mut scale = None;
     let duration = (input.duration() as f64 / 1_000_000.0).max(0.0);
     let audio = input.streams().best(av::media::Type::Audio).is_some();
     let started = std::time::Instant::now();
@@ -138,7 +166,7 @@ pub fn poster(path: &Path, cancel: Arc<AtomicBool>) -> Result<Poster> {
         let mut frame = av::frame::Video::empty();
         if decoder.receive_frame(&mut frame).is_ok() {
             return Ok(Poster {
-                pixels: Arc::new(rgba(&frame, &mut scale)?),
+                pixels: Arc::new(rgba(&frame, &mut scale, (w, h))?),
                 duration,
                 width: decoder.width(),
                 height: decoder.height(),
@@ -179,6 +207,30 @@ pub fn timeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scaling_waits_for_valid_frames_and_rebuilds_after_format_changes() {
+        init().unwrap();
+        let mut scaler = None;
+        assert!(scale_frame(
+            &av::frame::Video::empty(),
+            &mut scaler,
+            av::format::Pixel::RGBA,
+            16,
+            16
+        )
+        .is_err());
+        assert!(scaler.is_none());
+        for (format, width, height) in [
+            (av::format::Pixel::YUV420P, 32, 24),
+            (av::format::Pixel::YUV420P10LE, 48, 32),
+            (av::format::Pixel::YUV420P, 32, 24),
+        ] {
+            let frame = av::frame::Video::new(format, width, height);
+            let out = scale_frame(&frame, &mut scaler, av::format::Pixel::RGBA, 16, 16).unwrap();
+            assert_eq!((out.width(), out.height()), (16, 16));
+            assert_eq!(scaler.as_ref().unwrap().input().format, format);
+        }
+    }
     #[test]
     fn profiles_are_bounded_and_do_not_upscale() {
         assert_eq!(Quality::Balanced.parameters(), (480, 24, 1_500_000));

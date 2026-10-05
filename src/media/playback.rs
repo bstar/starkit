@@ -112,15 +112,7 @@ impl Player {
                         "Video exceeds preview limits"
                     );
                     let (w, h) = dimensions(video.width(), video.height(), 720);
-                    let mut scale = av::software::scaling::Context::get(
-                        video.format(),
-                        video.width(),
-                        video.height(),
-                        format::Pixel::RGBA,
-                        w,
-                        h,
-                        av::software::scaling::Flags::BILINEAR,
-                    )?;
+                    let mut scale = None;
                     let mut sound = input.streams().best(media::Type::Audio).and_then(|s| {
                         let mut decoder = codec::context::Context::from_parameters(s.parameters())
                             .ok()?
@@ -154,7 +146,7 @@ impl Player {
                                 continue;
                             }
                             let mut item = Frame {
-                                pixels: Arc::new(rgba(&f, &mut scale)?),
+                                pixels: Arc::new(rgba(&f, &mut scale, (w, h))?),
                                 seconds,
                             };
                             loop {

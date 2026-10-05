@@ -6,7 +6,7 @@ use std::io::Write;
 struct Video {
     decoder: codec::decoder::Video,
     encoder: encoder::Video,
-    scale: av::software::scaling::Context,
+    scale: Option<av::software::scaling::Context>,
     index: usize,
     time: Rational,
     last: i64,
@@ -26,8 +26,13 @@ impl Video {
                 continue;
             }
             self.last = pts;
-            let mut resized = frame::Video::empty();
-            self.scale.run(&f, &mut resized)?;
+            let mut resized = scale_frame(
+                &f,
+                &mut self.scale,
+                format::Pixel::YUV420P,
+                self.encoder.width(),
+                self.encoder.height(),
+            )?;
             resized.set_pts(Some(pts));
             resized.set_kind(av::picture::Type::None);
             self.encoder.send_frame(&resized)?;
@@ -159,19 +164,10 @@ pub fn encode_to_fit(
     );
     let enc = enc.open_with(opts)?;
     output.add_stream(codec)?.set_parameters(&enc);
-    let scale = av::software::scaling::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        format::Pixel::YUV420P,
-        w,
-        h,
-        av::software::scaling::Flags::BILINEAR,
-    )?;
     let mut video = Video {
         decoder,
         encoder: enc,
-        scale,
+        scale: None,
         index,
         time,
         last: -1,
