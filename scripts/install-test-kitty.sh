@@ -5,9 +5,14 @@ destination="${1:?Pass a private destination directory}"
 mkdir -p "$destination"
 case "$(uname -s)" in
   Linux)
+    case "$(uname -m)" in
+      x86_64) architecture=x86_64; checksum=d573618b911e9c461bd421b96c13c74c7f1cb2f1ac9c327818d4ff84366cf5c6 ;;
+      aarch64|arm64) architecture=arm64; checksum=0c81a995614426cccf0fecaf7d104d47cd63bbccf173d14976e9f92e3d60fce6 ;;
+      *) echo "Unsupported test architecture" >&2; exit 1 ;;
+    esac
     archive="$destination/kitty.txz"
-    curl --fail --location --retry 3 -o "$archive" https://github.com/kovidgoyal/kitty/releases/download/v0.49.2/kitty-0.49.2-x86_64.txz
-    echo "d573618b911e9c461bd421b96c13c74c7f1cb2f1ac9c327818d4ff84366cf5c6  $archive" | sha256sum --check
+    curl --fail --location --retry 3 -o "$archive" "https://github.com/kovidgoyal/kitty/releases/download/v0.49.2/kitty-0.49.2-$architecture.txz"
+    echo "$checksum  $archive" | sha256sum --check
     mkdir -p "$destination/runtime"
     tar -xJf "$archive" -C "$destination/runtime"
     ;;
