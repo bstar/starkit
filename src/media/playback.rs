@@ -92,58 +92,7 @@ impl Player {
         let clock_notice = notice.clone();
         std::thread::Builder::new()
             .name("star-video-clock".into())
-            .spawn(move || {
-                let mut base = Instant::now();
-                let mut first = None;
-                let mut buffering_since = None;
-                while !c.cancelled.load(Ordering::Relaxed) {
-                    let f = match queue.recv_timeout(Duration::from_millis(50)) {
-                        Ok(f) => f,
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                            c.buffering.store(true, Ordering::Relaxed);
-                            buffering_since.get_or_insert_with(Instant::now);
-                            continue;
-                        }
-                        Err(_) => break,
-                    };
-                    c.buffering.store(false, Ordering::Relaxed);
-                    if let Some(wait) = buffering_since.take() {
-                        base += wait.elapsed();
-                    }
-                    // A paused seek still presents its first decoded frame.
-                    let initial = first.is_none();
-                    let origin = *first.get_or_insert(f.seconds);
-                    if first == Some(f.seconds) && c.position_ms.load(Ordering::Relaxed) == 0 {
-                        base = Instant::now();
-                    }
-                    loop {
-                        if c.cancelled.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if !initial && c.paused.load(Ordering::Relaxed) {
-                            let t = Instant::now();
-                            std::thread::sleep(Duration::from_millis(10));
-                            base += t.elapsed();
-                            continue;
-                        }
-                        let target = Duration::from_secs_f64((f.seconds - origin).max(0.0));
-                        if base.elapsed() >= target {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    c.position_ms.store(
-                        ((start + f.seconds - origin) * 1000.0) as u64,
-                        Ordering::Relaxed,
-                    );
-                    if let Err(crossbeam_channel::TrySendError::Full(f)) = show.try_send(f) {
-                        let _ = old.try_recv();
-                        let _ = show.try_send(f);
-                    }
-                }
-                c.finished.store(true, Ordering::Relaxed);
-                let _ = clock_notice.try_send("Playback finished".into());
-            })?;
+            .spawn(move || schedule_frames(queue, show, old, c, clock_notice, start))?;
         std::thread::Builder::new()
             .name("star-video-decoder".into())
             .spawn(move || {
@@ -389,5 +338,113 @@ impl Read for StreamReader {
                 Err(_) => {}
             }
         }
+    }
+}
+
+// The first timed-out receive is part of the stall too. Excluding it moves
+// the video clock ahead by 50 ms and presents buffered frames in a burst.
+struct FrameClock {
+    base: Instant,
+    buffering_since: Option<Instant>,
+}
+impl FrameClock {
+    fn new(base: Instant) -> Self {
+        Self {
+            base,
+            buffering_since: None,
+        }
+    }
+    fn starved(&mut self, wait_started: Instant) {
+        self.buffering_since.get_or_insert(wait_started);
+    }
+    fn resume(&mut self, now: Instant) {
+        if let Some(started) = self.buffering_since.take() {
+            self.base += now.duration_since(started);
+        }
+    }
+}
+
+fn schedule_frames(
+    queue: Receiver<Frame>,
+    show: Sender<Frame>,
+    old: Receiver<Frame>,
+    c: Arc<Controls>,
+    clock_notice: Sender<String>,
+    start: f64,
+) {
+    let mut clock = FrameClock::new(Instant::now());
+    let mut first = None;
+    while !c.cancelled.load(Ordering::Relaxed) {
+        let waiting_since = Instant::now();
+        let f = match queue.recv_timeout(Duration::from_millis(50)) {
+            Ok(f) => f,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                c.buffering.store(true, Ordering::Relaxed);
+                clock.starved(waiting_since);
+                continue;
+            }
+            Err(_) => break,
+        };
+        c.buffering.store(false, Ordering::Relaxed);
+        clock.resume(Instant::now());
+        // A paused seek still presents its first decoded frame.
+        let initial = first.is_none();
+        let origin = *first.get_or_insert(f.seconds);
+        if first == Some(f.seconds) && c.position_ms.load(Ordering::Relaxed) == 0 {
+            clock.base = Instant::now();
+        }
+        loop {
+            if c.cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+            if !initial && c.paused.load(Ordering::Relaxed) {
+                let t = Instant::now();
+                std::thread::sleep(Duration::from_millis(10));
+                clock.base += t.elapsed();
+                continue;
+            }
+            let target = Duration::from_secs_f64((f.seconds - origin).max(0.0));
+            if clock.base.elapsed() >= target {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        c.position_ms.store(
+            ((start + f.seconds - origin) * 1000.0) as u64,
+            Ordering::Relaxed,
+        );
+        if let Err(crossbeam_channel::TrySendError::Full(f)) = show.try_send(f) {
+            let _ = old.try_recv();
+            let _ = show.try_send(f);
+        }
+    }
+    c.finished.store(true, Ordering::Relaxed);
+    let _ = clock_notice.try_send("Playback finished".into());
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    #[test]
+    fn buffering_recovery_keeps_frames_paced() {
+        let start = Instant::now();
+        let mut clock = FrameClock::new(start);
+        // Last frame was at 40 ms; the next receive times out at 90 ms.
+        // A second timeout must not replace that first wait's origin.
+        clock.starved(start + Duration::from_millis(40));
+        clock.starved(start + Duration::from_millis(90));
+        let recovered = start + Duration::from_millis(140);
+        clock.resume(recovered);
+        assert_eq!(clock.base + Duration::from_millis(40), recovered);
+        assert_eq!(
+            clock.base + Duration::from_millis(80),
+            recovered + Duration::from_millis(40)
+        );
+        // Normal receives do not shift the clock again.
+        clock.resume(recovered + Duration::from_millis(1));
+        assert_eq!(
+            clock.base + Duration::from_millis(80),
+            recovered + Duration::from_millis(40)
+        );
     }
 }

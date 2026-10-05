@@ -226,6 +226,8 @@ impl Host {
         self.image = format!("video-{}-{}", self.session, self.generation);
         self.position = position.max(0.0);
         self.buffering = true;
+        self.last_buffering = true;
+        self.stalls = 0;
         self.finished = false;
         self.warning = None;
         self.stable = Instant::now();
@@ -628,6 +630,26 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn seek_startup_does_not_carry_stalls_or_reduce_quality() {
+        let mut h = Host::new(PathBuf::new(), "test".into(), 1, true);
+        h.stalls = 2;
+        h.last_buffering = false;
+        h.restart(120.0);
+        h.local = false;
+        h.receive(ToHost::Status {
+            session: h.session,
+            generation: h.generation,
+            position: 120.0,
+            buffering: true,
+            finished: false,
+            warning: None,
+            bandwidth_bps: 0,
+        });
+        assert_eq!(h.stalls, 0);
+        assert!(h.last_buffering);
+        assert_eq!(h.quality, Quality::Balanced);
+    }
     #[test]
     fn stale_credits_cannot_resume_new_seek() {
         let (_, rx) = bounded(1);
