@@ -147,7 +147,7 @@ their original independent hit targets. There is no tab underline.
 
 For a Linux client launched with `Launch.host`, the extension-aware frontend
 advertises its own OSC 72 machine identity to Kitty. Only a terminal-confirmed
-local URI list can activate the bridge. The desktop drop ends after capturing the URI list, before any source disk IO.
+local URI list can activate the bridge. Ending the desktop drop does not wait for source disk IO.
 A bounded worker captures source identities and lazily opens file handles. It serves
 regular files, symlink text, and directory handles over the existing SSH input
 transport. Remote requests specify indices and handles, never filesystem paths.

@@ -62,6 +62,7 @@ struct Pending {
     allowed: u64,
     bytes: Vec<u8>,
     remote: bool,
+    own_source: bool,
 }
 struct Transfer {
     requests: Sender<String>,
@@ -78,6 +79,8 @@ impl Drop for Transfer {
 
 pub(super) struct Bridge {
     identity: Option<String>,
+    offered_source: bool,
+    source_finished: bool,
     pending: Option<Pending>,
     transfer: Option<Transfer>,
     responses: Receiver<Output>,
@@ -88,6 +91,8 @@ impl Bridge {
         let (output, responses) = bounded(8);
         Self {
             identity: ssh.then(machine_id).flatten(),
+            offered_source: false,
+            source_finished: false,
             pending: None,
             transfer: None,
             output: OutputSender {
@@ -108,6 +113,10 @@ impl Bridge {
         let Some(m) = Message::parse(meta) else {
             return Ok(false);
         };
+        if m.get("t") == Some("o") && m.get("x").is_none() {
+            self.offered_source = true;
+            self.source_finished = false;
+        }
         if m.get("t") != Some("r") {
             return Ok(false);
         }
@@ -140,6 +149,15 @@ impl Bridge {
         let Some(m) = Message::parse(text) else {
             return Ok(true);
         };
+        if m.get("t") == Some("e") && m.n("x") == 4 {
+            // Kitty can cancel a same-window source just before emitting M.
+            // Keep provenance until that drop, or a fresh drag enters.
+            self.source_finished = true;
+        }
+        if m.get("t") == Some("m") && self.source_finished && !m.payload.is_empty() {
+            self.offered_source = false;
+            self.source_finished = false;
+        }
         if m.get("t") == Some("M") {
             self.reset();
             self.pending = m
@@ -152,7 +170,10 @@ impl Bridge {
                     allowed: m.n("o"),
                     bytes: Vec::new(),
                     remote: false,
+                    own_source: self.offered_source,
                 });
+            self.offered_source = false;
+            self.source_finished = false;
             return Ok(true);
         }
         let Some(p) = &mut self.pending else {
@@ -183,7 +204,7 @@ impl Bridge {
         }
         let p = self.pending.take().unwrap();
         #[cfg(target_os = "linux")]
-        if !p.remote {
+        if !p.remote && !p.own_source {
             if let Ok(paths) = local_paths(&p.bytes) {
                 if !paths.iter().any(|path| {
                     path.components()
@@ -352,16 +373,17 @@ fn local_paths(bytes: &[u8]) -> io::Result<Vec<PathBuf>> {
                 "Unsafe drop root",
             ));
         }
-        if paths
-            .iter()
-            .any(|old: &PathBuf| old.starts_with(&path) || path.starts_with(old))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Duplicate drop root",
-            ));
-        }
         paths.push(path);
+    }
+    // Validate overlapping roots without quadratic work on marked sets;
+    // preserve original URI order because transfer requests use those indices.
+    let mut sorted = paths.iter().collect::<Vec<_>>();
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|pair| pair[1].starts_with(pair[0])) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Overlapping drop roots",
+        ));
     }
     if paths.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Empty drop"));
@@ -440,6 +462,7 @@ mod worker {
         fn capture(paths: &[PathBuf]) -> io::Result<Self> {
             let mut nodes: Vec<Node> = Vec::new();
             let mut parents = HashMap::new();
+            let mut identities = std::collections::HashSet::new();
             for path in paths {
                 let parent_path = path.parent().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "Missing source parent")
@@ -456,10 +479,7 @@ mod worker {
                     parent
                 };
                 let node = Node::capture(parent, path.file_name().unwrap().to_owned(), 0)?;
-                if nodes
-                    .iter()
-                    .any(|n| n.stat.st_dev == node.stat.st_dev && n.stat.st_ino == node.stat.st_ino)
-                {
+                if !identities.insert((node.stat.st_dev, node.stat.st_ino)) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "Aliased drop roots",
@@ -991,6 +1011,41 @@ mod tests {
         bridge.terminal("t=M:o=3:i=1;text/uri-list").unwrap();
         assert!(!bridge.current(old));
         assert!(bridge.current(bridge.output.epoch));
+    }
+    #[test]
+    fn same_window_source_never_authorizes_local_file_access() {
+        let mut bridge = Bridge::new(true);
+        bridge.identity = Some("test".into());
+        assert!(!bridge.request("t=o:o=1:i=1").unwrap());
+        bridge.terminal("t=e:x=4:y=1:i=1").unwrap();
+        bridge.terminal("t=M:o=3:i=1;text/uri-list").unwrap();
+        let bytes =
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(b"file:///etc/shadow\r\n");
+        bridge
+            .terminal(&format!("t=r:x=1:i=1:m=1;{bytes}"))
+            .unwrap();
+        bridge.terminal("t=r:x=1:i=1:m=0;").unwrap();
+        let response = bridge
+            .responses
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            matches!(response.event, Event::Wire(_)),
+            "self drops must use Kitty's guarded transfer"
+        );
+        assert!(bridge.transfer.is_none());
+    }
+    #[test]
+    fn a_new_external_drag_clears_cancelled_source_provenance() {
+        let mut bridge = Bridge::new(true);
+        bridge.identity = Some("test".into());
+        bridge.request("t=o:o=1:i=1").unwrap();
+        bridge.terminal("t=e:x=4:y=1:i=1").unwrap();
+        bridge.terminal("t=m:x=-1:y=-1:i=1").unwrap();
+        assert!(bridge.offered_source);
+        bridge.terminal("t=m:x=4:y=4:i=1;text/uri-list").unwrap();
+        bridge.terminal("t=M:o=3:i=1;text/uri-list").unwrap();
+        assert!(!bridge.pending.as_ref().unwrap().own_source);
     }
     proptest::proptest! {
         #[test]
