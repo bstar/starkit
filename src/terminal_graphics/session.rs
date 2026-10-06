@@ -409,6 +409,7 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     }
                     p.control(ServerMessage::Hello {
                         version: VERSION,
+                        video_player: true,
                         session: name.into(),
                         epoch: epoch.clone(),
                     });

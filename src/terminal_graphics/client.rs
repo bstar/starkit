@@ -28,11 +28,6 @@ impl Frontend {
             Self::Cells(r) => r.scene(scene),
         }
     }
-    fn live_image(&mut self, id: String, pixels: std::sync::Arc<crate::image::RgbaImage>) {
-        if let Self::Pixels(r) = self {
-            r.live_image(id, pixels);
-        }
-    }
     fn clipboard(&mut self, text: &str) -> Result<()> {
         match self {
             Self::Pixels(r) => r.clipboard(text),
@@ -66,6 +61,7 @@ pub struct Launch {
     pub session: String,
     pub directory: Option<String>,
     pub attach_only: bool,
+    pub play: Option<String>,
 }
 impl Launch {
     fn command(&self, control: Option<&std::path::Path>) -> Result<Command> {
@@ -459,6 +455,7 @@ pub fn run_terminal_socket_with_events(
         session: "terminal".into(),
         directory: None,
         attach_only: true,
+        play: None,
     };
     run_impl(launch, custom, true, Some(path))
 }
@@ -478,7 +475,9 @@ fn run_impl(
     let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let mut capabilities = super::capabilities::Capabilities::detected(&graphics);
-    capabilities.local_media = launch.host.is_none() && terminal_socket.is_none();
+    capabilities.local_media = launch.host.is_none()
+        && terminal_socket.is_none()
+        && std::env::var_os("SSH_CONNECTION").is_none();
     capabilities.video = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     tracing::info!(?capabilities, "Terminal presentation capabilities");
     let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
@@ -508,6 +507,9 @@ fn run_impl(
     let started = Instant::now();
     let mut renderer = Frontend::spawn(pixels, font)?;
     let mut media = super::media::Frontend::new(capabilities.local_media);
+    let mut video_layer = super::video_presenter::VideoPresenter::new()?;
+    let window = super::window::Window::new()?;
+    let mut direct_play = launch.play.clone();
     let connect = || match terminal_socket {
         Some(path) => Connection::terminal_socket(path),
         None => Connection::spawn(&launch, control),
@@ -561,14 +563,24 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                ServerMessage::Fullscreen { enabled } => window.set(enabled),
                 ServerMessage::Media { message } => {
                     if let Some(c) = &connection {
                         media.receive(message, &c.input)?;
                     }
                 }
                 ServerMessage::Hello {
-                    version, epoch: e, ..
+                    version,
+                    epoch: e,
+                    video_player,
+                    ..
                 } => {
+                    if direct_play.is_some() && !video_player {
+                        fatal = Some(
+                            "Update the host graphical package for direct movie launch".into(),
+                        );
+                        break;
+                    }
                     if version != VERSION {
                         fatal = Some("Remote protocol version does not match".to_string());
                         break;
@@ -691,13 +703,53 @@ fn run_impl(
                         *png = assets.get(id).cloned();
                     }
                 }
+                if video_layer.frame.as_ref().is_some_and(|(id, _)| {
+                    !scene
+                        .components
+                        .iter()
+                        .any(|c| matches!(c,Component::Image{id:key,..}if key==id))
+                }) {
+                    video_layer.frame = None;
+                    video_layer.clear(&mut io::stdout().lock())?;
+                }
                 renderer.scene(&scene)?;
                 last_scene = Some(scene);
             }
         }
+        if let (Some(c), Some(scene)) = (&connection, &last_scene) {
+            for message in window.notices.try_iter() {
+                id += 1;
+                c.send(ClientMessage::Input {
+                    id,
+                    revision: scene.revision,
+                    generation: size.generation,
+                    input: Input::Notice { message },
+                })?;
+            }
+            if let Some(path) = direct_play.take() {
+                id += 1;
+                c.send(ClientMessage::Input {
+                    id,
+                    revision: scene.revision,
+                    generation: size.generation,
+                    input: Input::Play { path },
+                })?;
+            }
+        }
         if let Some(c) = &connection {
             if let Some((id, pixels)) = media.tick(&c.input) {
-                renderer.live_image(id, pixels);
+                video_layer.frame = Some((id, pixels));
+                if let Some(scene) = &last_scene {
+                    video_layer.present(
+                        scene,
+                        Viewport {
+                            columns: terminal_grid.0,
+                            rows: terminal_grid.1,
+                            ..size
+                        },
+                        &mut io::stdout().lock(),
+                    )?;
+                }
             }
         }
         for message in renderer.output().try_iter().collect::<Vec<_>>() {
@@ -712,7 +764,22 @@ fn run_impl(
                     let presentation_started = Instant::now();
                     if pixels {
                         bytes += presenter.present_pixels(
-                            frame_pixels.context("Native frame has no pixels")?,
+                            {
+                                let frame = frame_pixels.context("Native frame has no pixels")?;
+                                if let Some(scene) = &last_scene {
+                                    video_layer.mask(
+                                        scene,
+                                        frame,
+                                        Viewport {
+                                            columns: terminal_grid.0,
+                                            rows: terminal_grid.1,
+                                            ..size
+                                        },
+                                    )
+                                } else {
+                                    frame
+                                }
+                            },
                             Viewport {
                                 columns: terminal_grid.0,
                                 rows: terminal_grid.1,
@@ -722,6 +789,17 @@ fn run_impl(
                             },
                             &mut io::stdout().lock(),
                         )? as u64;
+                    }
+                    if let Some(scene) = &last_scene {
+                        video_layer.present(
+                            scene,
+                            Viewport {
+                                columns: terminal_grid.0,
+                                rows: terminal_grid.1,
+                                ..size
+                            },
+                            &mut io::stdout().lock(),
+                        )?;
                     }
                     frames += 1;
                     shown = Some((revision, generation));
@@ -779,6 +857,9 @@ fn run_impl(
                     .is_some());
         if dead {
             media.reset();
+            window.set(false);
+            video_layer.frame = None;
+            video_layer.clear(&mut io::stdout().lock())?;
             if terminal_socket.is_some() {
                 fatal = Some(
                     "Terminal bridge disconnected; remote operations continue. Relaunch to attach."
@@ -1214,7 +1295,8 @@ mod tests {
             ssh_config: None,
             session: "test".into(),
             directory: None,
-            attach_only: false
+            attach_only: false,
+            play: None,
         }
         .command(None)
         .is_err());

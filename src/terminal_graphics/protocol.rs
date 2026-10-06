@@ -322,6 +322,12 @@ impl Scene {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Input {
+    Play {
+        path: String,
+    },
+    Notice {
+        message: String,
+    },
     Key {
         code: String,
         modifiers: u8,
@@ -382,11 +388,16 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    Fullscreen {
+        enabled: bool,
+    },
     Media {
         message: super::media::ToClient,
     },
     Hello {
         version: u16,
+        #[serde(default)]
+        video_player: bool,
         session: String,
         epoch: String,
     },

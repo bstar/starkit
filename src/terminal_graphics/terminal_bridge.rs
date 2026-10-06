@@ -117,8 +117,17 @@ impl Lines {
 }
 impl Attachment {
     /// Attach to the application's existing persistent session. No new SSH connection.
-    pub fn relay(mut self, path: &std::path::Path) -> Result<()> {
+    pub fn relay(self, path: &std::path::Path) -> Result<()> {
+        self.relay_with_play(path, None)
+    }
+    /// Open a host movie after the existing terminal frontend attaches.
+    pub fn relay_with_play(
+        mut self,
+        path: &std::path::Path,
+        mut play: Option<String>,
+    ) -> Result<()> {
         let socket = UnixStream::connect(path).context("Attach terminal bridge session")?;
+        let mut launch_socket = socket.try_clone()?;
         let mut input_socket = socket.try_clone()?;
         let mut tty = self.tty.take().unwrap();
         let nonce = self.nonce.clone();
@@ -150,6 +159,19 @@ impl Attachment {
             emit(&self.nonce, "start", None)?;
             let mut reader = BufReader::new(socket);
             while let Some(message) = read_message::<ServerMessage>(&mut reader)? {
+                if let ServerMessage::Scene { scene } = &message {
+                    if let Some(path) = play.take() {
+                        write_message(
+                            &ClientMessage::Input {
+                                id: 0,
+                                revision: scene.revision,
+                                generation: scene.viewport.generation,
+                                input: super::protocol::Input::Play { path },
+                            },
+                            &mut launch_socket,
+                        )?;
+                    }
+                }
                 let bytes = serde_json::to_vec(&message)?;
                 for chunk in bytes.chunks(3072) {
                     emit(&self.nonce, "data", Some(&STANDARD.encode(chunk)))?;

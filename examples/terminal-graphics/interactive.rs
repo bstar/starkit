@@ -63,6 +63,7 @@ pub fn run() -> anyhow::Result<()> {
             session: format!("demo-{}", std::process::id()),
             directory: None,
             attach_only: false,
+            play: None,
         });
     }
     session::private_root(&root)?;

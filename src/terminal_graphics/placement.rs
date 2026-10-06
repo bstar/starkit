@@ -210,7 +210,7 @@ impl Placement {
         }
     }
 }
-fn encloses(outer: Rect, inner: Rect) -> bool {
+pub(crate) fn encloses(outer: Rect, inner: Rect) -> bool {
     inner.x >= outer.x
         && inner.y >= outer.y
         && u32::from(inner.x) + u32::from(inner.width)

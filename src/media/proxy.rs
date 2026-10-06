@@ -12,6 +12,7 @@ struct Video {
     last: i64,
     start: f64,
     fps: u32,
+    processor: processing::Processor,
 }
 impl Video {
     fn drain(&mut self, out: &mut format::context::Output) -> Result<()> {
@@ -26,8 +27,26 @@ impl Video {
                 continue;
             }
             self.last = pts;
+            let processed = self.processor.process(&f)?;
+            let mut pixels = rgba(
+                &processed,
+                &mut None,
+                (processed.width(), processed.height()),
+            )?;
+            self.processor
+                .compose(&mut pixels, seconds + self.start, (f.width(), f.height()))?;
+            let mut composed =
+                frame::Video::new(format::Pixel::RGBA, pixels.width(), pixels.height());
+            let stride = composed.stride(0);
+            for (y, row) in pixels
+                .as_raw()
+                .chunks(pixels.width() as usize * 4)
+                .enumerate()
+            {
+                composed.data_mut(0)[y * stride..y * stride + row.len()].copy_from_slice(row);
+            }
             let mut resized = scale_frame(
-                &f,
+                &composed,
                 &mut self.scale,
                 format::Pixel::YUV420P,
                 self.encoder.width(),
@@ -120,6 +139,26 @@ pub fn encode_to_fit(
     writer: impl Write + Send + 'static,
     cancel: Arc<AtomicBool>,
 ) -> Result<()> {
+    encode_selected_to_fit(
+        path,
+        start,
+        quality,
+        bounds,
+        writer,
+        cancel,
+        tracks::PlaybackOptions::default(),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub fn encode_selected_to_fit(
+    path: &Path,
+    start: f64,
+    quality: Quality,
+    bounds: (u32, u32),
+    writer: impl Write + Send + 'static,
+    cancel: Arc<AtomicBool>,
+    options: tracks::PlaybackOptions,
+) -> Result<()> {
     init()?;
     let stop = cancel.clone();
     let mut input = format::input_with_interrupt(path, move || stop.load(Ordering::Relaxed))?;
@@ -180,8 +219,18 @@ pub fn encode_to_fit(
         last: -1,
         start,
         fps,
+        processor: processing::Processor::new(
+            path,
+            &input,
+            &options.subtitle,
+            time,
+            start,
+            cancel.clone(),
+        )?,
     };
-    let mut audio = if let Some(s) = input.streams().best(media::Type::Audio) {
+    let mut audio = if let Some(s) =
+        tracks::audio_index(&input, &options.audio).and_then(|i| input.stream(i))
+    {
         let index = s.index();
         let time = s.time_base();
         let mut decoder = codec::context::Context::from_parameters(s.parameters())?

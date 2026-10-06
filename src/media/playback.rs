@@ -11,12 +11,18 @@ use std::{
 
 #[derive(Default)]
 pub struct Controls {
-    pub cancelled: AtomicBool,
+    pub cancelled: Arc<AtomicBool>,
     pub paused: AtomicBool,
     pub volume: AtomicU32,
     pub position_ms: AtomicU64,
     pub buffering: AtomicBool,
     pub finished: AtomicBool,
+    pub audio_active: AtomicBool,
+    pub audio_samples: AtomicU64,
+    pub audio_rate: AtomicU32,
+    pub audio_origin_us: AtomicU64,
+    pub dropped: AtomicU64,
+    pub underruns: AtomicU64,
 }
 impl Controls {
     pub fn new() -> Arc<Self> {
@@ -42,12 +48,22 @@ impl Drop for Player {
 }
 impl Player {
     pub fn file(path: std::path::PathBuf, start: f64) -> Result<Self> {
+        Self::file_with_options(path, start, tracks::PlaybackOptions::default())
+    }
+    pub fn file_with_options(
+        path: std::path::PathBuf,
+        start: f64,
+        options: tracks::PlaybackOptions,
+    ) -> Result<Self> {
+        let source = Some(path.clone());
         Self::spawn(
             move |stop| {
                 format::input_with_interrupt(&path, move || stop.cancelled.load(Ordering::Relaxed))
             },
             start,
             Controls::new(),
+            source,
+            options,
         )
     }
     pub fn stream(reader: impl Read + Send + 'static, start: f64) -> Result<Self> {
@@ -73,6 +89,8 @@ impl Player {
             },
             start,
             controls,
+            None,
+            tracks::PlaybackOptions::default(),
         )
     }
     fn spawn(
@@ -81,10 +99,12 @@ impl Player {
             + 'static,
         start: f64,
         controls: Arc<Controls>,
+        source: Option<std::path::PathBuf>,
+        options: tracks::PlaybackOptions,
     ) -> Result<Self> {
         init()?;
         let ctrl = controls.clone();
-        let (decoded, queue) = bounded::<Frame>(3);
+        let (decoded, queue) = bounded::<Frame>(1);
         let (show, frames) = bounded(1);
         let old = frames.clone();
         let (notice, notices) = bounded(8);
@@ -106,47 +126,102 @@ impl Player {
                         .context("No video stream")?;
                     let index = s.index();
                     let time = s.time_base();
-                    let mut video = video_decoder(s.parameters())?;
+                    let mut video = if source.is_some() {
+                        hardware::decoder(s.parameters())?
+                    } else {
+                        video_decoder(s.parameters())?
+                    };
                     anyhow::ensure!(
                         u64::from(video.width()) * u64::from(video.height()) <= 32_000_000,
                         "Video exceeds preview limits"
                     );
-                    let (w, h) = dimensions(video.width(), video.height(), 720);
+                    let mut processor = if let Some(path) = &source {
+                        Some(processing::Processor::new(
+                            path,
+                            &input,
+                            &options.subtitle,
+                            time,
+                            start,
+                            ctrl.cancelled.clone(),
+                        )?)
+                    } else {
+                        None
+                    };
+                    let native = source.is_some();
                     let mut scale = None;
-                    let mut sound = input.streams().best(media::Type::Audio).and_then(|s| {
-                        let mut decoder = codec::context::Context::from_parameters(s.parameters())
-                            .ok()?
-                            .decoder()
-                            .audio()
-                            .ok()?;
-                        if decoder.channel_layout().is_empty() {
-                            decoder.set_channel_layout(av::ChannelLayout::default(i32::from(
-                                decoder.channels(),
-                            )));
-                        }
-                        match Audio::open(&decoder, ctrl.clone()) {
-                            Ok(output) => Some((s.index(), s.time_base(), decoder, output)),
-                            Err(e) => {
-                                let _ = notice.try_send(format!(
-                                    "Audio unavailable; playing silently: {e:#}"
-                                ));
-                                None
+                    let mut sound = tracks::audio_index(&input, &options.audio)
+                        .and_then(|i| input.stream(i))
+                        .and_then(|s| {
+                            let mut decoder =
+                                codec::context::Context::from_parameters(s.parameters())
+                                    .ok()?
+                                    .decoder()
+                                    .audio()
+                                    .ok()?;
+                            if decoder.channel_layout().is_empty() {
+                                decoder.set_channel_layout(av::ChannelLayout::default(i32::from(
+                                    decoder.channels(),
+                                )));
                             }
-                        }
-                    });
-                    let local = input.format().name() != "mpegts";
+                            match Audio::open(&decoder, ctrl.clone()) {
+                                Ok(output) => {
+                                    let _ = notice.try_send(format!(
+                                        "Audio · {} Hz · {} channels{}",
+                                        output.rate,
+                                        output.channels,
+                                        if output.rate != decoder.rate()
+                                            || output.channels != decoder.channels() as usize
+                                        {
+                                            " · device conversion"
+                                        } else {
+                                            " · source format"
+                                        }
+                                    ));
+                                    Some((s.index(), s.time_base(), decoder, output))
+                                }
+                                Err(e) => {
+                                    let _ = notice.try_send(format!(
+                                        "Audio unavailable; playing silently: {e:#}"
+                                    ));
+                                    None
+                                }
+                            }
+                        });
+                    let local = source.is_some();
                     if start > 0.0 && local {
                         input.seek((start * 1_000_000.0) as i64, ..)?;
                     }
                     let mut receive = |decoder: &mut codec::decoder::Video| -> Result<()> {
                         let mut f = frame::Video::empty();
                         while decoder.receive_frame(&mut f).is_ok() {
+                            let f = hardware::download(&f)?;
                             let seconds = f.timestamp().unwrap_or(0) as f64 * f64::from(time);
                             if local && seconds + 0.001 < start {
                                 continue;
                             }
+                            let started = Instant::now();
+                            let processed = if let Some(processor) = &mut processor {
+                                processor.process(&f)?
+                            } else {
+                                hardware::download(&f)?
+                            };
+                            let bounds = if native {
+                                (processed.width(), processed.height())
+                            } else {
+                                dimensions(processed.width(), processed.height(), 720)
+                            };
+                            let mut pixels = rgba(&processed, &mut scale, bounds)?;
+                            if let Some(processor) = &mut processor {
+                                processor.compose(&mut pixels, seconds, (f.width(), f.height()))?;
+                            }
+                            tracing::trace!(
+                                decode_convert_us = started.elapsed().as_micros(),
+                                width = bounds.0,
+                                height = bounds.1,
+                                "Video decoded"
+                            );
                             let mut item = Frame {
-                                pixels: Arc::new(rgba(&f, &mut scale, (w, h))?),
+                                pixels: Arc::new(pixels),
                                 seconds,
                             };
                             loop {
@@ -181,6 +256,10 @@ impl Player {
                     video.send_eof()?;
                     receive(&mut video)?;
                     drop(decoded);
+                    if let Some((_, audio_time, decoder, output)) = &mut sound {
+                        decoder.send_eof()?;
+                        output.drain(decoder, if local { start } else { 0.0 }, *audio_time)?;
+                    }
                     while !ctrl.finished.load(Ordering::Relaxed)
                         && !ctrl.cancelled.load(Ordering::Relaxed)
                     {
@@ -206,13 +285,33 @@ struct Audio {
     producer: rtrb::Producer<f32>,
     resample: av::software::resampling::Context,
     ctrl: Arc<Controls>,
+    rate: u32,
+    channels: usize,
 }
 impl Audio {
     fn open(decoder: &codec::decoder::Audio, ctrl: Arc<Controls>) -> Result<Self> {
         let device = cpal::default_host()
             .default_output_device()
             .context("No audio device")?;
-        let supported = device.default_output_config()?;
+        let preferred = device.default_output_config()?;
+        let supported = device
+            .supported_output_configs()?
+            .filter(|c| c.channels() <= 8)
+            .map(|c| {
+                let rate = decoder
+                    .rate()
+                    .clamp(c.min_sample_rate().0, c.max_sample_rate().0);
+                let score = (u32::from(c.channels().abs_diff(decoder.channels())) * 100_000_000)
+                    + rate.abs_diff(decoder.rate())
+                    + if c.sample_format() == cpal::SampleFormat::F32 {
+                        0
+                    } else {
+                        1
+                    };
+                (score, c.with_sample_rate(cpal::SampleRate(rate)))
+            })
+            .min_by_key(|(score, _)| *score)
+            .map_or(preferred, |(_, c)| c);
         let config = supported.config();
         let channels = config.channels as usize;
         let rate = config.sample_rate.0;
@@ -220,6 +319,7 @@ impl Audio {
         let (producer, consumer) = rtrb::RingBuffer::new(rate as usize * channels / 2);
         let mut consumer = Some(consumer);
         let c = ctrl.clone();
+        ctrl.audio_rate.store(rate, Ordering::Relaxed);
         let error = |e| tracing::warn!(%e,"Video audio device error");
         macro_rules! stream {
             ($ty:ty) => {{
@@ -229,15 +329,26 @@ impl Audio {
                     &config,
                     move |data: &mut [$ty], _| {
                         let gain = c.volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let paused =
-                            c.paused.load(Ordering::Relaxed) || c.buffering.load(Ordering::Relaxed);
+                        let paused = c.paused.load(Ordering::Relaxed);
+                        let mut delivered = 0u64;
                         for sample in data {
                             let value = if paused {
                                 0.0
                             } else {
-                                ring.pop().unwrap_or(0.0) * gain
+                                match ring.pop() {
+                                    Ok(value) => {
+                                        delivered += 1;
+                                        value * gain
+                                    }
+                                    Err(_) => 0.0,
+                                }
                             };
                             *sample = <$ty as cpal::FromSample<f32>>::from_sample_(value);
+                        }
+                        c.audio_samples
+                            .fetch_add(delivered / channels as u64, Ordering::Relaxed);
+                        if !paused && delivered == 0 && c.audio_active.load(Ordering::Relaxed) {
+                            c.underruns.fetch_add(1, Ordering::Relaxed);
                         }
                     },
                     error,
@@ -249,6 +360,8 @@ impl Audio {
             cpal::SampleFormat::F32 => stream!(f32),
             cpal::SampleFormat::I16 => stream!(i16),
             cpal::SampleFormat::U16 => stream!(u16),
+            cpal::SampleFormat::I32 => stream!(i32),
+            cpal::SampleFormat::F64 => stream!(f64),
             _ => anyhow::bail!("Unsupported audio sample format"),
         };
         stream.play()?;
@@ -265,6 +378,8 @@ impl Audio {
             producer,
             resample,
             ctrl,
+            rate,
+            channels,
         })
     }
     fn drain(
@@ -280,6 +395,13 @@ impl Audio {
                     .is_some_and(|pts| pts as f64 * f64::from(time) + 0.001 < start)
             {
                 continue;
+            }
+            if !self.ctrl.audio_active.load(Ordering::Relaxed) {
+                let origin = f.timestamp().unwrap_or(0) as f64 * f64::from(time);
+                self.ctrl
+                    .audio_origin_us
+                    .store((origin.max(0.0) * 1_000_000.0) as u64, Ordering::Relaxed);
+                self.ctrl.audio_active.store(true, Ordering::Relaxed);
             }
             let mut out = frame::Audio::empty();
             self.resample.run(&f, &mut out)?;
@@ -366,6 +488,8 @@ fn schedule_frames(
 ) {
     let mut clock = FrameClock::new(Instant::now());
     let mut first = None;
+    let mut last_audio_samples = 0;
+    let mut audio_progress = Instant::now();
     while !c.cancelled.load(Ordering::Relaxed) {
         let waiting_since = Instant::now();
         let f = match queue.recv_timeout(Duration::from_millis(50)) {
@@ -392,11 +516,29 @@ fn schedule_frames(
             if !initial && c.paused.load(Ordering::Relaxed) {
                 let t = Instant::now();
                 std::thread::sleep(Duration::from_millis(10));
+                audio_progress = Instant::now();
                 clock.base += t.elapsed();
                 continue;
             }
             let target = Duration::from_secs_f64((f.seconds - origin).max(0.0));
-            if clock.base.elapsed() >= target {
+            let samples = c.audio_samples.load(Ordering::Relaxed);
+            if samples != last_audio_samples {
+                last_audio_samples = samples;
+                audio_progress = Instant::now();
+            }
+            let audio_time = c.audio_origin_us.load(Ordering::Relaxed) as f64 / 1_000_000.0
+                + c.audio_samples.load(Ordering::Relaxed) as f64
+                    / f64::from(c.audio_rate.load(Ordering::Relaxed).max(1));
+            let stalled = audio_progress.elapsed() > Duration::from_millis(250);
+            let effective_audio = audio_time
+                + if stalled {
+                    audio_progress.elapsed().as_secs_f64()
+                } else {
+                    0.0
+                };
+            if (c.audio_active.load(Ordering::Relaxed) && effective_audio + 0.002 >= f.seconds)
+                || (!c.audio_active.load(Ordering::Relaxed) && clock.base.elapsed() >= target)
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -407,6 +549,7 @@ fn schedule_frames(
         );
         if let Err(crossbeam_channel::TrySendError::Full(f)) = show.try_send(f) {
             let _ = old.try_recv();
+            c.dropped.fetch_add(1, Ordering::Relaxed);
             let _ = show.try_send(f);
         }
     }

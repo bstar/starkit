@@ -36,6 +36,8 @@ pub enum ToClient {
         local: Option<PathBuf>,
         start: f64,
         quality: Quality,
+        #[serde(default)]
+        options: media::tracks::PlaybackOptions,
     },
     Chunk {
         session: u64,
@@ -160,6 +162,10 @@ pub struct Host {
     pub buffering: bool,
     pub finished: bool,
     pub warning: Option<String>,
+    pub tracks: media::tracks::Tracks,
+    pub options: media::tracks::PlaybackOptions,
+    discovery: Receiver<Result<media::tracks::Tracks, String>>,
+    discovery_cancel: Arc<AtomicBool>,
     path: PathBuf,
     image: String,
     local: bool,
@@ -175,11 +181,24 @@ pub struct Host {
 impl Drop for Host {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.discovery_cancel.store(true, Ordering::Relaxed);
     }
 }
 impl Host {
     pub fn new(path: PathBuf, image: String, session: u64, local: bool) -> Self {
         let (_, queue) = bounded(1);
+        let (tx, discovery) = bounded(1);
+        let discovery_cancel = Arc::new(AtomicBool::new(false));
+        let stop = discovery_cancel.clone();
+        let source = path.clone();
+        let _ = std::thread::Builder::new()
+            .name("star-video-tracks".into())
+            .spawn(move || {
+                let _ = tx.send(
+                    media::tracks::discover(&source, stop)
+                        .map_err(|e| format!("Track discovery: {e:#}")),
+                );
+            });
         let mut h = Self {
             session,
             generation: 0,
@@ -190,6 +209,10 @@ impl Host {
             buffering: true,
             finished: false,
             warning: None,
+            tracks: Default::default(),
+            options: Default::default(),
+            discovery,
+            discovery_cancel,
             path,
             image,
             local,
@@ -238,6 +261,7 @@ impl Host {
             local: self.local.then(|| self.path.clone()),
             start: self.position,
             quality: self.quality,
+            options: self.options.clone(),
         });
         self.control.push(ToClient::Control {
             session: self.session,
@@ -258,6 +282,7 @@ impl Host {
         let credit = self.credit.clone();
         let session = self.session;
         let generation = self.generation;
+        let options = self.options.clone();
         let worker = std::thread::Builder::new()
             .name("star-video-proxy".into())
             .spawn(move || {
@@ -269,13 +294,14 @@ impl Host {
                     session,
                     generation,
                 };
-                let result = media::proxy::encode_to_fit(
+                let result = media::proxy::encode_selected_to_fit(
                     &path,
                     start,
                     quality,
                     bounds,
                     writer,
                     cancel.clone(),
+                    options,
                 );
                 if !cancel.load(Ordering::Relaxed) {
                     let message = match result {
@@ -358,7 +384,65 @@ impl Host {
             _ => {}
         }
     }
+    pub fn load_subtitle(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let path = if path.is_absolute() {
+            path
+        } else {
+            self.path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(path)
+        };
+        anyhow::ensure!(
+            path.extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| matches!(
+                    s.to_ascii_lowercase().as_str(),
+                    "srt" | "ass" | "ssa" | "vtt"
+                )),
+            "Choose an SRT, ASS, SSA, or WebVTT subtitle file"
+        );
+        let selection = media::tracks::Selection::External(path.clone());
+        self.tracks.subtitles.push(media::tracks::Track {
+            selection: selection.clone(),
+            label: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            default: false,
+            forced: false,
+        });
+        self.select(false, selection)
+    }
+    pub fn select(
+        &mut self,
+        audio: bool,
+        selection: media::tracks::Selection,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            if audio {
+                self.tracks.contains_audio(&selection)
+            } else {
+                self.tracks.contains_subtitle(&selection)
+            },
+            "Track unavailable"
+        );
+        if audio {
+            self.options.audio = selection;
+        } else {
+            self.options.subtitle = selection;
+        }
+        self.restart(self.position);
+        Ok(())
+    }
     pub fn effects(&mut self) -> Vec<ServerMessage> {
+        if let Ok(result) = self.discovery.try_recv() {
+            match result {
+                Ok(tracks) => self.tracks = tracks,
+                Err(error) => self.warning = Some(error),
+            }
+        }
         std::mem::take(&mut self.control)
             .into_iter()
             .map(|message| ServerMessage::Media { message })
@@ -426,6 +510,7 @@ impl Frontend {
                 image,
                 local,
                 start,
+                options,
                 ..
             } => {
                 anyhow::ensure!(
@@ -437,7 +522,7 @@ impl Frontend {
                 let (credits, consumed) = bounded(16);
                 let player = if let Some(path) = local {
                     anyhow::ensure!(self.local, "Remote media cannot open local paths");
-                    media::playback::Player::file(path, start)?
+                    media::playback::Player::file_with_options(path, start, options)?
                 } else {
                     let controls = media::playback::Controls::new();
                     // The reader token is cancelled together with the Player below.
@@ -663,6 +748,10 @@ mod tests {
             buffering: false,
             finished: false,
             warning: None,
+            tracks: Default::default(),
+            options: Default::default(),
+            discovery: bounded(1).1,
+            discovery_cancel: Arc::new(AtomicBool::new(false)),
             path: PathBuf::new(),
             image: String::new(),
             local: true,

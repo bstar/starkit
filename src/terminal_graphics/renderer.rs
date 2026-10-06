@@ -231,7 +231,7 @@ impl KittyPresenter {
             if index == 0 {
                 write!(
                     out,
-                    "\x1b_Ga=T,f=100,t=d,i={id},p=1,q=2,C=1,c={columns},r={rows},m={more};"
+                    "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={columns},r={rows},m={more};"
                 )?;
             } else {
                 write!(out, "\x1b_Gm={more};")?;
@@ -408,7 +408,7 @@ impl KittyPresenter {
                     if part == 0 {
                         write!(
                             out,
-                            "\x1b_Ga=T,f=100,t=d,i={id},p=1,q=2,C=1,c={},r={},m={more};",
+                            "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={},r={},m={more};",
                             rect.width, rect.height
                         )?;
                     } else {

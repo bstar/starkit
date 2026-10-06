@@ -76,6 +76,7 @@
 
         devShells.default = pkgs.mkShell {
           ALSA_PLUGIN_DIR = alsaPluginDir;
+          LIBVA_DRIVERS_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/lib/dri";
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
           buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;

@@ -10,8 +10,11 @@ use std::{
     },
 };
 
+pub mod hardware;
 pub mod playback;
+pub mod processing;
 pub mod proxy;
+pub mod tracks;
 
 pub const CHUNK: usize = 32 * 1024;
 pub const WINDOW: usize = 256 * 1024;
@@ -98,6 +101,9 @@ pub(crate) fn scale_frame(
         input.format != frame.format()
             || input.width != frame.width()
             || input.height != frame.height()
+            || context.output().width != width
+            || context.output().height != height
+            || context.output().format != format
     }) {
         *scale = Some(av::software::scaling::Context::get(
             frame.format(),
@@ -106,8 +112,29 @@ pub(crate) fn scale_frame(
             format,
             width,
             height,
-            av::software::scaling::Flags::BILINEAR,
+            av::software::scaling::Flags::LANCZOS,
         )?);
+    }
+    if format == av::format::Pixel::RGBA {
+        let matrix = match frame.color_space() {
+            av::color::Space::BT709 => av::ffi::SWS_CS_ITU709,
+            av::color::Space::BT2020NCL | av::color::Space::BT2020CL => av::ffi::SWS_CS_BT2020,
+            _ => av::ffi::SWS_CS_ITU601,
+        };
+        let range = i32::from(frame.color_range() == av::color::Range::JPEG);
+        unsafe {
+            let coefficients = av::ffi::sws_getCoefficients(matrix);
+            av::ffi::sws_setColorspaceDetails(
+                scale.as_mut().unwrap().as_mut_ptr(),
+                coefficients,
+                range,
+                coefficients,
+                1,
+                0,
+                1 << 16,
+                1 << 16,
+            );
+        }
     }
     let mut out = av::frame::Video::empty();
     scale.as_mut().unwrap().run(frame, &mut out)?;
