@@ -30,7 +30,7 @@ impl Window {
             for enabled in rx {
                 match operation(&path,enabled) {
                     Ok(()) => entered = enabled,
-                    Err(error) => { let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); }
+                    Err(error) => { tracing::warn!(%error, "Kitty fullscreen operation failed"); let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); }
                 }
             }
             if entered { let _ = operation(&path,false); }

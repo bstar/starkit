@@ -11,7 +11,7 @@ def main(args):
 
 
 def platform_fullscreen(boss, window):
-    from kitty.fast_data_types import platform_window_id
+    from kitty.utils import platform_window_id
     native_id = platform_window_id(window.os_window_id)
     if os.uname().sysname == 'Darwin':
         import ctypes
