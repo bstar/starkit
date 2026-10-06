@@ -7,6 +7,8 @@ use std::{io::Write, path::PathBuf, sync::Arc};
 pub struct VideoPresenter {
     next: u32,
     local_files: bool,
+    stalled_since: Option<std::time::Instant>,
+    signature: Option<(Rect, Viewport, Arc<RgbaImage>)>,
     previous: Option<u32>,
     background: Option<(Rect, u32)>,
     files: std::collections::VecDeque<PathBuf>,
@@ -26,6 +28,8 @@ impl VideoPresenter {
             next: 0x53560000,
             local_files: std::env::var_os("KITTY_PID").is_some()
                 && std::env::var_os("STAR_VIDEO_DIRECT").is_none(),
+            stalled_since: None,
+            signature: None,
             previous: None,
             background: None,
             files: Default::default(),
@@ -153,15 +157,32 @@ impl VideoPresenter {
             return self.clear(out);
         };
         let pixels = pixels.clone();
+        if self
+            .signature
+            .as_ref()
+            .is_some_and(|(old_rect, old_viewport, old_pixels)| {
+                *old_rect == rect && *old_viewport == viewport && Arc::ptr_eq(old_pixels, &pixels)
+            })
+        {
+            return Ok(());
+        }
         let start = std::time::Instant::now();
         // Bound pending files even if Kitty stops consuming graphics commands.
         self.files.retain(|path| path.exists());
         if self.files.len() >= 3 {
+            let waiting = self
+                .stalled_since
+                .get_or_insert_with(std::time::Instant::now);
+            if waiting.elapsed() < std::time::Duration::from_secs(2) {
+                return Ok(());
+            }
             tracing::warn!("Kitty did not consume video files; switching to direct transfer");
             self.local_files = false;
             for path in self.files.drain(..) {
                 let _ = std::fs::remove_file(path);
             }
+        } else {
+            self.stalled_since = None;
         }
         if self.background.as_ref().is_none_or(|(old, _)| *old != rect) {
             if let Some((_, id)) = self.background.take() {
@@ -226,6 +247,7 @@ impl VideoPresenter {
         }
         out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
+        self.signature = Some((rect, viewport, pixels.clone()));
         tracing::trace!(
             present_us = start.elapsed().as_micros(),
             width = pixels.width(),
@@ -235,6 +257,7 @@ impl VideoPresenter {
         Ok(())
     }
     pub fn clear(&mut self, out: &mut impl Write) -> anyhow::Result<()> {
+        self.signature = None;
         if let Some(id) = self.previous.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
         }
@@ -299,5 +322,41 @@ mod tests {
         assert!(text.contains("f=32"));
         assert!(text.contains("s=1920,v=1080"));
         assert!(!text.contains("f=100"));
+        let mut duplicate = vec![];
+        presenter
+            .present(&scene, scene.viewport, &mut duplicate)
+            .unwrap();
+        assert!(
+            duplicate.is_empty(),
+            "Chrome repaint uploaded the same video frame twice"
+        );
+        presenter.clear(&mut duplicate).unwrap();
+        duplicate.clear();
+        presenter.local_files = true;
+        for i in 0..3 {
+            let path = presenter.root.join(format!("pending-{i}"));
+            std::fs::write(&path, []).unwrap();
+            presenter.files.push_back(path);
+        }
+        presenter
+            .present(&scene, scene.viewport, &mut duplicate)
+            .unwrap();
+        assert!(
+            duplicate.is_empty(),
+            "Pending frame bound was exceeded during resize"
+        );
+        assert!(
+            presenter.local_files,
+            "A short resize delay triggered direct transfer"
+        );
+        presenter.stalled_since =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        presenter
+            .present(&scene, scene.viewport, &mut duplicate)
+            .unwrap();
+        assert!(
+            !presenter.local_files,
+            "An unsupported file transport did not fall back"
+        );
     }
 }
