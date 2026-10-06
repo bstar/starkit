@@ -243,3 +243,115 @@ fn decoded_colors_match_the_source_pixel_format() {
         "Wrong decoded red: {pixel:?}"
     );
 }
+
+#[cfg(feature = "terminal-graphics")]
+#[test]
+fn original_ssh_ranges_preserve_full_resolution_and_seek_generations() {
+    use base64::Engine;
+    use starkit::terminal_graphics::{
+        media::{Frontend, Host, ToClient},
+        protocol::{ClientMessage, ServerMessage},
+    };
+    use std::time::Instant;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("original.mp4");
+    assert!(Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=3840x2160:rate=10",
+            "-t",
+            "1.2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-y"
+        ])
+        .arg(&path)
+        .status()
+        .unwrap()
+        .success());
+    let source = std::fs::read(&path).unwrap();
+    let mut host = Host::new_with_original(path, "original".into(), 7, false, true);
+    host.options = PlaybackOptions {
+        audio: Selection::Off,
+        subtitle: Selection::Off,
+    };
+    host.restart(0.0);
+    host.set_control(true, 0);
+    let mut frontend = Frontend::new(false);
+    let (send, receive) = crossbeam_channel::bounded(64);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut first = false;
+    let mut seek = false;
+    let mut ranges = 0;
+    while Instant::now() < deadline {
+        for message in host.effects().into_iter().chain(host.chunks()) {
+            if let ServerMessage::Media { message } = message {
+                if let ToClient::Range {
+                    offset, ref data, ..
+                } = message
+                {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .unwrap();
+                    assert_eq!(
+                        bytes,
+                        source[offset as usize..offset as usize + bytes.len()]
+                    );
+                    ranges += 1;
+                }
+                if let ToClient::Error { ref message, .. } = message {
+                    panic!("{message}");
+                }
+                let opened = matches!(message, ToClient::OriginalOpen { .. });
+                frontend.receive(message, &send).unwrap();
+                if first && opened {
+                    frontend
+                        .receive(
+                            ToClient::Range {
+                                session: 7,
+                                generation: host.generation - 1,
+                                offset: 0,
+                                data: "invalid stale data".into(),
+                            },
+                            &send,
+                        )
+                        .unwrap();
+                }
+            }
+        }
+        if let Some((image, frame)) = frontend.tick(&send) {
+            assert_eq!(frame.dimensions(), (3840, 2160));
+            if !first {
+                first = true;
+                host.restart(0.8);
+                host.set_control(true, 0);
+            } else if image.ends_with(&format!("-{}", host.generation)) {
+                seek = true;
+                break;
+            }
+        }
+        for message in receive.try_iter() {
+            if let ClientMessage::Media { message } = message {
+                host.receive(message);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        first && seek && ranges > 0,
+        "Original playback/seek failed: {:?}",
+        host.warning
+    );
+    assert!(host.original);
+    assert_eq!(
+        host.quality,
+        Quality::Balanced,
+        "Original must not downgrade quality"
+    );
+}

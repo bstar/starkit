@@ -17,6 +17,21 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {
+    OriginalOpen {
+        session: u64,
+        generation: u64,
+        image: String,
+        size: u64,
+        name: String,
+        start: f64,
+        options: media::tracks::PlaybackOptions,
+    },
+    Range {
+        session: u64,
+        generation: u64,
+        offset: u64,
+        data: String,
+    },
     AudioOpen {
         session: u64,
         epoch: u64,
@@ -67,6 +82,11 @@ pub enum ToClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToHost {
+    Read {
+        session: u64,
+        generation: u64,
+        offset: u64,
+    },
     AudioCredit {
         session: u64,
         epoch: u64,
@@ -91,6 +111,12 @@ pub enum ToHost {
         warning: Option<String>,
         #[serde(default)]
         bandwidth_bps: u64,
+        #[serde(default)]
+        buffered_bytes: u64,
+        #[serde(default)]
+        dropped_frames: u64,
+        #[serde(default)]
+        source_bitrate: u64,
     },
 }
 struct Writer {
@@ -152,6 +178,20 @@ impl Write for Writer {
         Ok(())
     }
 }
+fn send_original(
+    tx: &Sender<ToClient>,
+    mut message: ToClient,
+    cancel: &AtomicBool,
+) -> anyhow::Result<()> {
+    loop {
+        anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Original media cancelled");
+        match tx.send_timeout(message, Duration::from_millis(20)) {
+            Ok(()) => return Ok(()),
+            Err(crossbeam_channel::SendTimeoutError::Timeout(value)) => message = value,
+            Err(_) => anyhow::bail!("Original media disconnected"),
+        }
+    }
+}
 pub struct Host {
     pub session: u64,
     pub generation: u64,
@@ -159,6 +199,11 @@ pub struct Host {
     pub paused: bool,
     pub volume: u8,
     pub quality: Quality,
+    pub original: bool,
+    pub buffered_bytes: u64,
+    pub dropped_frames: u64,
+    pub source_bitrate: u64,
+    reads: Option<Sender<u64>>,
     pub buffering: bool,
     pub finished: bool,
     pub warning: Option<String>,
@@ -186,6 +231,15 @@ impl Drop for Host {
 }
 impl Host {
     pub fn new(path: PathBuf, image: String, session: u64, local: bool) -> Self {
+        Self::new_with_original(path, image, session, local, false)
+    }
+    pub fn new_with_original(
+        path: PathBuf,
+        image: String,
+        session: u64,
+        local: bool,
+        original: bool,
+    ) -> Self {
         let (_, queue) = bounded(1);
         let (tx, discovery) = bounded(1);
         let discovery_cancel = Arc::new(AtomicBool::new(false));
@@ -206,6 +260,11 @@ impl Host {
             paused: false,
             volume: 0,
             quality: Quality::Balanced,
+            original: original && !local,
+            buffered_bytes: 0,
+            dropped_frames: 0,
+            source_bitrate: 0,
+            reads: None,
             buffering: true,
             finished: false,
             warning: None,
@@ -228,6 +287,14 @@ impl Host {
         h.restart(0.0);
         h
     }
+    pub fn set_original(&mut self, original: bool) {
+        let original = original && !self.local;
+        if self.original != original {
+            self.original = original;
+            self.control.clear();
+            self.restart(self.position);
+        }
+    }
     pub fn local_playback(&self) -> bool {
         self.local
     }
@@ -235,7 +302,7 @@ impl Host {
         let bounds = (width.max(2), height.max(2));
         if self.bounds != bounds {
             self.bounds = bounds;
-            if !self.local {
+            if !self.local && !self.original {
                 self.control.clear();
                 self.restart(self.position);
             }
@@ -254,15 +321,20 @@ impl Host {
         self.finished = false;
         self.warning = None;
         self.stable = Instant::now();
-        self.control.push(ToClient::Open {
-            session: self.session,
-            generation: self.generation,
-            image: self.image.clone(),
-            local: self.local.then(|| self.path.clone()),
-            start: self.position,
-            quality: self.quality,
-            options: self.options.clone(),
-        });
+        self.reads = None;
+        self.buffered_bytes = 0;
+        self.dropped_frames = 0;
+        if !self.original {
+            self.control.push(ToClient::Open {
+                session: self.session,
+                generation: self.generation,
+                image: self.image.clone(),
+                local: self.local.then(|| self.path.clone()),
+                start: self.position,
+                quality: self.quality,
+                options: self.options.clone(),
+            });
+        }
         self.control.push(ToClient::Control {
             session: self.session,
             generation: self.generation,
@@ -283,6 +355,89 @@ impl Host {
         let session = self.session;
         let generation = self.generation;
         let options = self.options.clone();
+        if self.original {
+            let (requests, incoming) = bounded(8);
+            self.reads = Some(requests);
+            let image = self.image.clone();
+            let _ = std::thread::Builder::new()
+                .name("star-original-media".into())
+                .spawn(move || {
+                    use std::io::{Read, Seek, SeekFrom};
+                    let result = (|| -> anyhow::Result<()> {
+                        let mut file = std::fs::File::open(&path)?;
+                        anyhow::ensure!(
+                            file.metadata()?.is_file(),
+                            "Original media must be a regular file"
+                        );
+                        let size = file.metadata()?.len();
+                        let name = format!(
+                            "movie.{}",
+                            path.extension()
+                                .and_then(|v| v.to_str())
+                                .filter(|v| v.len() < 16
+                                    && v.chars().all(|c| c.is_ascii_alphanumeric()))
+                                .unwrap_or("mkv")
+                        );
+                        send_original(
+                            &tx,
+                            ToClient::OriginalOpen {
+                                session,
+                                generation,
+                                image,
+                                size,
+                                name,
+                                start,
+                                options,
+                            },
+                            &cancel,
+                        )?;
+                        while !cancel.load(Ordering::Relaxed) {
+                            let offset = match incoming.recv_timeout(Duration::from_millis(20)) {
+                                Ok(offset) => offset,
+                                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                                Err(_) => break,
+                            };
+                            anyhow::ensure!(
+                                offset < size
+                                    && offset.is_multiple_of(super::original::BLOCK as u64),
+                                "Invalid original media offset"
+                            );
+                            file.seek(SeekFrom::Start(offset))?;
+                            let mut bytes = vec![
+                                0;
+                                (size - offset).min(super::original::BLOCK as u64)
+                                    as usize
+                            ];
+                            file.read_exact(&mut bytes)?;
+                            send_original(
+                                &tx,
+                                ToClient::Range {
+                                    session,
+                                    generation,
+                                    offset,
+                                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                                },
+                                &cancel,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        if !cancel.load(Ordering::Relaxed) {
+                            let _ = send_original(
+                                &tx,
+                                ToClient::Error {
+                                    session,
+                                    generation,
+                                    message: format!("Original media: {error:#}"),
+                                },
+                                &cancel,
+                            );
+                        }
+                    }
+                });
+            return;
+        }
         let worker = std::thread::Builder::new()
             .name("star-video-proxy".into())
             .spawn(move || {
@@ -334,6 +489,15 @@ impl Host {
     }
     pub fn receive(&mut self, msg: ToHost) {
         match msg {
+            ToHost::Read {
+                session,
+                generation,
+                offset,
+            } if session == self.session && generation == self.generation && self.original => {
+                if let Some(reads) = &self.reads {
+                    let _ = reads.try_send(offset);
+                }
+            }
             ToHost::Credit {
                 session,
                 generation,
@@ -350,10 +514,16 @@ impl Host {
                 finished,
                 warning,
                 bandwidth_bps,
+                buffered_bytes,
+                dropped_frames,
+                source_bitrate,
             } if session == self.session && generation == self.generation => {
                 if position.is_finite() {
                     self.position = position.max(0.0);
                 }
+                self.buffered_bytes = buffered_bytes;
+                self.dropped_frames = dropped_frames;
+                self.source_bitrate = source_bitrate;
                 self.buffering = buffering;
                 self.finished = finished;
                 if warning.is_some() {
@@ -451,7 +621,7 @@ impl Host {
     pub fn chunks(&mut self) -> Vec<ServerMessage> {
         self.queue
             .try_iter()
-            .take(2)
+            .take(if self.original { 8 } else { 2 })
             .map(|message| ServerMessage::Media { message })
             .collect()
     }
@@ -469,6 +639,7 @@ struct Active {
     session: u64,
     generation: u64,
     image: String,
+    original: Option<Arc<super::original::Source>>,
     player: media::playback::Player,
     input: Option<Sender<Option<Vec<u8>>>>,
     consumed: Receiver<usize>,
@@ -483,6 +654,7 @@ struct Active {
 pub struct Frontend {
     active: Option<Active>,
     local: bool,
+    pending_control: Option<(u64, u64, bool, u8)>,
     audio: super::audio::Frontend,
 }
 impl Frontend {
@@ -495,11 +667,13 @@ impl Frontend {
     pub fn reset(&mut self) {
         self.active = None;
         self.audio.reset();
+        self.pending_control = None;
     }
     pub fn new(local: bool) -> Self {
         Self {
             active: None,
             local,
+            pending_control: None,
             audio: super::audio::Frontend::default(),
         }
     }
@@ -508,6 +682,89 @@ impl Frontend {
             return Ok(());
         }
         match msg {
+            ToClient::OriginalOpen {
+                session,
+                generation,
+                image,
+                size,
+                name,
+                start,
+                options,
+            } => {
+                anyhow::ensure!(
+                    size > 0
+                        && name.len() < 128
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+                        && start.is_finite()
+                        && start >= 0.0
+                        && image.len() < 128,
+                    "Invalid original media session"
+                );
+                self.active = None;
+                let source = super::original::Source::new(size, session, generation, out.clone());
+                let controls = media::playback::Controls::new();
+                if let Some((s, g, paused, volume)) = self
+                    .pending_control
+                    .filter(|(s, g, _, _)| *s == session && *g == generation)
+                {
+                    let _ = (s, g);
+                    controls.paused.store(paused, Ordering::Relaxed);
+                    controls.volume.store(u32::from(volume), Ordering::Relaxed);
+                }
+                let reader = source.clone();
+                let open: media::playback::InputFactory = Arc::new(move |controls| {
+                    let io = ffmpeg_next::format::context::StreamIo::from_read_seek(
+                        reader.reader(controls.clone()),
+                    )?;
+                    ffmpeg_next::format::input_from_stream_with_interrupt(
+                        io,
+                        Some(&name),
+                        None,
+                        move || controls.cancelled.load(Ordering::Relaxed),
+                    )
+                });
+                let player = media::playback::Player::remote(open, start, options, controls)?;
+                let (_, consumed) = bounded(1);
+                self.active = Some(Active {
+                    session,
+                    generation,
+                    image,
+                    original: Some(source),
+                    player,
+                    input: None,
+                    consumed,
+                    last: Instant::now(),
+                    pending_credit: 0,
+                    arrival: Instant::now(),
+                    arrival_bytes: 0,
+                    bandwidth_bps: 0,
+                    eof: false,
+                    audio_underruns: 0,
+                });
+            }
+            ToClient::Range {
+                session,
+                generation,
+                offset,
+                data,
+            } => {
+                if let Some(active) = self
+                    .active
+                    .as_mut()
+                    .filter(|a| a.session == session && a.generation == generation)
+                {
+                    anyhow::ensure!(
+                        data.len() <= super::original::BLOCK.div_ceil(3) * 4,
+                        "Original range exceeds limit"
+                    );
+                    if let Some(source) = &active.original {
+                        source.accept(
+                            offset,
+                            base64::engine::general_purpose::STANDARD.decode(data)?,
+                        )?;
+                    }
+                }
+            }
             ToClient::AudioOpen { .. }
             | ToClient::AudioChunk { .. }
             | ToClient::AudioClose { .. } => unreachable!(),
@@ -548,6 +805,7 @@ impl Frontend {
                     session,
                     generation,
                     image,
+                    original: None,
                     player,
                     input: Some(tx),
                     consumed,
@@ -622,6 +880,7 @@ impl Frontend {
                 paused,
                 volume,
             } => {
+                self.pending_control = Some((session, generation, paused, volume.min(100)));
                 if let Some(a) = self
                     .active
                     .as_mut()
@@ -666,6 +925,9 @@ impl Frontend {
                             finished: true,
                             warning: Some(message),
                             bandwidth_bps: 0,
+                            buffered_bytes: 0,
+                            dropped_frames: 0,
+                            source_bitrate: 0,
                         },
                     });
                 }
@@ -721,6 +983,9 @@ impl Frontend {
                 finished,
                 warning,
                 bandwidth_bps: a.bandwidth_bps,
+                buffered_bytes: a.original.as_ref().map_or(0, |s| s.buffered_bytes()),
+                dropped_frames: a.player.controls.dropped.load(Ordering::Relaxed),
+                source_bitrate: a.player.controls.source_bitrate.load(Ordering::Relaxed),
             };
             if out.try_send(ClientMessage::Media { message }).is_ok() {
                 a.last = Instant::now();
@@ -748,6 +1013,9 @@ mod tests {
             finished: false,
             warning: None,
             bandwidth_bps: 0,
+            buffered_bytes: 0,
+            dropped_frames: 0,
+            source_bitrate: 0,
         });
         assert_eq!(h.stalls, 0);
         assert!(h.last_buffering);
@@ -763,6 +1031,11 @@ mod tests {
             paused: false,
             volume: 0,
             quality: Quality::Balanced,
+            original: false,
+            buffered_bytes: 0,
+            dropped_frames: 0,
+            source_bitrate: 0,
+            reads: None,
             buffering: false,
             finished: false,
             warning: None,

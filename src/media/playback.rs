@@ -11,6 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub type InputFactory = Arc<
+    dyn Fn(Arc<Controls>) -> std::result::Result<format::context::Input, av::Error> + Send + Sync,
+>;
+
 #[derive(Default)]
 pub struct Controls {
     pub cancelled: Arc<AtomicBool>,
@@ -24,6 +28,7 @@ pub struct Controls {
     pub video_ready: AtomicBool,
     pub audio_samples: AtomicU64,
     pub audio_rate: AtomicU32,
+    pub source_bitrate: AtomicU64,
     pub audio_origin_us: AtomicU64,
     pub dropped: AtomicU64,
     pub underruns: AtomicU64,
@@ -69,6 +74,23 @@ impl Player {
             Controls::new(),
             source,
             options,
+            None,
+        )
+    }
+    pub fn remote(
+        open: InputFactory,
+        start: f64,
+        options: tracks::PlaybackOptions,
+        controls: Arc<Controls>,
+    ) -> Result<Self> {
+        let factory = open.clone();
+        Self::spawn(
+            move |controls| factory(controls),
+            start,
+            controls,
+            None,
+            options,
+            Some(open),
         )
     }
     pub fn stream(reader: impl Read + Send + 'static, start: f64) -> Result<Self> {
@@ -96,6 +118,7 @@ impl Player {
             controls,
             None,
             tracks::PlaybackOptions::default(),
+            None,
         )
     }
     fn spawn(
@@ -106,13 +129,18 @@ impl Player {
         controls: Arc<Controls>,
         source: Option<std::path::PathBuf>,
         options: tracks::PlaybackOptions,
+        remote: Option<InputFactory>,
     ) -> Result<Self> {
         init()?;
         let ctrl = controls.clone();
         // A stream cannot reopen its audio independently. Keep a small
         // bounded video lookahead so demux can prime/refill PCM before the
         // presentation clock blocks the next video frame.
-        let (decoded, queue) = bounded::<Frame>(if source.is_some() { 1 } else { 8 });
+        let (decoded, queue) = bounded::<Frame>(if source.is_some() || remote.is_some() {
+            1
+        } else {
+            8
+        });
         let (show, frames) = bounded(1);
         let old = frames.clone();
         let (notice, notices) = bounded(8);
@@ -127,6 +155,8 @@ impl Player {
                 let open_stop = ctrl.clone();
                 let result = (|| -> Result<()> {
                     let mut input = open(open_stop)?;
+                    ctrl.source_bitrate
+                        .store(input.bit_rate().max(0) as u64, Ordering::Relaxed);
                     // The custom stream also observes cancellation while waiting for data.
                     let s = input
                         .streams()
@@ -135,7 +165,7 @@ impl Player {
                     let index = s.index();
                     let time = s.time_base();
                     let parameters = s.parameters();
-                    let mut video = if source.is_some() {
+                    let mut video = if source.is_some() || remote.is_some() {
                         hardware::checked_decoder(&mut input, index)?
                     } else {
                         video_decoder(parameters)?
@@ -153,10 +183,19 @@ impl Player {
                             start,
                             ctrl.cancelled.clone(),
                         )?)
+                    } else if remote.is_some() {
+                        Some(processing::Processor::new(
+                            std::path::Path::new(""),
+                            &input,
+                            &tracks::Selection::Off,
+                            time,
+                            start,
+                            ctrl.cancelled.clone(),
+                        )?)
                     } else {
                         None
                     };
-                    let native = source.is_some();
+                    let native = source.is_some() || remote.is_some();
                     let mut scale = None;
                     // Local audio owns a separate demuxer: waiting for the video
                     // clock or converting a 4K frame must never starve the device.
@@ -185,10 +224,29 @@ impl Player {
                                 })?;
                         }
                         None
+                    } else if let Some(factory) = remote.clone() {
+                        if options.audio != tracks::Selection::Off {
+                            let c = ctrl.clone();
+                            let n = notice.clone();
+                            let selection = options.audio.clone();
+                            std::thread::Builder::new()
+                                .name("star-original-audio".into())
+                                .spawn(move || {
+                                    let result =
+                                        factory(c.clone()).map_err(anyhow::Error::from).and_then(
+                                            |input| audio_input(input, start, selection, &c, &n),
+                                        );
+                                    if let Err(error) = result {
+                                        c.audio_active.store(false, Ordering::Release);
+                                        let _ = n.try_send(format!("Original audio: {error:#}"));
+                                    }
+                                })?;
+                        }
+                        None
                     } else {
                         open_audio(&input, &options.audio, &ctrl, &notice, 100)?
                     };
-                    let local = source.is_some();
+                    let local = native;
                     if start > 0.0 && local {
                         input.seek((start * 1_000_000.0) as i64, ..)?;
                     }
@@ -337,8 +395,17 @@ fn local_audio(
     notice: &Sender<String>,
 ) -> Result<()> {
     let stop = ctrl.clone();
-    let mut input =
+    let input =
         format::input_with_interrupt(&path, move || stop.cancelled.load(Ordering::Relaxed))?;
+    audio_input(input, start, selection, ctrl, notice)
+}
+fn audio_input(
+    mut input: format::context::Input,
+    start: f64,
+    selection: tracks::Selection,
+    ctrl: &Arc<Controls>,
+    notice: &Sender<String>,
+) -> Result<()> {
     let Some((index, time, mut decoder, mut output)) =
         open_audio(&input, &selection, ctrl, notice, 100)?
     else {

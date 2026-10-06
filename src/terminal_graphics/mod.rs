@@ -22,6 +22,7 @@ pub mod terminal_bridge;
 pub use protocol::{Component, Input, Rect, Scene, Viewport};
 
 pub mod media;
+mod original;
 
 pub mod audio;
 
