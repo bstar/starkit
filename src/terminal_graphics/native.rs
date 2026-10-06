@@ -1153,6 +1153,104 @@ fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
 }
 
 fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: &str) {
+    if matches!(
+        kind,
+        "media-speaker" | "media-headphones" | "media-subtitles" | "media-fullscreen"
+    ) {
+        let transform = Transform::from_row(size / 24., 0., 0., size / 24., x, y);
+        let mut p = PathBuilder::new();
+        match kind {
+            "media-speaker" => {
+                p.move_to(3., 9.);
+                p.line_to(7., 9.);
+                p.line_to(12., 5.);
+                p.line_to(12., 19.);
+                p.line_to(7., 15.);
+                p.line_to(3., 15.);
+                p.close();
+            }
+            "media-headphones" => {
+                p.move_to(4., 13.);
+                p.line_to(7., 13.);
+                p.line_to(7., 20.);
+                p.line_to(4., 20.);
+                p.close();
+                p.move_to(17., 13.);
+                p.line_to(20., 13.);
+                p.line_to(20., 20.);
+                p.line_to(17., 20.);
+                p.close();
+            }
+            _ => {}
+        }
+        if let Some(path) = p.finish() {
+            canvas.fill_path(
+                &path,
+                &paint(color),
+                tiny_skia::FillRule::Winding,
+                transform,
+                None,
+            );
+        }
+        let mut p = PathBuilder::new();
+        match kind {
+            "media-speaker" => {
+                p.move_to(16., 8.);
+                p.cubic_to(19., 10., 19., 14., 16., 16.);
+                p.move_to(19., 5.);
+                p.cubic_to(24., 9., 24., 15., 19., 19.);
+            }
+            "media-headphones" => {
+                p.move_to(4., 17.);
+                p.line_to(4., 12.);
+                p.cubic_to(4., 1., 20., 1., 20., 12.);
+                p.line_to(20., 17.);
+            }
+            "media-subtitles" => {
+                p.move_to(4., 4.);
+                p.line_to(20., 4.);
+                p.quad_to(22., 4., 22., 6.);
+                p.line_to(22., 18.);
+                p.quad_to(22., 20., 20., 20.);
+                p.line_to(4., 20.);
+                p.quad_to(2., 20., 2., 18.);
+                p.line_to(2., 6.);
+                p.quad_to(2., 4., 4., 4.);
+                p.close();
+                for (x, y, end) in [(6., 10., 10.), (14., 10., 18.), (6., 15., 18.)] {
+                    p.move_to(x, y);
+                    p.line_to(end, y);
+                }
+            }
+            _ => {
+                for (x, y, dx, dy) in [
+                    (3., 3., 1., 1.),
+                    (21., 3., -1., 1.),
+                    (3., 21., 1., -1.),
+                    (21., 21., -1., -1.),
+                ] {
+                    p.move_to(x + dx * 6., y);
+                    p.line_to(x, y);
+                    p.line_to(x, y + dy * 6.);
+                }
+            }
+        }
+        if let Some(path) = p.finish() {
+            canvas.stroke_path(
+                &path,
+                &paint(color),
+                &Stroke {
+                    width: 1.8,
+                    line_cap: tiny_skia::LineCap::Round,
+                    line_join: tiny_skia::LineJoin::Round,
+                    ..Stroke::default()
+                },
+                transform,
+                None,
+            );
+        }
+        return;
+    }
     // Solid media faces match AMP's Material-style 24-unit transport artwork.
     // Seeking uses double triangles, deliberately distinct from track skipping.
     if let Some(kind) = kind.strip_prefix("media-") {
