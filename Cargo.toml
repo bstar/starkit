@@ -35,6 +35,8 @@ webp = ["image", "image/webp"]
 # An HTTP client is not something a UI library should force on a caller who
 # only wanted a theme engine.
 net = ["dep:ureq"]
+# Verified GitHub release updates for standalone fleet installations.
+update = ["net", "dep:sha2", "dep:serde_json", "dep:semver", "dep:tar", "dep:flate2", "dep:tempfile", "dep:rustix"]
 # Optional native Rust pixel renderer and SSH scene relay.
 terminal-graphics = ["media", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
 
@@ -44,6 +46,10 @@ media = ["image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-chan
 rustix = { version = "1", features = ["fs"], optional = true }
 
 [dependencies]
+semver = { version = "1", optional = true }
+tar = { version = "0.4", optional = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
+tempfile = { version = "3", optional = true }
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling", "filter"], optional = true }
 cpal = { version = "0.16", optional = true }
 rtrb = { version = "0.3", optional = true }

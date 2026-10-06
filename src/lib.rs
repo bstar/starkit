@@ -66,3 +66,7 @@ pub mod native_surface;
 
 #[cfg(feature = "media")]
 pub mod media;
+
+/// Verified standalone application updates from GitHub releases.
+#[cfg(all(feature = "update", unix))]
+pub mod update;
