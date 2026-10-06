@@ -45,6 +45,8 @@ pub struct Candidate {
     pub size: u64,
     pub sha256: String,
     pub release_url: String,
+    #[serde(default)]
+    pub release_notes: String,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +55,8 @@ struct Release {
     draft: bool,
     prerelease: bool,
     html_url: String,
+    #[serde(default)]
+    body: Option<String>,
     assets: Vec<Asset>,
 }
 #[derive(Deserialize)]
@@ -240,6 +244,7 @@ impl Updater {
             size: asset.size,
             sha256,
             release_url: release.html_url,
+            release_notes: release.body.unwrap_or_default(),
         }))
     }
 
@@ -343,8 +348,18 @@ impl Updater {
             "Pending update is for a different build flavor"
         );
         replace(&source, &target, true)?;
+        write_json(&self.cache.join("applied.json"), &pending.candidate)?;
         self.clear_pending()?;
         Ok(true)
+    }
+
+    /// Receipt survives replacement and exec so the new UI can explain the update.
+    pub fn applied(&self) -> Result<Option<Candidate>> {
+        match File::open(self.cache.join("applied.json")) {
+            Ok(file) => Ok(Some(serde_json::from_slice(&bounded(file, MAX_METADATA)?)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn pending_version(&self) -> Result<Option<String>> {
@@ -695,6 +710,7 @@ mod tests {
             draft: false,
             prerelease: false,
             html_url: "https://github.com/bstar/starfold/releases".into(),
+            body: Some("Release notes".into()),
             assets: vec![Asset {
                 name: name.clone(),
                 size: 10,
@@ -809,6 +825,7 @@ mod tests {
                 size: 10,
                 sha256: "ab".repeat(32),
                 release_url: String::new(),
+                release_notes: "Improved playback".into(),
             },
             executable_sha256: hash_file(&staged).unwrap(),
             executable_size: 14,
