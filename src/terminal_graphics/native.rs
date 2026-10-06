@@ -52,7 +52,7 @@ pub(super) struct Painter {
     assets: HashMap<String, Asset>,
 }
 
-fn rgb(value: &str) -> [u8; 3] {
+pub(super) fn rgb(value: &str) -> [u8; 3] {
     let Some(hex) = value
         .strip_prefix('#')
         .filter(|s| s.len() == 6 && s.is_ascii())

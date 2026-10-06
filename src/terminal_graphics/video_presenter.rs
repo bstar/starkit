@@ -112,9 +112,10 @@ impl VideoPresenter {
             (u32::from(rect.x + rect.width) * v.width / u32::from(v.columns)).min(output.width());
         let endy =
             (u32::from(rect.y + rect.height) * v.height / u32::from(v.rows)).min(output.height());
+        let [r, g, b] = super::native::rgb(&scene.background);
         for row in y..endy {
             for column in x..endx {
-                output.put_pixel(column, row, crate::image::Rgba([0; 4]));
+                output.put_pixel(column, row, crate::image::Rgba([r, g, b, 255]));
             }
         }
         // Clip the live layer with small chrome overlays. Source frames stay
@@ -127,6 +128,11 @@ impl VideoPresenter {
                 .min(output.width());
             let bottom = (u32::from(fitted.y + fitted.height) * v.height / u32::from(v.rows))
                 .min(output.height());
+            for row in top..bottom {
+                for column in left..right {
+                    output.put_pixel(column, row, crate::image::Rgba([0; 4]));
+                }
+            }
             let radius = 12u32
                 .min(right.saturating_sub(left) / 2)
                 .min(bottom.saturating_sub(top) / 2);
@@ -146,7 +152,7 @@ impl VideoPresenter {
                         (left + dx, bottom - 1 - dy),
                         (right - 1 - dx, bottom - 1 - dy),
                     ] {
-                        output.put_pixel(column, row, crate::image::Rgba([0, 0, 0, alpha]));
+                        output.put_pixel(column, row, crate::image::Rgba([r, g, b, alpha]));
                     }
                 }
             }
@@ -344,6 +350,7 @@ mod tests {
             scale: Default::default(),
             zoom: 100,
         });
+        scene.background = "#20212a".into();
         let mut presenter = VideoPresenter::new().unwrap();
         presenter.frame = Some(("movie".into(), Arc::new(RgbaImage::new(1920, 1080))));
         let frame = Arc::new(RgbaImage::from_pixel(
@@ -356,7 +363,8 @@ mod tests {
             VideoPresenter::fitted_rect(rect, &presenter.frame.as_ref().unwrap().1, scene.viewport);
         let left = u32::from(fitted.x) * 10;
         let top = u32::from(fitted.y) * 20;
-        assert_eq!(masked.get_pixel(left, top).0, [0, 0, 0, 255]);
+        assert_eq!(masked.get_pixel(left, top).0, [32, 33, 42, 255]);
+        assert_eq!(masked.get_pixel(100, 150).0, [32, 33, 42, 255]);
         assert_eq!(masked.get_pixel(left + 11, top + 11).0, [0; 4]);
         assert_eq!(masked.get_pixel(150, 150).0, [0; 4]);
         assert_eq!(masked.get_pixel(20, 20).0, [20, 30, 40, 255]);
