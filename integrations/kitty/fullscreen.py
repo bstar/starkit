@@ -10,6 +10,19 @@ def main(args):
     pass
 
 
+def cursor_hidden(hidden):
+    if os.uname().sysname != 'Darwin':
+        return
+    import ctypes
+    objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    send = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool)(('objc_msgSend', objc))
+    send(objc.objc_getClass(b'NSCursor'), objc.sel_registerName(b'setHiddenUntilMouseMoves:'), hidden)
+
+
 def platform_fullscreen(boss, window):
     from kitty.utils import platform_window_id
     native_id = platform_window_id(window.os_window_id)
@@ -113,8 +126,13 @@ def handle_result(args, result, target_window_id, boss):
     window = boss.window_id_map.get(target_window_id)
     if window is None:
         raise RuntimeError('Kitty window no longer exists')
-    if len(args) != 2 or args[1] not in ('enter', 'leave', 'leave-cleanup'):
+    if len(args) != 2 or args[1] not in ('enter', 'leave', 'leave-cleanup', 'cursor-hide', 'cursor-show'):
         raise ValueError('Invalid STAR/KIT fullscreen action')
+    if args[1].startswith('cursor-'):
+        cursor_hidden(args[1] == 'cursor-hide')
+        return
+    if args[1] != 'enter':
+        cursor_hidden(False)
     apply(boss, window, args[1] == 'enter')
     if args[1] == 'leave-cleanup':
         os.unlink(args[0])

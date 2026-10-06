@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::{
+    cell::Cell,
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
@@ -9,9 +10,14 @@ use std::{
 };
 
 pub struct Window {
-    sender: Sender<bool>,
+    sender: Sender<Action>,
+    cursor_hidden: Cell<bool>,
     pub notices: Receiver<String>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+enum Action {
+    Fullscreen(bool),
+    Cursor(bool),
 }
 impl Window {
     pub fn new() -> Result<Self> {
@@ -27,10 +33,16 @@ impl Window {
         let (sender, rx) = bounded(8);
         let (tx, notices) = bounded(4);
         let worker = std::thread::Builder::new().name("star-kitty-window".into()).spawn(move || {
-            for enabled in rx {
-                match operation(&path,enabled) {
+            for action in rx {
+                let (name, cursor) = match action {
+                    Action::Fullscreen(true) => ("enter", false),
+                    Action::Fullscreen(false) => ("leave", false),
+                    Action::Cursor(true) => ("cursor-hide", true),
+                    Action::Cursor(false) => ("cursor-show", true),
+                };
+                match operation_action(&path,name) {
                     Ok(()) => {},
-                    Err(error) => { tracing::warn!(%error, "Kitty fullscreen operation failed"); let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); }
+                    Err(error) => { tracing::warn!(%error, "Kitty window operation failed"); if !cursor { let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); } }
                 }
             }
             // Kitty removes its helper after processing the final restore.
@@ -41,12 +53,21 @@ impl Window {
         })?;
         Ok(Self {
             sender,
+            cursor_hidden: Cell::new(false),
             notices,
             worker: Some(worker),
         })
     }
     pub fn set(&self, enabled: bool) {
-        let _ = self.sender.try_send(enabled);
+        let _ = self.sender.try_send(Action::Fullscreen(enabled));
+    }
+    pub fn cursor(&self, hidden: bool) {
+        if cfg!(target_os = "macos")
+            && hidden != self.cursor_hidden.get()
+            && self.sender.try_send(Action::Cursor(hidden)).is_ok()
+        {
+            self.cursor_hidden.set(hidden);
+        }
     }
 }
 impl Drop for Window {
@@ -57,9 +78,6 @@ impl Drop for Window {
             let _ = worker.join();
         }
     }
-}
-fn operation(path: &PathBuf, enabled: bool) -> Result<()> {
-    operation_action(path, if enabled { "enter" } else { "leave" })
 }
 fn operation_action(path: &PathBuf, action: &str) -> Result<()> {
     let id = std::env::var("KITTY_WINDOW_ID").context("Kitty window identity missing")?;

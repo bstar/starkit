@@ -534,6 +534,8 @@ fn run_impl(
     use std::io::Write;
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut pointer = super::pointer::Pointer::default();
+    let mut focused = true;
+    let mut mouse_down = false;
     let mut resize_handles = Vec::new();
     let mut pointer_regions = Vec::new();
     let mut pointer_placements: Vec<super::placement::Placement> = Vec::new();
@@ -962,6 +964,21 @@ fn run_impl(
         let rendering = last_scene
             .as_ref()
             .is_some_and(|scene| shown != Some((scene.revision, scene.viewport.generation)));
+        let cinema = last_scene.as_ref().is_some_and(|scene| {
+            scene.components.iter().any(|c| {
+                matches!(c, Component::Image { rect, id, .. } if id.starts_with("video-")
+                && rect.x == 0 && rect.y == 0
+                && rect.width == scene.viewport.columns && rect.height == scene.viewport.rows)
+            })
+        });
+        window.cursor(
+            cinema
+                && connected
+                && focused
+                && !mouse_down
+                && media.video_playing()
+                && last_input.elapsed() >= Duration::from_secs(3),
+        );
         let poll_ms = if media.video_playing()
             || rendering
             || last_input.elapsed() < Duration::from_millis(100)
@@ -972,6 +989,7 @@ fn run_impl(
         };
         if event::poll(Duration::from_millis(poll_ms))? {
             last_input = Instant::now();
+            window.cursor(false);
             let event = event::read()?;
             let mut input = custom(&event);
             match event {
@@ -993,6 +1011,11 @@ fn run_impl(
                     }
                 }
                 Event::Mouse(m) => {
+                    match m.kind {
+                        MouseEventKind::Down(_) => mouse_down = true,
+                        MouseEventKind::Up(_) => mouse_down = false,
+                        _ => {}
+                    }
                     let (action, button) = match m.kind {
                         MouseEventKind::Down(b) => ("down", Some(b)),
                         MouseEventKind::Up(b) => ("up", Some(b)),
@@ -1044,6 +1067,8 @@ fn run_impl(
                 }
                 Event::Paste(text) => input = Some(Input::Paste { text }),
                 Event::FocusLost => {
+                    focused = false;
+                    mouse_down = false;
                     pointer.reset(&mut io::stdout().lock())?;
                     input = Some(Input::CancelPointer);
                 }
@@ -1058,6 +1083,7 @@ fn run_impl(
                     shown = None;
                     input = Some(Input::Resize { viewport: size });
                 }
+                Event::FocusGained => focused = true,
                 _ => {}
             }
             if let Some(Input::Osc72 { text }) = input.as_mut() {
