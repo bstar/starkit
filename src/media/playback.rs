@@ -687,6 +687,8 @@ fn schedule_frames(
                 last_audio_samples = samples;
                 audio_progress = Instant::now();
             }
+            // Acquire the initialized origin/rate before reading the clock.
+            let audio_active = c.audio_active.load(Ordering::Acquire);
             let audio_time = c.audio_origin_us.load(Ordering::Relaxed) as f64 / 1_000_000.0
                 + c.audio_clock
                     .seconds(c.audio_rate.load(Ordering::Relaxed))
@@ -701,8 +703,8 @@ fn schedule_frames(
                 } else {
                     0.0
                 };
-            if (c.audio_active.load(Ordering::Relaxed) && effective_audio + 0.002 >= f.seconds)
-                || (!c.audio_active.load(Ordering::Relaxed) && clock.base.elapsed() >= target)
+            if (audio_active && effective_audio + 0.002 >= f.seconds)
+                || (!audio_active && clock.base.elapsed() >= target)
             {
                 break;
             }
