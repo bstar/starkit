@@ -910,11 +910,13 @@ impl Frontend {
                 generation,
                 message,
             } => {
-                if self
-                    .active
-                    .as_ref()
-                    .is_some_and(|a| a.session == session && a.generation == generation)
-                {
+                if self.active.as_ref().map_or_else(
+                    || {
+                        self.pending_control
+                            .is_some_and(|(s, g, _, _)| s == session && g == generation)
+                    },
+                    |a| a.session == session && a.generation == generation,
+                ) {
                     self.active = None;
                     let _ = out.try_send(ClientMessage::Media {
                         message: ToHost::Status {
@@ -998,6 +1000,54 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn original_open_failure_is_reported_before_decoder_exists() {
+        let mut frontend = Frontend::new(false);
+        let (send, receive) = bounded(8);
+        frontend
+            .receive(
+                ToClient::Control {
+                    session: 4,
+                    generation: 2,
+                    paused: false,
+                    volume: 80,
+                },
+                &send,
+            )
+            .unwrap();
+        frontend
+            .receive(
+                ToClient::Error {
+                    session: 4,
+                    generation: 1,
+                    message: "stale".into(),
+                },
+                &send,
+            )
+            .unwrap();
+        assert!(receive.is_empty());
+        frontend
+            .receive(
+                ToClient::Error {
+                    session: 4,
+                    generation: 2,
+                    message: "Original media: permission denied".into(),
+                },
+                &send,
+            )
+            .unwrap();
+        assert!(matches!(
+            receive.try_recv().unwrap(),
+            ClientMessage::Media {
+                message: ToHost::Status {
+                    finished: true,
+                    generation: 2,
+                    warning: Some(_),
+                    ..
+                }
+            }
+        ));
+    }
     #[test]
     fn seek_startup_does_not_carry_stalls_or_reduce_quality() {
         let mut h = Host::new(PathBuf::new(), "test".into(), 1, true);
