@@ -378,8 +378,9 @@ impl AudioConsumer {
         ctrl: &Controls,
     ) {
         let gain = ctrl.volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-        let running =
-            !ctrl.paused.load(Ordering::Relaxed) && ctrl.video_ready.load(Ordering::Acquire);
+        let running = !ctrl.paused.load(Ordering::Relaxed)
+            && ctrl.video_ready.load(Ordering::Acquire)
+            && ctrl.audio_active.load(Ordering::Acquire);
         if !self.primed
             && (self.ring.slots() >= self.prebuffer || ctrl.audio_eof.load(Ordering::Acquire))
         {
@@ -538,7 +539,7 @@ impl Audio {
                 self.ctrl
                     .audio_origin_us
                     .store((origin.max(0.0) * 1_000_000.0) as u64, Ordering::Relaxed);
-                self.ctrl.audio_active.store(true, Ordering::Relaxed);
+                self.ctrl.audio_active.store(true, Ordering::Release);
             }
             let mut out = frame::Audio::empty();
             self.resample.run(&f, &mut out)?;
@@ -799,6 +800,13 @@ mod audio_tests {
     #[test]
     fn short_audio_tail_plays_without_false_underrun_or_video_start_race() {
         let (mut producer, mut consumer, ctrl) = setup();
+        ctrl.audio_active.store(false, Ordering::Release);
+        let mut startup = [1.0_f32; 4];
+        consumer.prebuffer = 0; // SSH opens before its first audio packet.
+        consumer.render(&mut startup, 2, &ctrl);
+        assert_eq!(startup, [0.0; 4]);
+        assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 0);
+        ctrl.audio_active.store(true, Ordering::Release);
         producer.push(stereo(0.25, -0.25)).unwrap();
         ctrl.audio_eof.store(true, Ordering::Release);
         ctrl.video_ready.store(false, Ordering::Release);
