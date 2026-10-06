@@ -27,15 +27,17 @@ impl Window {
         let (sender, rx) = bounded(8);
         let (tx, notices) = bounded(4);
         let worker = std::thread::Builder::new().name("star-kitty-window".into()).spawn(move || {
-            let mut entered = false;
             for enabled in rx {
                 match operation(&path,enabled) {
-                    Ok(()) => entered = enabled,
+                    Ok(()) => {},
                     Err(error) => { tracing::warn!(%error, "Kitty fullscreen operation failed"); let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); }
                 }
             }
-            if entered { let _ = operation(&path,false); }
-            let _ = std::fs::remove_dir_all(root);
+            // Kitty removes its helper after processing the final restore.
+            // One-way terminal delivery can return before Kitty reads the file.
+            if operation_action(&path, "leave-cleanup").is_err() {
+                let _ = std::fs::remove_dir_all(root);
+            }
         })?;
         Ok(Self {
             sender,
@@ -57,6 +59,9 @@ impl Drop for Window {
     }
 }
 fn operation(path: &PathBuf, enabled: bool) -> Result<()> {
+    operation_action(path, if enabled { "enter" } else { "leave" })
+}
+fn operation_action(path: &PathBuf, action: &str) -> Result<()> {
     let id = std::env::var("KITTY_WINDOW_ID").context("Kitty window identity missing")?;
     anyhow::ensure!(id.parse::<u64>().is_ok(), "Invalid Kitty window identity");
     // A second reader on /dev/tty races crossterm: remote-control replies can
@@ -64,7 +69,7 @@ fn operation(path: &PathBuf, enabled: bool) -> Result<()> {
     // Socket controls have a private reply channel; terminal controls must be
     // one-way and use the application's serialized stdout writer.
     if std::env::var_os("KITTY_LISTEN_ON").is_none() {
-        let wire = terminal_command(path, &id, enabled)?;
+        let wire = terminal_command(path, &id, action)?;
         let mut out = std::io::stdout().lock();
         out.write_all(&wire)?;
         out.flush()?;
@@ -78,7 +83,7 @@ fn operation(path: &PathBuf, enabled: bool) -> Result<()> {
     let mut child = command
         .args(["kitten", "--match", &format!("id:{id}")])
         .arg(path)
-        .arg(if enabled { "enter" } else { "leave" })
+        .arg(action)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -101,13 +106,13 @@ fn operation(path: &PathBuf, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-fn terminal_command(path: &std::path::Path, id: &str, enabled: bool) -> Result<Vec<u8>> {
+fn terminal_command(path: &std::path::Path, id: &str, action: &str) -> Result<Vec<u8>> {
     let id: u64 = id.parse().context("Invalid Kitty window identity")?;
     let command = serde_json::json!({
         "cmd": "kitten", "version": [0, 35, 0], "no_response": true,
         "kitty_window_id": id,
         "payload": {"kitten": path, "match": format!("id:{id}"),
-            "args": [if enabled { "enter" } else { "leave" }]}
+            "args": [action]}
     });
     let mut wire = b"\x1bP@kitty-cmd".to_vec();
     serde_json::to_writer(&mut wire, &command)?;
@@ -121,8 +126,12 @@ mod tests {
     #[test]
     fn terminal_fullscreen_never_requests_a_reply_on_the_input_stream() {
         for enabled in [true, false] {
-            let wire =
-                terminal_command(std::path::Path::new("/tmp/fullscreen.py"), "7", enabled).unwrap();
+            let wire = terminal_command(
+                std::path::Path::new("/tmp/fullscreen.py"),
+                "7",
+                if enabled { "enter" } else { "leave" },
+            )
+            .unwrap();
             assert!(wire.starts_with(b"\x1bP@kitty-cmd"));
             assert!(wire.ends_with(b"\x1b\\"));
             let command: serde_json::Value =
@@ -135,8 +144,11 @@ mod tests {
                 if enabled { "enter" } else { "leave" }
             );
         }
-        assert!(
-            terminal_command(std::path::Path::new("/tmp/fullscreen.py"), "7;other", true).is_err()
-        );
+        assert!(terminal_command(
+            std::path::Path::new("/tmp/fullscreen.py"),
+            "7;other",
+            "enter"
+        )
+        .is_err());
     }
 }

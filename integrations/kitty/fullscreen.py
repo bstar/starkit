@@ -84,6 +84,9 @@ def handle_result(args, result, target_window_id, boss):
     window = boss.window_id_map.get(target_window_id)
     if window is None:
         raise RuntimeError('Kitty window no longer exists')
-    if len(args) != 2 or args[1] not in ('enter', 'leave'):
+    if len(args) != 2 or args[1] not in ('enter', 'leave', 'leave-cleanup'):
         raise ValueError('Invalid STAR/KIT fullscreen action')
     apply(boss, window, args[1] == 'enter')
+    if args[1] == 'leave-cleanup':
+        os.unlink(args[0])
+        os.rmdir(os.path.dirname(args[0]))
