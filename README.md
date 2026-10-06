@@ -65,6 +65,8 @@ over the existing SSH scene transport. Codec/audio contexts stay on workers;
 the pixel renderer receives RGBA frames without serializing scenes per frame.
 Local movies decode audio on an independent worker with a bounded half-second
 ring and a 100 ms startup reserve, so video conversion cannot block audio refill.
+SSH streams use eight bounded decoded video frames of lookahead so the shared
+demuxer can refill audio while video waits for the clock.
 Callbacks consume complete channel frames; underruns are counted and logged
 outside the callback. Applications own file selection and lifecycle, not codec
 or audio backends.
@@ -75,6 +77,7 @@ For a muted test against the actual output device:
 nix develop -c cargo run --release --features media --example movie-bench -- MOVIE --audio --seconds=20 --start=600
 ```
 
+Use `--stream --audio` with an MPEG-TS proxy file to check streamed playback.
 This checks for buffer underruns; a listening check is still needed to judge
 sound quality.
 

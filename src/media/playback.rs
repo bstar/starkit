@@ -106,7 +106,10 @@ impl Player {
     ) -> Result<Self> {
         init()?;
         let ctrl = controls.clone();
-        let (decoded, queue) = bounded::<Frame>(1);
+        // A stream cannot reopen its audio independently. Keep a small
+        // bounded video lookahead so demux can prime/refill PCM before the
+        // presentation clock blocks the next video frame.
+        let (decoded, queue) = bounded::<Frame>(if source.is_some() { 1 } else { 8 });
         let (show, frames) = bounded(1);
         let old = frames.clone();
         let (notice, notices) = bounded(8);
@@ -180,7 +183,7 @@ impl Player {
                         }
                         None
                     } else {
-                        open_audio(&input, &options.audio, &ctrl, &notice, 0)?
+                        open_audio(&input, &options.audio, &ctrl, &notice, 100)?
                     };
                     let local = source.is_some();
                     if start > 0.0 && local {
@@ -802,7 +805,7 @@ mod audio_tests {
         let (mut producer, mut consumer, ctrl) = setup();
         ctrl.audio_active.store(false, Ordering::Release);
         let mut startup = [1.0_f32; 4];
-        consumer.prebuffer = 0; // SSH opens before its first audio packet.
+        consumer.prebuffer = 0; // Even without preroll, wait for the first audio packet.
         consumer.render(&mut startup, 2, &ctrl);
         assert_eq!(startup, [0.0; 4]);
         assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 0);

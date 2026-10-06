@@ -29,18 +29,25 @@ fn main() -> anyhow::Result<()> {
             && start >= 0.0,
         "Invalid benchmark duration/start"
     );
-    let player = Player::file_with_options(
-        path.into(),
-        start,
-        PlaybackOptions {
-            audio: if std::env::args().any(|s| s == "--audio") {
-                Selection::Auto
-            } else {
-                Selection::Off
+    let audio = std::env::args().any(|s| s == "--audio");
+    let streamed = std::env::args().any(|s| s == "--stream");
+    anyhow::ensure!(!streamed || audio, "--stream requires --audio");
+    let player = if streamed {
+        Player::stream(std::fs::File::open(path)?, start)?
+    } else {
+        Player::file_with_options(
+            path.into(),
+            start,
+            PlaybackOptions {
+                audio: if audio {
+                    Selection::Auto
+                } else {
+                    Selection::Off
+                },
+                subtitle: Selection::Off,
             },
-            subtitle: Selection::Off,
-        },
-    )?;
+        )?
+    };
     let started = Instant::now();
     let mut frames = 0;
     let mut dimensions = (0, 0);
@@ -77,7 +84,7 @@ fn main() -> anyhow::Result<()> {
         println!("{notice}");
     }
     anyhow::ensure!(frames > 0, "No video frames decoded");
-    if std::env::args().any(|s| s == "--audio") {
+    if audio {
         anyhow::ensure!(
             player.controls.audio_samples.load(Ordering::Relaxed) > 0,
             "No audio frames played"
