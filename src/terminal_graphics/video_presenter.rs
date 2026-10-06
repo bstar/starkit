@@ -16,6 +16,24 @@ pub struct VideoPresenter {
     pub frame: Option<(String, Arc<RgbaImage>)>,
 }
 impl VideoPresenter {
+    fn fitted_rect(rect: Rect, pixels: &RgbaImage, viewport: Viewport) -> Rect {
+        let cw = f64::from(viewport.width) / f64::from(viewport.columns);
+        let ch = f64::from(viewport.height) / f64::from(viewport.rows);
+        let factor = (f64::from(rect.width) * cw / f64::from(pixels.width()))
+            .min(f64::from(rect.height) * ch / f64::from(pixels.height()));
+        let width = (f64::from(pixels.width()) * factor / cw)
+            .round()
+            .clamp(1.0, f64::from(rect.width)) as u16;
+        let height = (f64::from(pixels.height()) * factor / ch)
+            .round()
+            .clamp(1.0, f64::from(rect.height)) as u16;
+        Rect {
+            x: rect.x + (rect.width - width) / 2,
+            y: rect.y + (rect.height - height) / 2,
+            width,
+            height,
+        }
+    }
     pub fn new() -> anyhow::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
@@ -80,7 +98,7 @@ impl VideoPresenter {
         pixels: Arc<RgbaImage>,
         terminal: Viewport,
     ) -> Arc<RgbaImage> {
-        let Some((id, _)) = &self.frame else {
+        let Some((id, video)) = &self.frame else {
             return pixels;
         };
         let Some(rect) = Self::image_rect(scene, id, terminal) else {
@@ -97,6 +115,40 @@ impl VideoPresenter {
         for row in y..endy {
             for column in x..endx {
                 output.put_pixel(column, row, crate::image::Rgba([0; 4]));
+            }
+        }
+        // Clip the live layer with small chrome overlays. Source frames stay
+        // untouched, avoiding a full-resolution copy on every decoded frame.
+        if rect.width > 0 && rect.height > 0 {
+            let fitted = Self::fitted_rect(rect, video, terminal);
+            let left = u32::from(fitted.x) * v.width / u32::from(v.columns);
+            let top = u32::from(fitted.y) * v.height / u32::from(v.rows);
+            let right = (u32::from(fitted.x + fitted.width) * v.width / u32::from(v.columns))
+                .min(output.width());
+            let bottom = (u32::from(fitted.y + fitted.height) * v.height / u32::from(v.rows))
+                .min(output.height());
+            let radius = 12u32
+                .min(right.saturating_sub(left) / 2)
+                .min(bottom.saturating_sub(top) / 2);
+            for dy in 0..radius {
+                for dx in 0..radius {
+                    let distance = ((radius as f32 - dx as f32 - 0.5).powi(2)
+                        + (radius as f32 - dy as f32 - 0.5).powi(2))
+                    .sqrt();
+                    let alpha =
+                        ((distance - radius as f32 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    if alpha == 0 {
+                        continue;
+                    }
+                    for (column, row) in [
+                        (left + dx, top + dy),
+                        (right - 1 - dx, top + dy),
+                        (left + dx, bottom - 1 - dy),
+                        (right - 1 - dx, bottom - 1 - dy),
+                    ] {
+                        output.put_pixel(column, row, crate::image::Rgba([0, 0, 0, alpha]));
+                    }
+                }
             }
         }
         // Restore separately placed popups over the video without stopping it.
@@ -200,24 +252,12 @@ impl VideoPresenter {
             )?;
             self.background = Some((rect, id));
         }
-        let cw = f64::from(viewport.width) / f64::from(viewport.columns);
-        let ch = f64::from(viewport.height) / f64::from(viewport.rows);
-        let factor = (f64::from(rect.width) * cw / f64::from(pixels.width()))
-            .min(f64::from(rect.height) * ch / f64::from(pixels.height()));
-        let cols = (f64::from(pixels.width()) * factor / cw)
-            .round()
-            .clamp(1.0, f64::from(rect.width)) as u16;
-        let rows = (f64::from(pixels.height()) * factor / ch)
-            .round()
-            .clamp(1.0, f64::from(rect.height)) as u16;
+        let fitted = Self::fitted_rect(rect, &pixels, viewport);
+        let cols = fitted.width;
+        let rows = fitted.height;
         self.next = self.next.wrapping_add(1);
         let id = self.next;
-        write!(
-            out,
-            "\x1b[?2026h\x1b[{};{}H",
-            rect.y + (rect.height - rows) / 2 + 1,
-            rect.x + (rect.width - cols) / 2 + 1
-        )?;
+        write!(out, "\x1b[?2026h\x1b[{};{}H", fitted.y + 1, fitted.x + 1)?;
         // A terminal-owned local frontend shares Kitty's filesystem, including
         // SSH playback. Kitty unlinks t=t payloads after reading them.
         if self.local_files {
@@ -312,6 +352,12 @@ mod tests {
             crate::image::Rgba([20, 30, 40, 255]),
         ));
         let masked = presenter.mask(&scene, frame, scene.viewport);
+        let fitted =
+            VideoPresenter::fitted_rect(rect, &presenter.frame.as_ref().unwrap().1, scene.viewport);
+        let left = u32::from(fitted.x) * 10;
+        let top = u32::from(fitted.y) * 20;
+        assert_eq!(masked.get_pixel(left, top).0, [0, 0, 0, 255]);
+        assert_eq!(masked.get_pixel(left + 11, top + 11).0, [0; 4]);
         assert_eq!(masked.get_pixel(150, 150).0, [0; 4]);
         assert_eq!(masked.get_pixel(20, 20).0, [20, 30, 40, 255]);
         let mut wire = vec![];
