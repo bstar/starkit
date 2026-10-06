@@ -1153,6 +1153,45 @@ fn tab_control(canvas: &mut Pixmap, label: &str, rect: [f32; 4], color: &str) {
 }
 
 fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: &str) {
+    // Solid media faces match AMP's Material-style 24-unit transport artwork.
+    // Seeking uses double triangles, deliberately distinct from track skipping.
+    if let Some(kind) = kind.strip_prefix("media-") {
+        let mut p = PathBuilder::new();
+        let polygons: Vec<Vec<(f32, f32)>> = match kind {
+            "play" => vec![vec![(8., 5.14), (8., 19.14), (19., 12.14)]],
+            "pause" => vec![
+                vec![(6., 5.), (10., 5.), (10., 19.), (6., 19.)],
+                vec![(14., 5.), (18., 5.), (18., 19.), (14., 19.)],
+            ],
+            "stop" => vec![vec![(6., 6.), (18., 6.), (18., 18.), (6., 18.)]],
+            "forward" => vec![
+                vec![(3., 6.), (12., 12.), (3., 18.)],
+                vec![(12., 6.), (21., 12.), (12., 18.)],
+            ],
+            "rewind" => vec![
+                vec![(21., 6.), (12., 12.), (21., 18.)],
+                vec![(12., 6.), (3., 12.), (12., 18.)],
+            ],
+            _ => vec![],
+        };
+        for polygon in polygons {
+            p.move_to(polygon[0].0, polygon[0].1);
+            for (px, py) in polygon.into_iter().skip(1) {
+                p.line_to(px, py);
+            }
+            p.close();
+        }
+        if let Some(path) = p.finish() {
+            canvas.fill_path(
+                &path,
+                &paint(color),
+                tiny_skia::FillRule::Winding,
+                Transform::from_row(size / 24., 0., 0., size / 24., x, y),
+                None,
+            );
+        }
+        return;
+    }
     let mut p = PathBuilder::new();
     if matches!(
         kind,
@@ -1262,6 +1301,37 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_faces_are_solid_and_seek_arrows_are_mirrored() {
+        for size in [16, 24, 40] {
+            let mut play = Pixmap::new(size, size).unwrap();
+            draw_icon(&mut play, "media-play", 0., 0., size as f32, "#ffffff");
+            assert_eq!(play.pixel(size / 2, size / 2).unwrap().alpha(), 255);
+            let mut rewind = Pixmap::new(size, size).unwrap();
+            let mut forward = Pixmap::new(size, size).unwrap();
+            draw_icon(&mut rewind, "media-rewind", 0., 0., size as f32, "#ffffff");
+            draw_icon(
+                &mut forward,
+                "media-forward",
+                0.,
+                0.,
+                size as f32,
+                "#ffffff",
+            );
+            for y in 0..size {
+                for x in 0..size {
+                    assert!(
+                        rewind
+                            .pixel(x, y)
+                            .unwrap()
+                            .alpha()
+                            .abs_diff(forward.pixel(size - x - 1, y).unwrap().alpha())
+                            <= 1
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn numbered_tabs_keep_numbers_distinct_from_labels_and_controls() {
         let mut scene = scene();
