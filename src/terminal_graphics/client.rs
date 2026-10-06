@@ -763,6 +763,11 @@ fn run_impl(
                 } if generation == size.generation && width > 0 && height > 0 => {
                     let presentation_started = Instant::now();
                     if pixels {
+                        if shown.is_none() {
+                            let mut out = io::stdout().lock();
+                            video_layer.clear(&mut out)?;
+                            out.write_all(b"\x1b[2J\x1b[H")?;
+                        }
                         bytes += presenter.present_pixels(
                             {
                                 let frame = frame_pixels.context("Native frame has no pixels")?;
