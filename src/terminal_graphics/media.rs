@@ -486,6 +486,12 @@ pub struct Frontend {
     audio: super::audio::Frontend,
 }
 impl Frontend {
+    pub fn video_playing(&self) -> bool {
+        self.active.as_ref().is_some_and(|a| {
+            !a.player.controls.paused.load(Ordering::Relaxed)
+                && !a.player.controls.finished.load(Ordering::Relaxed)
+        })
+    }
     pub fn reset(&mut self) {
         self.active = None;
         self.audio.reset();

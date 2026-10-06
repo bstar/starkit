@@ -962,7 +962,10 @@ fn run_impl(
         let rendering = last_scene
             .as_ref()
             .is_some_and(|scene| shown != Some((scene.revision, scene.viewport.generation)));
-        let poll_ms = if rendering || last_input.elapsed() < Duration::from_millis(100) {
+        let poll_ms = if media.video_playing()
+            || rendering
+            || last_input.elapsed() < Duration::from_millis(100)
+        {
             2
         } else {
             16

@@ -1,6 +1,8 @@
 //! Local decoding, bounded frame scheduling and audio on the presentation machine.
 use super::*;
+mod clock;
 use av::{codec, format, frame, media};
+use clock::AudioClock;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::{
@@ -25,6 +27,7 @@ pub struct Controls {
     pub audio_origin_us: AtomicU64,
     pub dropped: AtomicU64,
     pub underruns: AtomicU64,
+    audio_clock: AudioClock,
 }
 impl Controls {
     pub fn new() -> Arc<Self> {
@@ -379,7 +382,9 @@ impl AudioConsumer {
         data: &mut [T],
         channels: usize,
         ctrl: &Controls,
+        device_latency: Duration,
     ) {
+        let callback_ns = ctrl.audio_clock.elapsed_ns();
         let gain = ctrl.volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
         let running = !ctrl.paused.load(Ordering::Relaxed)
             && ctrl.video_ready.load(Ordering::Acquire)
@@ -413,7 +418,14 @@ impl AudioConsumer {
                 *sample = T::from_sample_(frame.map_or(0.0, |f| f[i] * gain));
             }
         }
-        ctrl.audio_samples.fetch_add(delivered, Ordering::Relaxed);
+        let first = ctrl.audio_samples.fetch_add(delivered, Ordering::Relaxed);
+        if delivered > 0 {
+            ctrl.audio_clock.publish(
+                callback_ns.saturating_add(device_latency.as_nanos() as u64),
+                first,
+                first + delivered,
+            );
+        }
         if missed && !ctrl.audio_eof.load(Ordering::Acquire) {
             ctrl.underruns.fetch_add(1, Ordering::Relaxed);
             self.primed = false;
@@ -488,8 +500,13 @@ impl Audio {
                 let c = c.clone();
                 device.build_output_stream(
                     &config,
-                    move |data: &mut [$ty], _| {
-                        ring.render(data, channels, &c);
+                    move |data: &mut [$ty], info| {
+                        let timestamp = info.timestamp();
+                        let latency = timestamp
+                            .playback
+                            .duration_since(&timestamp.callback)
+                            .unwrap_or_default();
+                        ring.render(data, channels, &c, latency);
                     },
                     error,
                     None,
@@ -671,8 +688,12 @@ fn schedule_frames(
                 audio_progress = Instant::now();
             }
             let audio_time = c.audio_origin_us.load(Ordering::Relaxed) as f64 / 1_000_000.0
-                + c.audio_samples.load(Ordering::Relaxed) as f64
-                    / f64::from(c.audio_rate.load(Ordering::Relaxed).max(1));
+                + c.audio_clock
+                    .seconds(c.audio_rate.load(Ordering::Relaxed))
+                    .unwrap_or_else(|| {
+                        c.audio_samples.load(Ordering::Relaxed) as f64
+                            / f64::from(c.audio_rate.load(Ordering::Relaxed).max(1))
+                    });
             let stalled = audio_progress.elapsed() > Duration::from_millis(250);
             let effective_audio = audio_time
                 + if stalled {
@@ -687,6 +708,7 @@ fn schedule_frames(
             }
             std::thread::sleep(Duration::from_millis(2));
         }
+        tracing::trace!(seconds = f.seconds, "Video frame scheduled");
         c.position_ms.store(
             ((start + f.seconds - origin) * 1000.0) as u64,
             Ordering::Relaxed,
@@ -760,7 +782,7 @@ mod audio_tests {
         let (mut producer, mut consumer, ctrl) = setup();
         producer.push(stereo(0.25, -0.25)).unwrap();
         let mut out = [1.0_f32; 4];
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.0; 4]);
         assert_eq!(ctrl.audio_samples.load(Ordering::Relaxed), 0);
         assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 0);
@@ -768,16 +790,16 @@ mod audio_tests {
             producer.push(stereo(0.25, -0.25)).unwrap();
         }
         let mut out = [0.0_f32; 8];
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.25, -0.25, 0.25, -0.25, 0.25, -0.25, 0.0, 0.0]);
         assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 1);
         producer.push(stereo(0.5, -0.5)).unwrap();
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.0; 8]);
         for _ in 0..2 {
             producer.push(stereo(0.5, -0.5)).unwrap();
         }
-        consumer.render(&mut out[..4], 2, &ctrl);
+        consumer.render(&mut out[..4], 2, &ctrl, Duration::ZERO);
         assert_eq!(&out[..4], &[0.5, -0.5, 0.5, -0.5]);
     }
 
@@ -788,14 +810,14 @@ mod audio_tests {
             producer.push(stereo(0.25, -0.75)).unwrap();
         }
         let mut out = [0.0_f32; 3];
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.25, -0.75, 0.0]);
         ctrl.paused.store(true, Ordering::Relaxed);
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.0; 3]);
         assert_eq!(ctrl.audio_samples.load(Ordering::Relaxed), 1);
         ctrl.paused.store(false, Ordering::Relaxed);
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.25, -0.75, 0.0]);
         assert_eq!(ctrl.audio_samples.load(Ordering::Relaxed), 2);
     }
@@ -806,7 +828,7 @@ mod audio_tests {
         ctrl.audio_active.store(false, Ordering::Release);
         let mut startup = [1.0_f32; 4];
         consumer.prebuffer = 0; // Even without preroll, wait for the first audio packet.
-        consumer.render(&mut startup, 2, &ctrl);
+        consumer.render(&mut startup, 2, &ctrl, Duration::ZERO);
         assert_eq!(startup, [0.0; 4]);
         assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 0);
         ctrl.audio_active.store(true, Ordering::Release);
@@ -814,10 +836,10 @@ mod audio_tests {
         ctrl.audio_eof.store(true, Ordering::Release);
         ctrl.video_ready.store(false, Ordering::Release);
         let mut out = [0.0_f32; 4];
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.0; 4]);
         ctrl.video_ready.store(true, Ordering::Release);
-        consumer.render(&mut out, 2, &ctrl);
+        consumer.render(&mut out, 2, &ctrl, Duration::ZERO);
         assert_eq!(out, [0.25, -0.25, 0.0, 0.0]);
         assert_eq!(ctrl.audio_samples.load(Ordering::Relaxed), 1);
         assert_eq!(ctrl.underruns.load(Ordering::Relaxed), 0);

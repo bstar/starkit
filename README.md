@@ -67,6 +67,10 @@ Local movies decode audio on an independent worker with a bounded half-second
 ring and a 100 ms startup reserve, so video conversion cannot block audio refill.
 SSH streams use eight bounded decoded video frames of lookahead so the shared
 demuxer can refill audio while video waits for the clock.
+Video uses a continuous clock anchored to the audio device's playback timestamp,
+including output latency, rather than jumping by a whole audio callback period.
+The terminal frontend polls every 2 ms during playback and returns to its quiet
+poll while paused or idle.
 Callbacks consume complete channel frames; underruns are counted and logged
 outside the callback. Applications own file selection and lifecycle, not codec
 or audio backends.
