@@ -478,6 +478,7 @@ struct Active {
     arrival_bytes: usize,
     bandwidth_bps: u64,
     eof: bool,
+    audio_underruns: u64,
 }
 pub struct Frontend {
     active: Option<Active>,
@@ -550,6 +551,7 @@ impl Frontend {
                     arrival_bytes: 0,
                     bandwidth_bps: 0,
                     eof: false,
+                    audio_underruns: 0,
                 });
                 let _ = out.try_send(ClientMessage::Media {
                     message: ToHost::Credit {
@@ -687,6 +689,16 @@ impl Frontend {
         }
         let frame = a.player.frames.try_iter().last();
         if a.last.elapsed() > Duration::from_millis(250) {
+            let underruns = a.player.controls.underruns.load(Ordering::Relaxed);
+            if underruns != a.audio_underruns {
+                tracing::warn!(
+                    session = a.session,
+                    generation = a.generation,
+                    underruns,
+                    "Movie audio buffer underrun"
+                );
+                a.audio_underruns = underruns;
+            }
             let warning = a
                 .player
                 .notices

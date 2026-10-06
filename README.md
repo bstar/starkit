@@ -63,7 +63,20 @@ The `media` feature provides bounded native FFmpeg poster decoding. The
 audio, a native timeline surface and credit-based H.264/AAC preview streaming
 over the existing SSH scene transport. Codec/audio contexts stay on workers;
 the pixel renderer receives RGBA frames without serializing scenes per frame.
-Applications own file selection and lifecycle, not codec or audio backends.
+Local movies decode audio on an independent worker with a bounded half-second
+ring and a 100 ms startup reserve, so video conversion cannot block audio refill.
+Callbacks consume complete channel frames; underruns are counted and logged
+outside the callback. Applications own file selection and lifecycle, not codec
+or audio backends.
+
+For a muted test against the actual output device:
+
+```sh
+nix develop -c cargo run --release --features media --example movie-bench -- MOVIE --audio --seconds=20 --start=600
+```
+
+This checks for buffer underruns; a listening check is still needed to judge
+sound quality.
 
 Build optional media through `nix develop` (FFmpeg, clang/libclang, pkg-config;
 ALSA and matching audio plugins on Linux). `--no-default-features` continues to
