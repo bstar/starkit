@@ -347,8 +347,8 @@ impl Updater {
             pending.candidate.asset == asset_name(&self.app, &pending.candidate.version),
             "Pending update is for a different build flavor"
         );
-        replace(&source, &target, true)?;
         write_json(&self.cache.join("applied.json"), &pending.candidate)?;
+        replace(&source, &target, true)?;
         self.clear_pending()?;
         Ok(true)
     }
@@ -842,6 +842,14 @@ mod tests {
         assert_eq!(fs::read(&command).unwrap(), b"new executable");
         assert!(fs::symlink_metadata(&command).unwrap().is_symlink());
         assert!(updater.pending_version().unwrap().is_none());
+        let receipt = updater.applied().unwrap().unwrap();
+        assert_eq!(receipt.version, "0.0.3");
+        assert_eq!(receipt.release_notes, "Improved playback");
+        let relaunched = Updater::new(app(), updater.cache.clone()).unwrap();
+        assert_eq!(
+            relaunched.applied().unwrap().unwrap().release_notes,
+            "Improved playback"
+        );
         updater.rollback(&command).unwrap();
         assert_eq!(fs::read(&command).unwrap(), b"old executable");
     }

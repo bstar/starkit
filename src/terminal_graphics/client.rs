@@ -436,11 +436,20 @@ pub fn key(code: KeyCode) -> String {
 }
 
 pub fn run(launch: Launch) -> Result<()> {
-    run_impl(launch, |_| None, false, None)
+    run_impl(launch, |_| None, false, None, || None)
 }
 
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
-    run_impl(launch, custom, true, None)
+    run_impl(launch, custom, true, None, || None)
+}
+
+/// Application notices can be delivered while the frontend is idle, including SSH.
+pub fn run_with_notices(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    notices: fn() -> Option<String>,
+) -> Result<()> {
+    run_impl(launch, custom, true, None, notices)
 }
 
 /// Frontend owned by a local terminal integration, attached through the existing SSH TTY.
@@ -457,7 +466,7 @@ pub fn run_terminal_socket_with_events(
         attach_only: true,
         play: None,
     };
-    run_impl(launch, custom, true, Some(path))
+    run_impl(launch, custom, true, Some(path), || None)
 }
 
 fn run_impl(
@@ -465,6 +474,7 @@ fn run_impl(
     custom: fn(&Event) -> Option<Input>,
     terminal_extensions: bool,
     terminal_socket: Option<&std::path::Path>,
+    notices: fn() -> Option<String>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
@@ -557,6 +567,19 @@ fn run_impl(
     let mut frames = 0u64;
     let mut bytes = 0u64;
     loop {
+        if connected {
+            if let (Some(c), Some((revision, generation))) = (&connection, shown) {
+                if let Some(message) = notices() {
+                    id += 1;
+                    c.send(ClientMessage::Input {
+                        id,
+                        revision,
+                        generation,
+                        input: Input::Notice { message },
+                    })?;
+                }
+            }
+        }
         let controls = connection
             .as_ref()
             .map(|c| c.messages.try_iter().take(64).collect::<Vec<_>>())
