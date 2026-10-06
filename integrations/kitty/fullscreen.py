@@ -60,21 +60,47 @@ def apply(boss, window, enter):
         previous = platform_fullscreen(boss, window)
         tab = window.tabref()
         layout = tab.current_layout.name if tab else None
-        states[key] = (window.os_window_id, previous, layout)
+        manager = tab.tab_manager_ref() if tab else None
+        edges = ('left', 'top', 'right', 'bottom')
+        spacing = {kind: {edge: getattr(getattr(window, kind), edge) for edge in edges}
+                   for kind in ('padding', 'margin')}
+        states[key] = (window.os_window_id, previous, layout, manager,
+                       manager.tab_bar_hidden if manager else None, spacing,
+                       window.screen.color_profile.default_bg)
+        for kind in spacing:
+            for edge in edges:
+                window.patch_edge_width(kind, edge, 0)
+        window.set_dynamic_color(11, '#000000')
+        if manager:
+            manager.tab_bar_hidden = True
+            manager.mark_tab_bar_dirty()
         if tab:
             tab.goto_layout('stack')
+        if manager:
+            manager.resize()
         if not previous:
             toggle_fullscreen(window.os_window_id)
     else:
         state = states.pop(key, None)
         if state:
-            os_id, previous, layout = state
+            os_id, previous, layout, manager, hidden, spacing, background = state
+            for kind, widths in spacing.items():
+                for edge, value in widths.items():
+                    window.patch_edge_width(kind, edge, value)
+            window.screen.color_profile.default_bg = background
+            window.screen.mark_as_dirty()
+            boss.default_bg_changed_for(window.id, via_escape_code=True)
+            if manager:
+                manager.tab_bar_hidden = hidden
+                manager.mark_tab_bar_dirty()
             # Toggle only if playback changed the current desktop state.
             if platform_fullscreen(boss, window) != previous:
                 toggle_fullscreen(os_id)
             tab = window.tabref()
             if tab and layout:
                 tab.goto_layout(layout)
+            if manager:
+                manager.resize()
 
 
 from kittens.tui.handler import result_handler
