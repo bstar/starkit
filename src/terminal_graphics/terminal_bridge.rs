@@ -127,7 +127,6 @@ impl Attachment {
         mut play: Option<String>,
     ) -> Result<()> {
         let socket = UnixStream::connect(path).context("Attach terminal bridge session")?;
-        let mut launch_socket = socket.try_clone()?;
         let mut input_socket = socket.try_clone()?;
         let mut tty = self.tty.take().unwrap();
         let nonce = self.nonce.clone();
@@ -159,17 +158,13 @@ impl Attachment {
             emit(&self.nonce, "start", None)?;
             let mut reader = BufReader::new(socket);
             while let Some(message) = read_message::<ServerMessage>(&mut reader)? {
-                if let ServerMessage::Scene { scene } = &message {
+                if matches!(&message, ServerMessage::Scene { .. }) {
                     if let Some(path) = play.take() {
-                        write_message(
-                            &ClientMessage::Input {
-                                id: 0,
-                                revision: scene.revision,
-                                generation: scene.viewport.generation,
-                                input: super::protocol::Input::Play { path },
-                            },
-                            &mut launch_socket,
-                        )?;
+                        let bytes = serde_json::to_vec(&ServerMessage::LaunchMovie { path })?;
+                        for chunk in bytes.chunks(3072) {
+                            emit(&self.nonce, "data", Some(&STANDARD.encode(chunk)))?;
+                        }
+                        emit(&self.nonce, "end", None)?;
                     }
                 }
                 let bytes = serde_json::to_vec(&message)?;

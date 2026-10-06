@@ -615,6 +615,7 @@ fn run_impl(
                     }
                     shown = None;
                 }
+                ServerMessage::LaunchMovie { path } => direct_play = Some(path),
                 ServerMessage::Clipboard { text } => renderer.clipboard(&text)?,
                 ServerMessage::Asset { id, png } => {
                     super::assets::validate_png(&png)?;

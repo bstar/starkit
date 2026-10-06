@@ -126,10 +126,11 @@ impl Player {
                         .context("No video stream")?;
                     let index = s.index();
                     let time = s.time_base();
+                    let parameters = s.parameters();
                     let mut video = if source.is_some() {
-                        hardware::decoder(s.parameters())?
+                        hardware::checked_decoder(&mut input, index)?
                     } else {
-                        video_decoder(s.parameters())?
+                        video_decoder(parameters)?
                     };
                     anyhow::ensure!(
                         u64::from(video.width()) * u64::from(video.height()) <= 32_000_000,
@@ -194,14 +195,14 @@ impl Player {
                     let mut receive = |decoder: &mut codec::decoder::Video| -> Result<()> {
                         let mut f = frame::Video::empty();
                         while decoder.receive_frame(&mut f).is_ok() {
-                            let f = hardware::download(&f)?;
+                            let f = hardware::download(&f).context("Video frame transfer")?;
                             let seconds = f.timestamp().unwrap_or(0) as f64 * f64::from(time);
                             if local && seconds + 0.001 < start {
                                 continue;
                             }
                             let started = Instant::now();
                             let processed = if let Some(processor) = &mut processor {
-                                processor.process(&f)?
+                                processor.process(&f).context("Video filters")?
                             } else {
                                 hardware::download(&f)?
                             };
@@ -244,7 +245,7 @@ impl Player {
                             return Ok(());
                         }
                         if s.index() == index {
-                            video.send_packet(&p)?;
+                            video.send_packet(&p).context("Video decode")?;
                             receive(&mut video)?;
                         } else if let Some((i, audio_time, d, o)) = &mut sound {
                             if s.index() == *i {

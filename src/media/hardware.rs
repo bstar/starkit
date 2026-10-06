@@ -90,3 +90,43 @@ pub fn download(frame: &frame::Video) -> Result<frame::Video> {
     anyhow::ensure!(result >= 0, "Hardware video metadata copy failed");
     Ok(output)
 }
+
+/// Verify the device against actual stream data before starting audio or the
+/// playback clock. Some drivers open successfully but reject a codec profile.
+pub fn checked_decoder(
+    input: &mut av::format::context::Input,
+    index: usize,
+) -> Result<codec::decoder::Video> {
+    let parameters = input
+        .stream(index)
+        .context("Video stream unavailable")?
+        .parameters();
+    let mut decoder = self::decoder(parameters.clone())?;
+    if unsafe { (*decoder.as_ptr()).hw_device_ctx.is_null() } {
+        return Ok(decoder);
+    }
+    let probe = (|| -> Result<()> {
+        for (_stream, packet) in input
+            .packets()
+            .filter(|(s, _)| s.index() == index)
+            .take(128)
+        {
+            decoder.send_packet(&packet)?;
+            let mut frame = frame::Video::empty();
+            if decoder.receive_frame(&mut frame).is_ok() {
+                download(&frame)?;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("Hardware decoder produced no initial frame")
+    })();
+    input
+        .seek(0, ..)
+        .context("Rewind video after hardware probe")?;
+    if let Err(error) = probe {
+        tracing::warn!(%error, "Hardware profile unavailable; using software decoding");
+        return super::video_decoder(parameters);
+    }
+    decoder.flush();
+    Ok(decoder)
+}

@@ -388,6 +388,9 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    LaunchMovie {
+        path: String,
+    },
     Fullscreen {
         enabled: bool,
     },

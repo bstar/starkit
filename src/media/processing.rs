@@ -97,7 +97,16 @@ impl Processor {
             );
             let mut filters = vec![];
             if hdr {
-                filters.push("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=iec61966-2-1:m=gbr:r=full".to_owned());
+                let matrix: av::ffi::AVColorSpace = source.color_space().into();
+                let primaries: av::ffi::AVColorPrimaries = source.color_primaries().into();
+                let transfer: av::ffi::AVColorTransferCharacteristic =
+                    source.color_transfer_characteristic().into();
+                let range = if source.color_range() == av::color::Range::JPEG {
+                    "full"
+                } else {
+                    "limited"
+                };
+                filters.push(format!("zscale=min={}:pin={}:tin={}:rin={range}:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=iec61966-2-1:m=gbr:r=full", matrix as i32, primaries as i32, transfer as i32));
             }
             if self.bitmap.is_none() {
                 match &self.selection {
@@ -147,7 +156,7 @@ impl Processor {
                     "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}",
                     source.width(),
                     source.height(),
-                    source.format() as i32,
+                    av::ffi::AVPixelFormat::from(source.format()) as i32,
                     self.time,
                     sar
                 ),

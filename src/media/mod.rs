@@ -57,7 +57,11 @@ pub(crate) fn init() -> Result<()> {
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| {
         av::init().map_err(|e| e.to_string())?;
-        av::log::set_level(av::log::Level::Quiet);
+        av::log::set_level(if std::env::var_os("STAR_MEDIA_FFMPEG_LOG").is_some() {
+            av::log::Level::Warning
+        } else {
+            av::log::Level::Quiet
+        });
         Ok(())
     })
     .as_ref()

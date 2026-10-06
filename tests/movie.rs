@@ -202,3 +202,44 @@ fn hdr_is_tone_mapped_and_anamorphic_pixels_are_normalized() {
     assert_eq!(frame.pixels.dimensions(), (640, 180));
     assert!(frame.pixels.pixels().any(|p| p.0[0] > 0));
 }
+
+#[test]
+fn decoded_colors_match_the_source_pixel_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("red.mp4");
+    assert!(std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:size=128x72:rate=24",
+            "-t",
+            "0.2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-y"
+        ])
+        .arg(&path)
+        .status()
+        .unwrap()
+        .success());
+    let player = Player::file_with_options(
+        path,
+        0.0,
+        PlaybackOptions {
+            audio: Selection::Off,
+            subtitle: Selection::Off,
+        },
+    )
+    .unwrap();
+    let frame = player.frames.recv_timeout(Duration::from_secs(5)).unwrap();
+    let pixel = frame.pixels.get_pixel(64, 36).0;
+    assert!(
+        pixel[0] > 240 && pixel[1] < 15 && pixel[2] < 15,
+        "Wrong decoded red: {pixel:?}"
+    );
+}
