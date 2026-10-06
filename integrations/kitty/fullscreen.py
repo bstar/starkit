@@ -65,7 +65,8 @@ def apply(boss, window, enter):
         spacing = {kind: {edge: getattr(getattr(window, kind), edge) for edge in edges}
                    for kind in ('padding', 'margin')}
         states[key] = (window.os_window_id, previous, layout, manager,
-                       manager.tab_bar_hidden if manager else None, spacing,
+                       manager.tab_bar_hidden if manager else None,
+                       manager.tab_bar.blank_rects if manager else (), spacing,
                        window.screen.color_profile.default_bg)
         for kind in spacing:
             for edge in edges:
@@ -73,6 +74,7 @@ def apply(boss, window, enter):
         window.set_dynamic_color(11, '#000000')
         if manager:
             manager.tab_bar_hidden = True
+            manager.tab_bar.blank_rects = ()
             manager.mark_tab_bar_dirty()
         if tab:
             tab.goto_layout('stack')
@@ -83,7 +85,7 @@ def apply(boss, window, enter):
     else:
         state = states.pop(key, None)
         if state:
-            os_id, previous, layout, manager, hidden, spacing, background = state
+            os_id, previous, layout, manager, hidden, blanks, spacing, background = state
             for kind, widths in spacing.items():
                 for edge, value in widths.items():
                     window.patch_edge_width(kind, edge, value)
@@ -92,6 +94,7 @@ def apply(boss, window, enter):
             boss.default_bg_changed_for(window.id, via_escape_code=True)
             if manager:
                 manager.tab_bar_hidden = hidden
+                manager.tab_bar.blank_rects = blanks
                 manager.mark_tab_bar_dirty()
             # Toggle only if playback changed the current desktop state.
             if platform_fullscreen(boss, window) != previous:
