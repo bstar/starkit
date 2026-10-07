@@ -133,7 +133,7 @@ impl VideoPresenter {
                     output.put_pixel(column, row, crate::image::Rgba([0; 4]));
                 }
             }
-            let radius = 12u32
+            let radius = 24u32
                 .min(right.saturating_sub(left) / 2)
                 .min(bottom.saturating_sub(top) / 2);
             for dy in 0..radius {
