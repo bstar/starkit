@@ -11,7 +11,7 @@ jobs:
     runs-on: [self-hosted, macOS, graphical-desktop]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
       - run: |
           nix develop -c cargo build --example terminal-graphics --features terminal-graphics
