@@ -15,9 +15,9 @@ enum Frontend {
     Cells(super::cells::Cells),
 }
 impl Frontend {
-    fn spawn(pixels: bool, font: super::font::Font) -> Result<Self> {
+    fn spawn(pixels: bool, font: super::font::Font, options: PresentationOptions) -> Result<Self> {
         if pixels {
-            Ok(Self::Pixels(Renderer::spawn_with_font(font)?))
+            Ok(Self::Pixels(Renderer::spawn_with_options(font, options)?))
         } else {
             Ok(Self::Cells(super::cells::Cells::default()))
         }
@@ -460,6 +460,8 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
 /// Local display preferences, independent of the remote application session.
 #[derive(Debug, Clone, Copy)]
 pub struct PresentationOptions {
+    /// Pane border radius in display pixels. Zero uses square corners.
+    pub pane_corner_radius: u16,
     /// Video corner radius in display pixels. Zero uses square corners.
     pub video_corner_radius: u16,
 }
@@ -467,6 +469,7 @@ pub struct PresentationOptions {
 impl Default for PresentationOptions {
     fn default() -> Self {
         Self {
+            pane_corner_radius: 9,
             video_corner_radius: 24,
         }
     }
@@ -562,7 +565,7 @@ fn run_impl(
         eprintln!("Graphics unavailable; using the terminal interface for this session.");
     }
     let started = Instant::now();
-    let mut renderer = Frontend::spawn(pixels, font)?;
+    let mut renderer = Frontend::spawn(pixels, font, options)?;
     let mut media = super::media::Frontend::new(capabilities.local_media);
     let mut video_layer =
         super::video_presenter::VideoPresenter::with_corner_radius(options.video_corner_radius)?;

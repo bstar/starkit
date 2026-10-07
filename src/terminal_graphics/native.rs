@@ -44,6 +44,7 @@ struct Asset {
     scaled: Option<((u32, u32, ImageScale), Pixmap)>,
 }
 pub(super) struct Painter {
+    pane_corner_radius: u16,
     fonts: FontSystem,
     font_factor: f32,
     glyphs: SwashCache,
@@ -272,6 +273,9 @@ impl Painter {
         Self::with_font(super::font::Font::default())
     }
     pub(crate) fn with_font(font: super::font::Font) -> Self {
+        Self::with_pane_corner_radius(font, 9)
+    }
+    pub(crate) fn with_pane_corner_radius(font: super::font::Font, radius: u16) -> Self {
         let mut db = cosmic_text::fontdb::Database::new();
         for bytes in FONTS {
             db.load_font_data(bytes.to_vec());
@@ -293,6 +297,7 @@ impl Painter {
             .unwrap_or(1.);
         tracing::info!(requested = ?font.name, %family, pixels = ?font.pixels, font_factor, "Native terminal font selected");
         Self {
+            pane_corner_radius: radius,
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
             font_factor,
             glyphs: SwashCache::new(),
@@ -638,7 +643,7 @@ impl Painter {
                 Component::Panel { active, .. } => rounded_width(
                     &mut canvas,
                     [x + 1.5, y + 1.5, w - 3., h - 3.],
-                    9.,
+                    f32::from(self.pane_corner_radius),
                     if *active { accent } else { border },
                     3.,
                 ),
@@ -1980,6 +1985,11 @@ mod tests {
         // The track outside the thumb blends into the panel.
         assert_eq!(pixels.get_pixel(245, 65).0, [30, 30, 46, 255]);
         assert_eq!(pixels.get_pixel(241, 90).0, [30, 30, 46, 255]);
+        assert_eq!(pixels.get_pixel(25, 41).0, [30, 30, 46, 255]);
+        painter.pane_corner_radius = 0;
+        let square = painter.render(&scene).unwrap();
+        assert_eq!(square.get_pixel(25, 41).0, [69, 71, 90, 255]);
+        assert_eq!(square.get_pixel(60, 40), pixels.get_pixel(60, 40));
     }
 
     #[test]

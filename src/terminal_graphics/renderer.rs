@@ -38,6 +38,12 @@ impl Renderer {
         Self::spawn_with_font(super::font::Font::default().configured())
     }
     pub(crate) fn spawn_with_font(font: super::font::Font) -> Result<Self> {
+        Self::spawn_with_options(font, super::client::PresentationOptions::default())
+    }
+    pub(crate) fn spawn_with_options(
+        font: super::font::Font,
+        options: super::client::PresentationOptions,
+    ) -> Result<Self> {
         let (input, scenes) = bounded::<Scene>(1);
         let stale = scenes.clone();
         let (live, images) = bounded::<(String, Arc<RgbaImage>)>(1);
@@ -47,7 +53,10 @@ impl Renderer {
         let worker = std::thread::Builder::new()
             .name("star-native-renderer".into())
             .spawn(move || {
-                let mut painter = super::native::Painter::with_font(font);
+                let mut painter = super::native::Painter::with_pane_corner_radius(
+                    font,
+                    options.pane_corner_radius,
+                );
                 let mut previous = None;
                 loop {
                     let timeout = if painter.animating() { std::time::Duration::from_millis(20) } else { std::time::Duration::from_secs(3600) };
