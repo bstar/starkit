@@ -16,16 +16,78 @@ pub struct VideoPresenter {
     root: PathBuf,
     pub frame: Option<(String, Arc<RgbaImage>)>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
 impl VideoPresenter {
-    fn fitted_rect(rect: Rect, pixels: &RgbaImage, viewport: Viewport) -> Rect {
+    fn source_rect(scene: &Scene, pixels: &RgbaImage) -> SourceRect {
+        let width = pixels.width();
+        let height = pixels.height();
+        let mut source = SourceRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        // Preserve the original frame in fullscreen. Pane previews suppress
+        // only thin encoded black edges, never broad cinematic letterboxing.
+        if super::native::rgb(&scene.background) == [0; 3] || width < 32 || height < 32 {
+            return source;
+        }
+        let trim = |length: u32, sample: &dyn Fn(u32) -> (u64, u32)| {
+            for edge in 0..=8.min(length / 8) {
+                let (sum, bright) = sample(edge);
+                if sum > u64::from(length) * 9 || bright > length / 100 {
+                    // Require a clear transition into picture content. A dark
+                    // scene/fade must not trigger an arbitrary crop.
+                    return if edge > 0 && sum >= u64::from(length) * 24 {
+                        edge
+                    } else {
+                        0
+                    };
+                }
+            }
+            0
+        };
+        let row = |y: u32| {
+            let mut sum = 0u64;
+            let mut bright = 0;
+            for x in 0..width {
+                let p = pixels.get_pixel(x, y).0;
+                sum += u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]);
+                bright += u32::from(p[..3].iter().any(|v| *v > 24));
+            }
+            (sum, bright)
+        };
+        let column = |x: u32| {
+            let mut sum = 0u64;
+            let mut bright = 0;
+            for y in 0..height {
+                let p = pixels.get_pixel(x, y).0;
+                sum += u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]);
+                bright += u32::from(p[..3].iter().any(|v| *v > 24));
+            }
+            (sum, bright)
+        };
+        source.y = trim(width, &row);
+        source.x = trim(height, &column);
+        source.height -= source.y + trim(width, &|edge| row(height - 1 - edge));
+        source.width -= source.x + trim(height, &|edge| column(width - 1 - edge));
+        source
+    }
+    fn fitted_rect(rect: Rect, source: SourceRect, viewport: Viewport) -> Rect {
         let cw = f64::from(viewport.width) / f64::from(viewport.columns);
         let ch = f64::from(viewport.height) / f64::from(viewport.rows);
-        let factor = (f64::from(rect.width) * cw / f64::from(pixels.width()))
-            .min(f64::from(rect.height) * ch / f64::from(pixels.height()));
-        let width = (f64::from(pixels.width()) * factor / cw)
+        let factor = (f64::from(rect.width) * cw / f64::from(source.width))
+            .min(f64::from(rect.height) * ch / f64::from(source.height));
+        let width = (f64::from(source.width) * factor / cw)
             .round()
             .clamp(1.0, f64::from(rect.width)) as u16;
-        let height = (f64::from(pixels.height()) * factor / ch)
+        let height = (f64::from(source.height) * factor / ch)
             .round()
             .clamp(1.0, f64::from(rect.height)) as u16;
         Rect {
@@ -133,7 +195,7 @@ impl VideoPresenter {
         // Clip the live layer with small chrome overlays. Source frames stay
         // untouched, avoiding a full-resolution copy on every decoded frame.
         if rect.width > 0 && rect.height > 0 {
-            let fitted = Self::fitted_rect(rect, video, terminal);
+            let fitted = Self::fitted_rect(rect, Self::source_rect(scene, video), terminal);
             let left = u32::from(fitted.x) * v.width / u32::from(v.columns);
             let top = u32::from(fitted.y) * v.height / u32::from(v.rows);
             let right = (u32::from(fitted.x + fitted.width) * v.width / u32::from(v.columns))
@@ -282,7 +344,12 @@ impl VideoPresenter {
             )?;
             self.background = Some((rect, background, id));
         }
-        let fitted = Self::fitted_rect(rect, &pixels, viewport);
+        let source = Self::source_rect(scene, &pixels);
+        let fitted = Self::fitted_rect(rect, source, viewport);
+        let crop = format!(
+            "x={},y={},w={},h={}",
+            source.x, source.y, source.width, source.height
+        );
         let cols = fitted.width;
         let rows = fitted.height;
         self.next = self.next.wrapping_add(1);
@@ -295,7 +362,7 @@ impl VideoPresenter {
             std::fs::write(&path, pixels.as_raw())?;
             let payload = base64::engine::general_purpose::STANDARD
                 .encode(path.as_os_str().as_encoded_bytes());
-            write!(out,"\x1b_Ga=T,f=32,t=t,s={},v={},i={id},p=1,C=1,z=1,q=2,c={cols},r={rows};{payload}\x1b\\",pixels.width(),pixels.height())?;
+            write!(out,"\x1b_Ga=T,f=32,t=t,s={},v={},i={id},p=1,C=1,z=1,q=2,{crop},c={cols},r={rows};{payload}\x1b\\",pixels.width(),pixels.height())?;
             self.files.push_back(path);
         } else {
             let data = base64::engine::general_purpose::STANDARD.encode(pixels.as_raw());
@@ -304,7 +371,7 @@ impl VideoPresenter {
             for (part, chunk) in chunks.enumerate() {
                 let more = usize::from(part + 1 < count);
                 if part == 0 {
-                    write!(out,"\x1b_Ga=T,f=32,t=d,s={},v={},i={id},p=1,C=1,z=1,q=2,c={cols},r={rows},m={more};",pixels.width(),pixels.height())?
+                    write!(out,"\x1b_Ga=T,f=32,t=d,s={},v={},i={id},p=1,C=1,z=1,q=2,{crop},c={cols},r={rows},m={more};",pixels.width(),pixels.height())?
                 } else {
                     write!(out, "\x1b_Gm={more};")?
                 }
@@ -350,6 +417,76 @@ mod tests {
     use super::*;
     // Presenters use a process-owned Kitty transfer directory.
     static PRESENTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn encoded_thin_black_edges_are_trimmed_only_in_pane_preview() {
+        let _guard = PRESENTER_TEST_LOCK.lock().unwrap();
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 80, 24)),
+            Viewport {
+                columns: 80,
+                rows: 24,
+                width: 800,
+                height: 480,
+                generation: 1,
+            },
+            1,
+        );
+        scene.background = "#20212a".into();
+        let mut pixels = RgbaImage::from_pixel(1920, 804, crate::image::Rgba([30, 40, 50, 255]));
+        for y in [0, 1, 802, 803] {
+            for x in 0..1920 {
+                pixels.put_pixel(x, y, crate::image::Rgba([1, 1, 1, 255]));
+            }
+        }
+        assert_eq!(
+            VideoPresenter::source_rect(&scene, &pixels),
+            SourceRect {
+                x: 0,
+                y: 2,
+                width: 1920,
+                height: 800
+            }
+        );
+        scene.components.push(Component::Image {
+            rect: Rect {
+                x: 1,
+                y: 1,
+                width: 78,
+                height: 22,
+            },
+            id: "movie".into(),
+            png: None,
+            scale: Default::default(),
+            zoom: 100,
+        });
+        let mut presenter = VideoPresenter::new().unwrap();
+        presenter.local_files = false;
+        presenter.frame = Some(("movie".into(), Arc::new(pixels.clone())));
+        let mut wire = vec![];
+        presenter
+            .present(&scene, scene.viewport, &mut wire)
+            .unwrap();
+        assert!(String::from_utf8_lossy(&wire).contains("x=0,y=2,w=1920,h=800"));
+        scene.background = "#000000".into();
+        wire.clear();
+        presenter
+            .present(&scene, scene.viewport, &mut wire)
+            .unwrap();
+        assert!(String::from_utf8_lossy(&wire).contains("x=0,y=0,w=1920,h=804"));
+        assert_eq!(
+            VideoPresenter::source_rect(&scene, &pixels),
+            SourceRect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 804
+            }
+        );
+        scene.background = "#20212a".into();
+        let dark = RgbaImage::from_pixel(1920, 804, crate::image::Rgba([1, 1, 1, 255]));
+        assert_eq!(VideoPresenter::source_rect(&scene, &dark).height, 804);
+    }
+
     #[test]
     fn fractional_video_placement_keeps_playback_details_uncovered() {
         let _guard = PRESENTER_TEST_LOCK.lock().unwrap();
@@ -447,8 +584,11 @@ mod tests {
             crate::image::Rgba([20, 30, 40, 255]),
         ));
         let masked = presenter.mask(&scene, frame.clone(), scene.viewport);
-        let fitted =
-            VideoPresenter::fitted_rect(rect, &presenter.frame.as_ref().unwrap().1, scene.viewport);
+        let fitted = VideoPresenter::fitted_rect(
+            rect,
+            VideoPresenter::source_rect(&scene, &presenter.frame.as_ref().unwrap().1),
+            scene.viewport,
+        );
         let left = u32::from(fitted.x) * 10;
         let top = u32::from(fitted.y) * 20;
         assert_eq!(masked.get_pixel(left, top).0, [32, 33, 42, 255]);
