@@ -298,6 +298,21 @@ impl Host {
     pub fn local_playback(&self) -> bool {
         self.local
     }
+    /// Replace queued startup messages with the saved playback state before
+    /// the frontend opens a decoder, avoiding a brief play from the beginning.
+    pub fn restore_playback(
+        &mut self,
+        position: f64,
+        options: media::tracks::PlaybackOptions,
+        paused: bool,
+        volume: u8,
+    ) {
+        self.control.clear();
+        self.options = options;
+        self.paused = paused;
+        self.volume = volume.min(100);
+        self.restart(position);
+    }
     pub fn set_bounds(&mut self, width: u32, height: u32) {
         let bounds = (width.max(2), height.max(2));
         if self.bounds != bounds {
@@ -1000,6 +1015,36 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restored_playback_opens_only_at_saved_position_and_control_state() {
+        let mut host = Host::new(PathBuf::new(), "resume".into(), 1, true);
+        let options = media::tracks::PlaybackOptions {
+            audio: media::tracks::Selection::Stream(2),
+            subtitle: media::tracks::Selection::Off,
+        };
+        host.restore_playback(37.125, options.clone(), true, 65);
+        let effects = host.effects();
+        let opens: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                ServerMessage::Media {
+                    message: ToClient::Open { start, options, .. },
+                } => Some((*start, options)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opens, vec![(37.125, &options)]);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            ServerMessage::Media {
+                message: ToClient::Control {
+                    paused: true,
+                    volume: 65,
+                    ..
+                }
+            }
+        )));
+    }
     #[test]
     fn original_open_failure_is_reported_before_decoder_exists() {
         let mut frontend = Frontend::new(false);
