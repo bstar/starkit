@@ -91,11 +91,17 @@ impl VideoPresenter {
         };
         let cw = f64::from(terminal.width) / f64::from(terminal.columns);
         let ch = f64::from(terminal.height) / f64::from(terminal.rows);
+        // Kitty placements occupy whole cells. Round both edges inward so a
+        // fractional panel inset cannot extend the live layer into its chrome.
+        let left = ((x / cw).ceil() as u16).min(terminal.columns);
+        let top = ((y / ch).ceil() as u16).min(terminal.rows);
+        let right = (((x + w) / cw).floor() as u16).min(terminal.columns);
+        let bottom = (((y + h) / ch).floor() as u16).min(terminal.rows);
         Some(Rect {
-            x: (x / cw).ceil() as u16,
-            y: (y / ch).ceil() as u16,
-            width: (w / cw).floor() as u16,
-            height: (h / ch).floor() as u16,
+            x: left,
+            y: top,
+            width: right.saturating_sub(left),
+            height: bottom.saturating_sub(top),
         })
     }
     pub fn mask(
@@ -330,8 +336,72 @@ impl Drop for VideoPresenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Presenters use a process-owned Kitty transfer directory.
+    static PRESENTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn fractional_video_placement_keeps_playback_details_uncovered() {
+        let _guard = PRESENTER_TEST_LOCK.lock().unwrap();
+        let viewport = Viewport {
+            columns: 80,
+            rows: 24,
+            width: 800,
+            height: 480,
+            generation: 1,
+        };
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 80, 24)),
+            viewport,
+            1,
+        );
+        let image = Rect {
+            x: 2,
+            y: 3,
+            width: 76,
+            height: 15,
+        };
+        let mut placement = super::super::placement::Placement::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            crate::native_surface::PixelRect::new(3, 0, 790, 477),
+        );
+        placement.padding = Some(super::super::placement::PanelPadding { inset: 16, gap: 6 });
+        scene.components.push(Component::Image {
+            rect: image,
+            id: "movie".into(),
+            png: None,
+            scale: Default::default(),
+            zoom: 100,
+        });
+        scene.placements.push(placement.clone());
+        let projected = VideoPresenter::image_rect(&scene, "movie", viewport).unwrap();
+        let right = f64::from(placement.target.x)
+            + f64::from(image.x + image.width) * f64::from(placement.target.width) / 80.;
+        let details_top = placement.row_edge(image.y + image.height);
+        assert!(f64::from(projected.x + projected.width) * 10. <= right);
+        assert!(f32::from(projected.y + projected.height) * 20. <= details_top);
+        assert!(projected.width > 0 && projected.height > 0);
+
+        let mut presenter = VideoPresenter::with_corner_radius(0).unwrap();
+        presenter.frame = Some(("movie".into(), Arc::new(RgbaImage::new(1920, 1080))));
+        let chrome = Arc::new(RgbaImage::from_pixel(
+            800,
+            480,
+            crate::image::Rgba([20, 30, 40, 255]),
+        ));
+        let masked = presenter.mask(&scene, chrome.clone(), viewport);
+        assert_eq!(
+            masked.get_pixel(400, details_top.floor() as u32),
+            chrome.get_pixel(400, details_top.floor() as u32)
+        );
+    }
+
     #[test]
     fn video_layer_keeps_source_pixels_and_masks_only_the_video_area() {
+        let _guard = PRESENTER_TEST_LOCK.lock().unwrap();
         let mut scene = Scene::from_buffer(
             &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 80, 24)),
             Viewport {
