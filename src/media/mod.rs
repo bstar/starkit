@@ -220,9 +220,9 @@ pub fn timeline(
 ) -> crate::native_surface::Surface {
     use crate::native_surface::{PixelRect, Primitive, Surface};
     let mut surface = Surface::new(width, height, background);
-    // Leave a clearer gap after the playback details on the preceding row.
+    // Keep a small gap on both sides of the progress track.
     let y = (height.saturating_sub(4) / 2)
-        .saturating_add(6)
+        .saturating_add(2)
         .min(height.saturating_sub(4));
     surface.nodes.push(Primitive::Fill {
         rect: PixelRect::new(0, y, width, 4.min(height)),
