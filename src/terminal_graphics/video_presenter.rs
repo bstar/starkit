@@ -11,7 +11,7 @@ pub struct VideoPresenter {
     stalled_since: Option<std::time::Instant>,
     signature: Option<(Rect, Viewport, Arc<RgbaImage>)>,
     previous: Option<u32>,
-    background: Option<(Rect, u32)>,
+    background: Option<(Rect, [u8; 3], u32)>,
     files: std::collections::VecDeque<PathBuf>,
     root: PathBuf,
     pub frame: Option<(String, Arc<RgbaImage>)>,
@@ -227,12 +227,20 @@ impl VideoPresenter {
             return self.clear(out);
         };
         let pixels = pixels.clone();
-        if self
-            .signature
+        let background = super::native::rgb(&scene.background);
+        let same_background = self
+            .background
             .as_ref()
-            .is_some_and(|(old_rect, old_viewport, old_pixels)| {
-                *old_rect == rect && *old_viewport == viewport && Arc::ptr_eq(old_pixels, &pixels)
-            })
+            .is_some_and(|(old, color, _)| *old == rect && *color == background);
+        if same_background
+            && self
+                .signature
+                .as_ref()
+                .is_some_and(|(old_rect, old_viewport, old_pixels)| {
+                    *old_rect == rect
+                        && *old_viewport == viewport
+                        && Arc::ptr_eq(old_pixels, &pixels)
+                })
         {
             return Ok(());
         }
@@ -254,21 +262,25 @@ impl VideoPresenter {
         } else {
             self.stalled_since = None;
         }
-        if self.background.as_ref().is_none_or(|(old, _)| *old != rect) {
-            if let Some((_, id)) = self.background.take() {
+        if !same_background {
+            if let Some((_, _, id)) = self.background.take() {
                 write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
             }
             self.next = self.next.wrapping_add(1);
             let id = self.next;
+            // Pane previews blend into the application; fullscreen scenes
+            // request black explicitly for their letterboxing.
+            let [r, g, b] = background;
+            let payload = base64::engine::general_purpose::STANDARD.encode([r, g, b, 255]);
             write!(
                 out,
-                "\x1b[{};{}H\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,C=1,z=0,q=2,c={},r={};AAAA/w==\x1b\\",
+                "\x1b[{};{}H\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,C=1,z=0,q=2,c={},r={};{payload}\x1b\\",
                 rect.y + 1,
                 rect.x + 1,
                 rect.width,
                 rect.height
             )?;
-            self.background = Some((rect, id));
+            self.background = Some((rect, background, id));
         }
         let fitted = Self::fitted_rect(rect, &pixels, viewport);
         let cols = fitted.width;
@@ -319,7 +331,7 @@ impl VideoPresenter {
         if let Some(id) = self.previous.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
         }
-        if let Some((_, id)) = self.background.take() {
+        if let Some((_, _, id)) = self.background.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
         }
         out.flush()?;
@@ -456,6 +468,10 @@ mod tests {
         assert!(text.contains("f=32"));
         assert!(text.contains("s=1920,v=1080"));
         assert!(!text.contains("f=100"));
+        assert!(
+            text.contains("r=15;ICEq/w=="),
+            "Pane backing must match its background"
+        );
         let mut duplicate = vec![];
         presenter
             .present(&scene, scene.viewport, &mut duplicate)
@@ -463,6 +479,14 @@ mod tests {
         assert!(
             duplicate.is_empty(),
             "Chrome repaint uploaded the same video frame twice"
+        );
+        scene.background = "#000000".into();
+        presenter
+            .present(&scene, scene.viewport, &mut duplicate)
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&duplicate).contains("r=15;AAAA/w=="),
+            "Fullscreen must replace pane backing with black, even while paused"
         );
         presenter.clear(&mut duplicate).unwrap();
         duplicate.clear();
