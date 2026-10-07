@@ -315,11 +315,14 @@ impl Painter {
             mono,
             ellipsis,
         } = style;
-        let size = (size * self.font_factor).clamp(1., 128.);
         let [x, y, w, h] = rect;
         if value.trim().is_empty() || w <= 0. || h <= 0. {
             return;
         }
+        // Placed panel rows may be shorter than the source terminal cells.
+        // Shape at a size whose complete line fits the destination, including
+        // terminal font scaling; centring an oversized line clips its glyphs.
+        let size = (size * self.font_factor).clamp(1., 128.).min(h / 1.2);
         if self.text.len() >= 2048 || self.text_bytes > 1_000_000 {
             self.text.clear();
             self.text_bytes = 0;
@@ -1509,6 +1512,63 @@ mod tests {
             .filter(|row| row.iter().any(|b| *b > 0))
             .count();
         assert!(ink_rows >= 6, "letter collapsed to an ellipsis or vanished");
+    }
+
+    #[test]
+    fn compressed_surface_rows_keep_complete_scaled_glyphs() {
+        let mut painter = Painter::with_font(super::super::font::Font {
+            name: Some("Liberation Mono".into()),
+            pixels: Some(24.),
+            cell: Some((10, 20)),
+        });
+        for height in [12, 16, 20, 28] {
+            let mut canvas = Pixmap::new(240, height).unwrap();
+            painter.text(
+                &mut canvas,
+                "Agj 00:59 / 228:10",
+                [0., 0., 240., height as f32],
+                TextStyle {
+                    size: 16.,
+                    color: "#ffffff",
+                    bold: false,
+                    mono: true,
+                    ellipsis: false,
+                },
+            );
+            let size = painter
+                .text
+                .keys()
+                .map(|k| f32::from_bits(k.size))
+                .filter(|size| *size <= height as f32 / 1.2 + 0.001)
+                .max_by(f32::total_cmp)
+                .unwrap();
+            assert!(size * 1.2 <= height as f32 + 0.001);
+            assert!(canvas.data().iter().any(|value| *value != 0));
+            // Compare with the same glyphs painted into an unclipped taller
+            // row. Every ink pixel must survive the compact destination.
+            let mut tall = Pixmap::new(240, height + 20).unwrap();
+            painter.text(
+                &mut tall,
+                "Agj 00:59 / 228:10",
+                [0., 0., 240., (height + 20) as f32],
+                TextStyle {
+                    size: size / painter.font_factor,
+                    color: "#ffffff",
+                    bold: false,
+                    mono: true,
+                    ellipsis: false,
+                },
+            );
+            let ink = |p: &Pixmap| {
+                p.data()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|pixel| pixel[3] != 0)
+                    .count()
+            };
+            assert_eq!(ink(&canvas), ink(&tall), "clipped glyphs at {height}px");
+        }
     }
 
     #[test]
