@@ -436,11 +436,40 @@ pub fn key(code: KeyCode) -> String {
 }
 
 pub fn run(launch: Launch) -> Result<()> {
-    run_impl(launch, |_| None, false, None, || None)
+    run_impl(
+        launch,
+        |_| None,
+        false,
+        None,
+        || None,
+        PresentationOptions::default(),
+    )
 }
 
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
-    run_impl(launch, custom, true, None, || None)
+    run_impl(
+        launch,
+        custom,
+        true,
+        None,
+        || None,
+        PresentationOptions::default(),
+    )
+}
+
+/// Local display preferences, independent of the remote application session.
+#[derive(Debug, Clone, Copy)]
+pub struct PresentationOptions {
+    /// Video corner radius in display pixels. Zero uses square corners.
+    pub video_corner_radius: u16,
+}
+
+impl Default for PresentationOptions {
+    fn default() -> Self {
+        Self {
+            video_corner_radius: 24,
+        }
+    }
 }
 
 /// Application notices can be delivered while the frontend is idle, including SSH.
@@ -449,13 +478,30 @@ pub fn run_with_notices(
     custom: fn(&Event) -> Option<Input>,
     notices: fn() -> Option<String>,
 ) -> Result<()> {
-    run_impl(launch, custom, true, None, notices)
+    run_with_options(launch, custom, notices, PresentationOptions::default())
+}
+
+pub fn run_with_options(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    notices: fn() -> Option<String>,
+    options: PresentationOptions,
+) -> Result<()> {
+    run_impl(launch, custom, true, None, notices, options)
 }
 
 /// Frontend owned by a local terminal integration, attached through the existing SSH TTY.
 pub fn run_terminal_socket_with_events(
     path: &std::path::Path,
     custom: fn(&Event) -> Option<Input>,
+) -> Result<()> {
+    run_terminal_socket_with_options(path, custom, PresentationOptions::default())
+}
+
+pub fn run_terminal_socket_with_options(
+    path: &std::path::Path,
+    custom: fn(&Event) -> Option<Input>,
+    options: PresentationOptions,
 ) -> Result<()> {
     let launch = Launch {
         executable: String::new(),
@@ -466,7 +512,7 @@ pub fn run_terminal_socket_with_events(
         attach_only: true,
         play: None,
     };
-    run_impl(launch, custom, true, Some(path), || None)
+    run_impl(launch, custom, true, Some(path), || None, options)
 }
 
 fn run_impl(
@@ -475,6 +521,7 @@ fn run_impl(
     terminal_extensions: bool,
     terminal_socket: Option<&std::path::Path>,
     notices: fn() -> Option<String>,
+    options: PresentationOptions,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
@@ -517,7 +564,8 @@ fn run_impl(
     let started = Instant::now();
     let mut renderer = Frontend::spawn(pixels, font)?;
     let mut media = super::media::Frontend::new(capabilities.local_media);
-    let mut video_layer = super::video_presenter::VideoPresenter::new()?;
+    let mut video_layer =
+        super::video_presenter::VideoPresenter::with_corner_radius(options.video_corner_radius)?;
     let window = super::window::Window::new()?;
     let mut direct_play = launch.play.clone();
     let connect = || match terminal_socket {

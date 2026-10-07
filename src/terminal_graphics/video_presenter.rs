@@ -5,6 +5,7 @@ use base64::Engine as _;
 use std::{io::Write, path::PathBuf, sync::Arc};
 
 pub struct VideoPresenter {
+    corner_radius: u16,
     next: u32,
     local_files: bool,
     stalled_since: Option<std::time::Instant>,
@@ -35,6 +36,10 @@ impl VideoPresenter {
         }
     }
     pub fn new() -> anyhow::Result<Self> {
+        Self::with_corner_radius(24)
+    }
+    /// Display-pixel radius; zero preserves square video corners.
+    pub fn with_corner_radius(corner_radius: u16) -> anyhow::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
             "tty-graphics-protocol-star-video-{}",
@@ -43,6 +48,7 @@ impl VideoPresenter {
         std::fs::create_dir(&root)?;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
         Ok(Self {
+            corner_radius,
             next: 0x53560000,
             local_files: std::env::var_os("KITTY_PID").is_some()
                 && std::env::var_os("STAR_VIDEO_DIRECT").is_none(),
@@ -133,7 +139,7 @@ impl VideoPresenter {
                     output.put_pixel(column, row, crate::image::Rgba([0; 4]));
                 }
             }
-            let radius = 24u32
+            let radius = u32::from(self.corner_radius)
                 .min(right.saturating_sub(left) / 2)
                 .min(bottom.saturating_sub(top) / 2);
             for dy in 0..radius {
@@ -358,7 +364,7 @@ mod tests {
             480,
             crate::image::Rgba([20, 30, 40, 255]),
         ));
-        let masked = presenter.mask(&scene, frame, scene.viewport);
+        let masked = presenter.mask(&scene, frame.clone(), scene.viewport);
         let fitted =
             VideoPresenter::fitted_rect(rect, &presenter.frame.as_ref().unwrap().1, scene.viewport);
         let left = u32::from(fitted.x) * 10;
@@ -368,6 +374,10 @@ mod tests {
         assert_eq!(masked.get_pixel(left + 11, top + 11).0, [0; 4]);
         assert_eq!(masked.get_pixel(150, 150).0, [0; 4]);
         assert_eq!(masked.get_pixel(20, 20).0, [20, 30, 40, 255]);
+        presenter.corner_radius = 0;
+        let square = presenter.mask(&scene, frame, scene.viewport);
+        assert_eq!(square.get_pixel(left, top).0, [0; 4]);
+        assert_eq!(square.get_pixel(20, 20).0, [20, 30, 40, 255]);
         let mut wire = vec![];
         presenter
             .present(&scene, scene.viewport, &mut wire)
