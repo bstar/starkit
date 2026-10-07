@@ -33,7 +33,8 @@ use anyhow::Result;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -104,6 +105,10 @@ fn enter(out: &mut impl Write) -> io::Result<()> {
         EnableMouseCapture,
         EnableBracketedPaste,
         EnableFocusChange,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        ),
         Hide,
         Clear(ClearType::All),
         MoveTo(0, 0),
@@ -115,6 +120,7 @@ fn leave(out: &mut impl Write) -> io::Result<()> {
     execute!(
         out,
         Show,
+        PopKeyboardEnhancementFlags,
         DisableFocusChange,
         DisableBracketedPaste,
         DisableMouseCapture,
@@ -178,6 +184,8 @@ mod tests {
                 "{name} is left on"
             );
         }
+        assert!(on.contains("\u{1b}[>5u"));
+        assert!(off.contains("\u{1b}[<1u"));
         assert!(on.contains("\u{1b}[?25l"), "the cursor is left visible");
         assert!(off.contains("\u{1b}[?25h"), "the cursor is left hidden");
     }

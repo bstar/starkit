@@ -22,6 +22,10 @@ pub trait Controller {
     }
     fn attached(&mut self) {}
     fn capabilities(&mut self, _capabilities: super::capabilities::Capabilities) {}
+    fn supports_presentation_switch(&self) -> bool {
+        false
+    }
+    fn presentation(&mut self, _cells: bool) {}
     fn detached(&mut self) {}
     fn output_pending(&mut self, _pending: bool) {}
     fn scene(&mut self, viewport: Viewport) -> Scene;
@@ -126,6 +130,7 @@ struct Peer {
     client: Option<String>,
     assets: std::sync::Mutex<HashSet<String>>,
     presentation: PresentationBudget,
+    presentation_switch: bool,
 }
 impl Peer {
     fn new(socket: UnixStream) -> Result<Self> {
@@ -195,6 +200,7 @@ impl Peer {
             client: None,
             assets: std::sync::Mutex::new(HashSet::new()),
             presentation: PresentationBudget::default(),
+            presentation_switch: false,
         })
     }
     fn control(&self, message: ServerMessage) -> bool {
@@ -378,6 +384,19 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                 break;
             };
             match message {
+                ClientMessage::Presentation { viewport: v, cells } => {
+                    if p.client.is_some()
+                        && p.presentation_switch
+                        && controller.supports_presentation_switch()
+                        && v.generation > viewport.generation
+                    {
+                        if let Ok(v) = v.validate() {
+                            viewport = v;
+                            controller.presentation(cells);
+                            input_dirty = true;
+                        }
+                    }
+                }
                 ClientMessage::Media { message } => controller.media(message),
                 ClientMessage::Hello {
                     version,
@@ -405,11 +424,13 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     controller.attached();
                     if let Some(capabilities) = capabilities {
                         p.presentation.enabled = capabilities.presentation_ack;
+                        p.presentation_switch = capabilities.presentation_switch;
                         controller.capabilities(capabilities);
                     }
                     p.control(ServerMessage::Hello {
                         version: VERSION,
                         video_player: true,
+                        presentation_switch: controller.supports_presentation_switch(),
                         session: name.into(),
                         epoch: epoch.clone(),
                     });
@@ -551,11 +572,11 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
             }
         }
         if controller.closed() {
+            controller.shutdown();
             if let Some(p) = &peer {
                 p.control(ServerMessage::Closed);
                 std::thread::sleep(Duration::from_millis(50));
             }
-            controller.shutdown();
             return Ok(());
         }
         let remaining = Duration::from_millis(33).saturating_sub(start.elapsed());

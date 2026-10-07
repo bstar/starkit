@@ -166,6 +166,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
     // including established menus, player/editor cells and operation reports.
     for span in &scene.spans {
         let style = base
+            .add_modifier(Modifier::from_bits_truncate(span.modifiers))
             .fg(color(&span.foreground))
             .bg(color(&span.background))
             .add_modifier(if span.bold {
@@ -181,6 +182,31 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
             area.width.saturating_sub(span.x),
             style,
         );
+    }
+    // Live media meters overlay the controller's poster compatibility spans.
+    for component in &scene.components {
+        if let Component::Meter {
+            rect,
+            value,
+            foreground,
+            background,
+        } = component
+        {
+            let rect = Rect::new(rect.x, rect.y, rect.width, rect.height).intersection(area);
+            if rect.is_empty() {
+                continue;
+            }
+            let filled = u32::from(rect.width) * u32::from((*value).min(1000)) / 1000;
+            for x in rect.x..rect.right() {
+                buffer[(x, rect.y)].set_symbol("━").set_fg(color(
+                    if u32::from(x - rect.x) < filled {
+                        foreground
+                    } else {
+                        background
+                    },
+                ));
+            }
+        }
     }
     buffer
 }
@@ -367,6 +393,7 @@ mod tests {
             foreground: "#abcdef".into(),
             background: "#222222".into(),
             bold: true,
+            modifiers: 0,
         });
         let output = buffer(&scene);
         assert_eq!(output[(1, 1)].symbol(), "c");

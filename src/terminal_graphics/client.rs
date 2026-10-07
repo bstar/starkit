@@ -48,6 +48,25 @@ impl Frontend {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn present_video(
+    layer: &mut super::video_presenter::VideoPresenter,
+    cells: &mut super::cell_video::CellVideo,
+    pixels: bool,
+    transport: super::capabilities::ImageTransport,
+    force: bool,
+    scene: &Scene,
+    viewport: Viewport,
+    out: &mut impl io::Write,
+) -> Result<()> {
+    if pixels || transport == super::capabilities::ImageTransport::Kitty {
+        layer.present(scene, viewport, out)?;
+    } else if let Some((id, frame)) = &layer.frame {
+        cells.present(scene, id, frame, force, out)?;
+    }
+    Ok(())
+}
+
 /// The remote command is assembled only from quoted arguments, never user code.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -443,6 +462,7 @@ pub fn run(launch: Launch) -> Result<()> {
         None,
         || None,
         PresentationOptions::default(),
+        None,
     )
 }
 
@@ -454,6 +474,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
         None,
         || None,
         PresentationOptions::default(),
+        None,
     )
 }
 
@@ -490,7 +511,7 @@ pub fn run_with_options(
     notices: fn() -> Option<String>,
     options: PresentationOptions,
 ) -> Result<()> {
-    run_impl(launch, custom, true, None, notices, options)
+    run_impl(launch, custom, true, None, notices, options, None)
 }
 
 /// Frontend owned by a local terminal integration, attached through the existing SSH TTY.
@@ -515,9 +536,56 @@ pub fn run_terminal_socket_with_options(
         attach_only: true,
         play: None,
     };
-    run_impl(launch, custom, true, Some(path), || None, options)
+    run_impl(launch, custom, true, Some(path), || None, options, None)
 }
 
+/// Mode and its local-only preference file. Explicit launch overrides do not persist.
+#[derive(Clone)]
+pub struct PresentationPreference {
+    pub cells: bool,
+    pub path: std::path::PathBuf,
+}
+pub fn run_with_preference(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    notices: fn() -> Option<String>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+) -> Result<()> {
+    run_impl(
+        launch,
+        custom,
+        true,
+        None,
+        notices,
+        options,
+        Some(preference),
+    )
+}
+pub fn run_terminal_socket_with_preference(
+    path: &std::path::Path,
+    custom: fn(&Event) -> Option<Input>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+) -> Result<()> {
+    run_impl(
+        Launch {
+            executable: String::new(),
+            host: None,
+            ssh_config: None,
+            session: "terminal".into(),
+            directory: None,
+            attach_only: true,
+            play: None,
+        },
+        custom,
+        true,
+        Some(path),
+        || None,
+        options,
+        Some(preference),
+    )
+}
 fn run_impl(
     launch: Launch,
     custom: fn(&Event) -> Option<Input>,
@@ -525,6 +593,7 @@ fn run_impl(
     terminal_socket: Option<&std::path::Path>,
     notices: fn() -> Option<String>,
     options: PresentationOptions,
+    preference: Option<PresentationPreference>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
@@ -538,14 +607,18 @@ fn run_impl(
     capabilities.local_media = launch.host.is_none()
         && terminal_socket.is_none()
         && std::env::var_os("SSH_CONNECTION").is_none();
-    capabilities.video = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
+    capabilities.video = true;
+    capabilities.presentation_switch = preference.is_some();
     tracing::info!(?capabilities, "Terminal presentation capabilities");
-    let pixels = capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
+    let graphical_available =
+        capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
+    let mut pixels = graphical_available && !preference.as_ref().is_some_and(|p| p.cells);
+    capabilities.cell_presentation = Some(!pixels);
     let cell = graphics.cell_size().unwrap_or((10, 20));
     font.cell = Some(cell);
     let mut size = viewport(1, cell)?;
     let mut terminal_grid = (size.columns, size.rows);
-    let scale = if pixels {
+    let pixel_scale = if graphical_available {
         std::env::var("STAR_GRAPHICS_SCALE")
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
@@ -554,7 +627,7 @@ fn run_impl(
     } else {
         100
     };
-    size = scaled_viewport(size, scale);
+    size = scaled_viewport(size, if pixels { pixel_scale } else { 100 });
     // SSH may need a password, key passphrase or host-key confirmation. Finish
     // that interaction before raw mode; the relay then reuses this connection.
     let ssh = authenticate(&launch)?;
@@ -565,8 +638,11 @@ fn run_impl(
         eprintln!("Graphics unavailable; using the terminal interface for this session.");
     }
     let started = Instant::now();
-    let mut renderer = Frontend::spawn(pixels, font, options)?;
+    let mut renderer = Frontend::spawn(pixels, font.clone(), options)?;
+    let mut switch_supported = false;
+    let mut persist_generation = None;
     let mut media = super::media::Frontend::new(capabilities.local_media);
+    let mut cell_video = super::cell_video::CellVideo::new(graphics);
     let mut video_layer =
         super::video_presenter::VideoPresenter::with_corner_radius(options.video_corner_radius)?;
     let window = super::window::Window::new()?;
@@ -639,6 +715,53 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                ServerMessage::TogglePresentation => {
+                    if !switch_supported || preference.is_none() {
+                        continue;
+                    }
+                    if !graphical_available {
+                        if let Some(c) = &connection {
+                            id += 1;
+                            let (revision, generation) = shown.unwrap_or((0, size.generation));
+                            c.send(ClientMessage::Input {
+                                id,
+                                revision,
+                                generation,
+                                input: Input::Notice {
+                                    message:
+                                        "Graphical presentation requires a Kitty graphics terminal"
+                                            .into(),
+                                },
+                            })?;
+                        }
+                        continue;
+                    }
+                    let next = Frontend::spawn(!pixels, font.clone(), options)?;
+                    pixels = !pixels;
+                    renderer = next;
+                    cell_video.reset();
+                    capabilities.cell_presentation = Some(!pixels);
+                    size = scaled_viewport(
+                        viewport(size.generation + 1, cell)?,
+                        if pixels { pixel_scale } else { 100 },
+                    );
+                    presenter.clear(&mut io::stdout().lock())?;
+                    video_layer.clear(&mut io::stdout().lock())?;
+                    io::stdout().write_all(b"\x1b[2J\x1b[H")?;
+                    shown = None;
+                    last_scene = None;
+                    pointer.reset(&mut io::stdout().lock())?;
+                    pointer_placements.clear();
+                    pointer_regions.clear();
+                    resize_handles.clear();
+                    if let Some(c) = &connection {
+                        c.send(ClientMessage::Presentation {
+                            viewport: size,
+                            cells: !pixels,
+                        })?;
+                    }
+                    persist_generation = Some(size.generation);
+                }
                 ServerMessage::Fullscreen { enabled } => window.set(enabled),
                 ServerMessage::Media { message } => {
                     if let Some(c) = &connection {
@@ -649,8 +772,10 @@ fn run_impl(
                     version,
                     epoch: e,
                     video_player,
+                    presentation_switch,
                     ..
                 } => {
+                    switch_supported = presentation_switch;
                     if direct_play.is_some() && !video_player {
                         fatal = Some(
                             "Update the host graphical package for direct movie launch".into(),
@@ -814,10 +939,15 @@ fn run_impl(
             }
         }
         if let Some(c) = &connection {
-            if let Some((id, pixels)) = media.tick(&c.input) {
-                video_layer.frame = Some((id, pixels));
+            if let Some((id, decoded)) = media.tick(&c.input) {
+                video_layer.frame = Some((id, decoded));
                 if let Some(scene) = &last_scene {
-                    video_layer.present(
+                    present_video(
+                        &mut video_layer,
+                        &mut cell_video,
+                        pixels,
+                        capabilities.image_transport,
+                        false,
                         scene,
                         Viewport {
                             columns: terminal_grid.0,
@@ -873,7 +1003,15 @@ fn run_impl(
                         )? as u64;
                     }
                     if let Some(scene) = &last_scene {
-                        video_layer.present(
+                        if !pixels {
+                            cell_video.assets(scene, &mut io::stdout().lock())?;
+                        }
+                        present_video(
+                            &mut video_layer,
+                            &mut cell_video,
+                            pixels,
+                            capabilities.image_transport,
+                            true,
                             scene,
                             Viewport {
                                 columns: terminal_grid.0,
@@ -882,6 +1020,34 @@ fn run_impl(
                             },
                             &mut io::stdout().lock(),
                         )?;
+                    }
+                    if persist_generation == Some(generation) {
+                        if let Some(pref) = &preference {
+                            if let Err(error) = crate::config::edit::set(
+                                &pref.path,
+                                "ui",
+                                "presentation",
+                                &crate::config::edit::Value::Str(
+                                    if pixels { "graphical" } else { "cells" }.into(),
+                                ),
+                            ) {
+                                tracing::warn!(%error,"Could not save presentation preference");
+                                if let Some(c) = &connection {
+                                    id += 1;
+                                    c.send(ClientMessage::Input {
+                                        id,
+                                        revision,
+                                        generation,
+                                        input: Input::Notice {
+                                            message: format!(
+                                                "Could not save presentation preference: {error}"
+                                            ),
+                                        },
+                                    })?;
+                                }
+                            }
+                        }
+                        persist_generation = None;
                     }
                     frames += 1;
                     shown = Some((revision, generation));
@@ -967,7 +1133,7 @@ fn run_impl(
             if let Some(mut scene) = last_scene.clone() {
                 scene.resize_handles.clear();
                 scene.pointer_regions.clear();
-                scene.spans.push(Span{x:1,y:size.rows.saturating_sub(1),text:"Disconnected · remote operations continue · Ctrl+R reconnect · Ctrl+Q detach".into(),foreground:"#f38ba8".into(),background:scene.background.clone(),bold:true});
+                scene.spans.push(Span{x:1,y:size.rows.saturating_sub(1),text:"Disconnected · remote operations continue · Ctrl+R reconnect · Ctrl+Q detach".into(),foreground:"#f38ba8".into(),background:scene.background.clone(),bold:true,modifiers:0});
                 renderer.scene(&scene)?;
             }
         }
@@ -1069,7 +1235,19 @@ fn run_impl(
             match event {
                 Event::Key(k) if k.kind == crate::crossterm::event::KeyEventKind::Press => {
                     pointer.reset(&mut io::stdout().lock())?;
-                    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('q') {
+                    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('l') {
+                        renderer = Frontend::spawn(pixels, font.clone(), options)?;
+                        presenter.clear(&mut io::stdout().lock())?;
+                        cell_video.reset();
+                        io::stdout().write_all(b"\x1b[2J\x1b[H")?;
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(scene)?;
+                        }
+                    }
+                    if !connected
+                        && k.modifiers.contains(KeyModifiers::CONTROL)
+                        && k.code == KeyCode::Char('q')
+                    {
                         break;
                     }
                     if !connected
@@ -1153,7 +1331,7 @@ fn run_impl(
                     pointer_placements.clear();
                     size = viewport(size.generation + 1, cell)?;
                     terminal_grid = (size.columns, size.rows);
-                    size = scaled_viewport(size, scale);
+                    size = scaled_viewport(size, if pixels { pixel_scale } else { 100 });
                     shown = None;
                     input = Some(Input::Resize { viewport: size });
                 }

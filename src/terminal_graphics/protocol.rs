@@ -80,6 +80,8 @@ pub struct Span {
     pub foreground: String,
     pub background: String,
     pub bold: bool,
+    #[serde(default)]
+    pub modifiers: u16,
 }
 
 /// Graphical primitives have the same coordinate space as controller hit tests.
@@ -263,6 +265,7 @@ impl Scene {
                 let fg = color(if reversed { cell.bg } else { cell.fg }, &foreground);
                 let bg = color(if reversed { cell.fg } else { cell.bg }, &background);
                 let bold = cell.modifier.contains(Modifier::BOLD);
+                let modifiers = (cell.modifier - Modifier::REVERSED).bits();
                 // Wide glyphs own their following cells; blank continuation cells
                 // must not introduce extra spacing into a coalesced text span.
                 let text = cell.symbol().to_string();
@@ -271,6 +274,7 @@ impl Scene {
                         && s.foreground == fg
                         && s.background == bg
                         && s.bold == bold
+                        && s.modifiers == modifiers
                         && usize::from(s.x) + unicode_width::UnicodeWidthStr::width(s.text.as_str())
                             == usize::from(x)
                 }) {
@@ -283,6 +287,7 @@ impl Scene {
                         foreground: fg,
                         background: bg,
                         bold,
+                        modifiers,
                     });
                 }
             }
@@ -358,6 +363,11 @@ pub enum Input {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    /// Negotiated live presentation change. Never attaches a new controller.
+    Presentation {
+        viewport: Viewport,
+        cells: bool,
+    },
     Media {
         message: super::media::ToHost,
     },
@@ -388,6 +398,7 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    TogglePresentation,
     LaunchMovie {
         path: String,
     },
@@ -401,6 +412,8 @@ pub enum ServerMessage {
         version: u16,
         #[serde(default)]
         video_player: bool,
+        #[serde(default)]
+        presentation_switch: bool,
         session: String,
         epoch: String,
     },

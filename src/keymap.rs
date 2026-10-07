@@ -254,7 +254,7 @@ impl<A: Copy + 'static> Keymap<A> {
 /// protocol that reports them, which [`term::init`](crate::term::init) does
 /// not, and an application that turns it on has decided for itself what
 /// holding a key means.
-fn normalise(mut k: KeyEvent) -> Option<KeyEvent> {
+pub fn normalise(mut k: KeyEvent) -> Option<KeyEvent> {
     if k.kind != KeyEventKind::Press {
         return None;
     }
@@ -351,8 +351,14 @@ impl<A: Copy + 'static> HelpView<'_, A> {
     }
 }
 
-impl<A: Copy + 'static> Widget for HelpView<'_, A> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl<A: Copy + 'static> HelpView<'_, A> {
+    /// Render the same help layout with application-owned configurable keys.
+    pub fn render_with_keys(
+        self,
+        area: Rect,
+        buf: &mut Buffer,
+        spelling: impl Fn(&Binding<A>) -> String,
+    ) {
         let t = self.theme;
         let fg = rgb(t.fg);
         let key = rgb(t.accent);
@@ -365,6 +371,7 @@ impl<A: Copy + 'static> Widget for HelpView<'_, A> {
             ))
         };
         let entry = |k: &str, label: &str, pad: usize| {
+            let pad = pad.max(k.chars().count() + 1);
             Line::from(vec![
                 Span::styled(format!("  {k:<pad$}"), Style::default().fg(key)),
                 Span::styled(label.to_string(), Style::default().fg(fg)),
@@ -378,7 +385,7 @@ impl<A: Copy + 'static> Widget for HelpView<'_, A> {
                 group = b.group;
                 keys.push(heading(group));
             }
-            keys.push(entry(b.keys, b.label, KEYS_COLUMN));
+            keys.push(entry(&spelling(b), b.label, KEYS_COLUMN));
         }
 
         let mut mouse: Vec<Line> = Vec::new();
@@ -428,6 +435,12 @@ impl<A: Copy + 'static> Widget for HelpView<'_, A> {
         Paragraph::new(mouse)
             .wrap(Wrap { trim: false })
             .render(cols[1], buf);
+    }
+}
+
+impl<A: Copy + 'static> Widget for HelpView<'_, A> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_with_keys(area, buf, |b| b.keys.to_owned());
     }
 }
 

@@ -284,6 +284,7 @@ impl Controller for Demo {
                     foreground: scene.foreground.clone(),
                     background: "#313244".into(),
                     bold: false,
+                    modifiers: 0,
                 });
             }
             scene.spans.push(Span {
@@ -293,6 +294,7 @@ impl Controller for Demo {
                 foreground: scene.foreground.clone(),
                 background: "#313244".into(),
                 bold: false,
+                modifiers: 0,
             });
             scene.spans.push(Span {
                 x: 7,
@@ -301,6 +303,7 @@ impl Controller for Demo {
                 foreground: scene.foreground.clone(),
                 background: "#313244".into(),
                 bold: false,
+                modifiers: 0,
             });
             scene
                 .components

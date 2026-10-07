@@ -27,6 +27,11 @@ pub enum PointerPrecision {
 /// crossterm input uses cells, even when image dimensions are measured pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
+    /// Explicit mode; absent for legacy peers that inferred it from images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_presentation: Option<bool>,
+    #[serde(default)]
+    pub presentation_switch: bool,
     #[serde(default)]
     pub original_media: bool,
     #[serde(default)]
@@ -61,6 +66,8 @@ impl Capabilities {
         let measured = crate::crossterm::terminal::window_size()
             .is_ok_and(|size| size.width > 0 && size.height > 0);
         Self {
+            cell_presentation: None,
+            presentation_switch: false,
             original_media: true,
             video_player: true,
             audio_relay: true,
@@ -98,6 +105,8 @@ mod tests {
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
+            cell_presentation: None,
+            presentation_switch: false,
             original_media: true,
             video_player: true,
             audio_relay: true,

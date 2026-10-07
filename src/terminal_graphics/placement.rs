@@ -150,6 +150,7 @@ impl Placement {
                     foreground: span.foreground.clone(),
                     background: span.background.clone(),
                     bold: span.bold,
+                    modifiers: 0,
                 })
             })
             .collect();

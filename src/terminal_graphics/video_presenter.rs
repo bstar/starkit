@@ -97,6 +97,18 @@ impl VideoPresenter {
             height,
         }
     }
+    pub(crate) fn fit_cells(rect: Rect, pixels: &RgbaImage, viewport: Viewport) -> Rect {
+        Self::fitted_rect(
+            rect,
+            SourceRect {
+                x: 0,
+                y: 0,
+                width: pixels.width(),
+                height: pixels.height(),
+            },
+            viewport,
+        )
+    }
     pub fn new() -> anyhow::Result<Self> {
         Self::with_corner_radius(24)
     }

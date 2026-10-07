@@ -4,6 +4,7 @@
 //! transport, rendering process, terminal presentation and reusable scene.
 pub mod assets;
 pub mod capabilities;
+mod cell_video;
 pub mod cells;
 pub mod client;
 mod drop_bridge;

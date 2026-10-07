@@ -33,6 +33,7 @@ struct TextStyle<'a> {
     bold: bool,
     mono: bool,
     ellipsis: bool,
+    grid: bool,
 }
 
 struct Asset {
@@ -75,6 +76,122 @@ fn fill(canvas: &mut Pixmap, rect: [f32; 4], color: &str) {
         canvas.fill_rect(rect, &p, Transform::identity(), None);
     }
 }
+// Quantize shared edges, rather than rounding origins and widths separately.
+fn snap_rect([x, y, w, h]: [f32; 4]) -> [f32; 4] {
+    [
+        x.round(),
+        y.round(),
+        (x + w).round() - x.round(),
+        (y + h).round() - y.round(),
+    ]
+}
+
+// Terminal joining glyphs must touch their cell edges independently of the
+// selected font's bearings, fallback font or rasterized line height.
+fn draw_grid_glyph(canvas: &mut Pixmap, glyph: &str, rect: [f32; 4], color: &str) -> bool {
+    let mut chars = glyph.chars();
+    let Some(c) = chars.next() else { return false };
+    if chars.next().is_some() {
+        return false;
+    }
+    let [x, y, w, h] = rect;
+    if matches!(c, '\u{e0b0}' | '\u{e0b1}' | '\u{e0b2}' | '\u{e0b3}') {
+        let right = matches!(c, '\u{e0b0}' | '\u{e0b1}');
+        let outline = matches!(c, '\u{e0b1}' | '\u{e0b3}');
+        let (base, tip) = if right { (x, x + w) } else { (x + w, x) };
+        let mut path = PathBuilder::new();
+        path.move_to(base, y);
+        path.line_to(tip, y + h / 2.);
+        path.line_to(base, y + h);
+        if !outline {
+            path.close();
+        }
+        if let Some(path) = path.finish() {
+            if outline {
+                canvas.stroke_path(
+                    &path,
+                    &paint(color),
+                    &Stroke {
+                        width: 1.,
+                        ..Stroke::default()
+                    },
+                    Transform::identity(),
+                    None,
+                );
+            } else {
+                canvas.fill_path(
+                    &path,
+                    &paint(color),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+        return true;
+    }
+    let block = match c {
+        '█' => Some(rect),
+        '▀' => Some(snap_rect([x, y, w, h / 2.])),
+        '▁'..='▇' => {
+            let fraction = (u32::from(c) - u32::from('▁') + 1) as f32 / 8.;
+            Some(snap_rect([x, y + h * (1. - fraction), w, h * fraction]))
+        }
+        '▉'..='▏' => {
+            let fraction = (u32::from('▏') - u32::from(c) + 1) as f32 / 8.;
+            Some(snap_rect([x, y, w * fraction, h]))
+        }
+        '▐' => Some(snap_rect([x + w / 2., y, w / 2., h])),
+        _ => None,
+    };
+    if let Some(block) = block {
+        fill(canvas, block, color);
+        return true;
+    }
+    let (left, right, top, bottom) = match c {
+        '─' | '━' => (true, true, false, false),
+        '│' | '┃' => (false, false, true, true),
+        '┌' => (false, true, false, true),
+        '┐' => (true, false, false, true),
+        '└' => (false, true, true, false),
+        '┘' => (true, false, true, false),
+        '├' => (false, true, true, true),
+        '┤' => (true, false, true, true),
+        '┬' => (true, true, false, true),
+        '┴' => (true, true, true, false),
+        '┼' => (true, true, true, true),
+        _ => return false,
+    };
+    let thickness = if matches!(c, '━' | '┃') { 2. } else { 1. };
+    let cx = (x + (w - thickness) / 2.).round();
+    let cy = (y + (h - thickness) / 2.).round();
+    if left || right {
+        fill(
+            canvas,
+            [
+                if left { x } else { cx },
+                cy,
+                (if right { x + w } else { cx + thickness }) - if left { x } else { cx },
+                thickness,
+            ],
+            color,
+        );
+    }
+    if top || bottom {
+        fill(
+            canvas,
+            [
+                cx,
+                if top { y } else { cy },
+                thickness,
+                (if bottom { y + h } else { cy + thickness }) - if top { y } else { cy },
+            ],
+            color,
+        );
+    }
+    true
+}
+
 fn rounded(canvas: &mut Pixmap, r: [f32; 4], radius: f32, color: &str, stroke: bool) {
     rounded_width(canvas, r, radius, color, if stroke { 2. } else { 0. });
 }
@@ -209,15 +326,22 @@ impl Painter {
         fill(canvas, area, &surface.background);
         for node in &surface.nodes {
             let r = node.rect();
-            let rect = [
+            let mut rect = [
                 x + f32::from(r.x) * sx,
                 y + f32::from(r.y) * sy,
                 f32::from(r.width) * sx,
                 f32::from(r.height) * sy,
             ];
+            if surface.cell_size.is_some() {
+                rect = snap_rect(rect);
+            }
             match node {
                 Primitive::Fill { color, radius, .. } => {
-                    rounded(canvas, rect, f32::from(*radius), color, false)
+                    if surface.cell_size.is_some() && *radius == 0 {
+                        fill(canvas, rect, color);
+                    } else {
+                        rounded(canvas, rect, f32::from(*radius), color, false)
+                    }
                 }
                 Primitive::Border { color, radius, .. } => rounded(
                     canvas,
@@ -238,18 +362,32 @@ impl Painter {
                     bold,
                     mono,
                     ..
-                } => self.text(
-                    canvas,
-                    text,
-                    rect,
-                    TextStyle {
+                } => {
+                    let style = TextStyle {
                         size: f32::from(*size),
                         color,
                         bold: *bold,
                         mono: *mono,
-                        ellipsis: true,
-                    },
-                ),
+                        ellipsis: surface.cell_size.is_none(),
+                        grid: surface.cell_size.is_some(),
+                    };
+                    if let Some([cw, _]) = surface.cell_size {
+                        self.grid_text(
+                            canvas,
+                            text,
+                            [
+                                x + f32::from(r.x) * sx,
+                                y + f32::from(r.y) * sy,
+                                f32::from(r.width) * sx,
+                                f32::from(r.height) * sy,
+                            ],
+                            f32::from(cw) * sx,
+                            style,
+                        );
+                    } else {
+                        self.text(canvas, text, rect, style);
+                    }
+                }
                 Primitive::Icon { name, color, .. } => {
                     draw_icon(canvas, name, rect[0], rect[1], rect[2].min(rect[3]), color)
                 }
@@ -307,6 +445,33 @@ impl Painter {
         }
     }
 
+    fn grid_text(
+        &mut self,
+        canvas: &mut Pixmap,
+        value: &str,
+        rect: [f32; 4],
+        cw: f32,
+        style: TextStyle<'_>,
+    ) {
+        let [x, y, w, h] = rect;
+        let mut at = 0;
+        let mut column = 0;
+        while at < value.len() {
+            let end = crate::wrap::next_boundary(value, at);
+            let glyph = &value[at..end];
+            let columns = crate::wrap::width_of(glyph);
+            let left = x + f32::from(column) * cw;
+            let right = (left + f32::from(columns) * cw).min(x + w);
+            if columns > 0 && right > left {
+                let cell = snap_rect([left, y, right - left, h]);
+                if !draw_grid_glyph(canvas, glyph, cell, style.color) {
+                    self.text(canvas, glyph, cell, style);
+                }
+            }
+            column += columns;
+            at = end;
+        }
+    }
     fn text(&mut self, canvas: &mut Pixmap, value: &str, rect: [f32; 4], style: TextStyle<'_>) {
         let TextStyle {
             size,
@@ -314,6 +479,7 @@ impl Painter {
             bold,
             mono,
             ellipsis,
+            grid,
         } = style;
         let [x, y, w, h] = rect;
         if value.trim().is_empty() || w <= 0. || h <= 0. {
@@ -368,6 +534,11 @@ impl Painter {
         let clipped = ellipsis && value.chars().count() > 1 && w >= size && text_width > w + 0.5;
         let clip_w = if clipped { (w - size).max(0.) } else { w };
         let offset_y = (h - size * 1.2) / 2.;
+        let offset_x = if grid {
+            ((w - text_width) / 2.).max(0.)
+        } else {
+            0.
+        };
         let [r, g, b] = rgb(color);
         let width = canvas.width();
         let height = canvas.height();
@@ -377,7 +548,7 @@ impl Painter {
             &mut self.glyphs,
             Color::rgb(r, g, b),
             |px, py, _, _, color| {
-                let dx = x.round() as i32 + px;
+                let dx = (x + offset_x).round() as i32 + px;
                 let dy = (y + offset_y).round() as i32 + py;
                 if dx < x.ceil() as i32
                     || dy < y.ceil() as i32
@@ -408,6 +579,7 @@ impl Painter {
                     bold,
                     mono,
                     ellipsis: false,
+                    grid: false,
                 },
             );
         }
@@ -476,6 +648,7 @@ impl Painter {
                                     bold: span.bold,
                                     mono: true,
                                     ellipsis: false,
+                                    grid: false,
                                 },
                             );
                         }
@@ -715,6 +888,7 @@ impl Painter {
                             bold: false,
                             mono: false,
                             ellipsis: true,
+                            grid: false,
                         },
                     );
                 }
@@ -768,6 +942,7 @@ impl Painter {
                                 bold: true,
                                 mono: true,
                                 ellipsis: false,
+                                grid: false,
                             },
                         );
                     }
@@ -786,6 +961,7 @@ impl Painter {
                             bold: *active,
                             mono: false,
                             ellipsis: true,
+                            grid: false,
                         },
                     );
                     if let Some(r) = close {
@@ -865,6 +1041,7 @@ impl Painter {
                             bold: false,
                             mono: false,
                             ellipsis: false,
+                            grid: false,
                         },
                     );
                     let caret = (x + *caret as f32 * cw).min(x + w - 1.);
@@ -1408,6 +1585,90 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 mod tests {
     use super::*;
     #[test]
+    fn editor_cell_edges_join_at_fractional_placements() {
+        use crate::native_surface::{PixelRect, Surface};
+        for width in [79., 80., 83., 127.] {
+            let mut surface = Surface::new(80, 36, "#000000".into());
+            surface.cell_size = Some([8, 18]);
+            surface.fill(PixelRect::new(0, 0, 24, 36), "#112233", 0);
+            surface.fill(PixelRect::new(24, 0, 56, 36), "#445566", 0);
+            let mut painter = Painter::new();
+            let mut canvas = Pixmap::new(140, 40).unwrap();
+            painter.surface(&mut canvas, &surface, [0.3, 0.4, width, 36.]);
+            let boundary = (0.3 + 24. * width / 80.).round() as u32;
+            for y in 0..36 {
+                for x in 0..width.round() as u32 {
+                    let pixel = canvas.pixel(x, y).unwrap();
+                    assert_eq!(pixel.alpha(), 255, "unpainted cell edge at {x},{y}");
+                    assert_eq!(
+                        [pixel.red(), pixel.green(), pixel.blue()],
+                        if x < boundary {
+                            [0x11, 0x22, 0x33]
+                        } else {
+                            [0x44, 0x55, 0x66]
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn editor_connecting_glyphs_touch_cell_edges() {
+        let mut canvas = Pixmap::new(24, 36).unwrap();
+        for y in [0., 18.] {
+            assert!(draw_grid_glyph(
+                &mut canvas,
+                "│",
+                [0., y, 8., 18.],
+                "#ffffff"
+            ));
+        }
+        for y in 0..36 {
+            assert_eq!(canvas.pixel(4, y).unwrap().alpha(), 255);
+        }
+        assert!(draw_grid_glyph(
+            &mut canvas,
+            "\u{e0b0}",
+            [8., 0., 8., 18.],
+            "#ffffff"
+        ));
+        for y in 0..18 {
+            assert!(canvas.pixel(8, y).unwrap().alpha() > 0);
+        }
+        assert!(draw_grid_glyph(
+            &mut canvas,
+            "█",
+            [16., 0., 8., 18.],
+            "#ffffff"
+        ));
+        for y in 0..18 {
+            for x in 16..24 {
+                assert_eq!(canvas.pixel(x, y).unwrap().alpha(), 255);
+            }
+        }
+    }
+
+    #[test]
+    fn editor_grid_positions_ignore_font_advances_and_keep_combining_marks() {
+        let mut actual = Pixmap::new(96, 18).unwrap();
+        let mut expected = Pixmap::new(96, 18).unwrap();
+        let mut painter = Painter::new();
+        let style = TextStyle {
+            size: 13.,
+            color: "#ffffff",
+            bold: false,
+            mono: true,
+            ellipsis: false,
+            grid: true,
+        };
+        painter.grid_text(&mut actual, "a\u{301}    z", [0., 0., 96., 18.], 8., style);
+        painter.text(&mut expected, "a\u{301}", [0., 0., 8., 18.], style);
+        painter.text(&mut expected, "z", [40., 0., 8., 18.], style);
+        assert_eq!(actual.data(), expected.data());
+    }
+
+    #[test]
     fn media_faces_are_solid_and_seek_arrows_are_mirrored() {
         for size in [16, 24, 40] {
             let mut play = Pixmap::new(size, size).unwrap();
@@ -1501,6 +1762,7 @@ mod tests {
                 bold: false,
                 mono: true,
                 ellipsis: true,
+                grid: false,
             },
         );
         assert!(!painter.text.keys().any(|k| k.text == "…"));
@@ -1533,6 +1795,7 @@ mod tests {
                     bold: false,
                     mono: true,
                     ellipsis: false,
+                    grid: false,
                 },
             );
             let size = painter
@@ -1557,6 +1820,7 @@ mod tests {
                     bold: false,
                     mono: true,
                     ellipsis: false,
+                    grid: false,
                 },
             );
             let ink = |p: &Pixmap| {
@@ -1589,6 +1853,7 @@ mod tests {
                 bold: false,
                 mono: true,
                 ellipsis: true,
+                grid: false,
             },
         );
         let ellipsis = painter.text.keys().find(|k| k.text == "…").unwrap();
@@ -1630,6 +1895,7 @@ mod tests {
                     bold: false,
                     mono,
                     ellipsis: false,
+                    grid: false,
                 },
             );
         }
@@ -1976,6 +2242,7 @@ mod tests {
                 foreground: "#ffffff".into(),
                 background: "#123456".into(),
                 bold: false,
+                modifiers: 0,
             }]),
         });
         scene.components.push(Component::Scrollbar {
@@ -2018,6 +2285,7 @@ mod tests {
             foreground: "#ffffff".into(),
             background: "#000000".into(),
             bold: false,
+            modifiers: 0,
         });
         scene.components.push(Component::Scrollbar {
             rect: Rect {

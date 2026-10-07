@@ -73,6 +73,9 @@ pub struct Surface {
     pub width: u16,
     pub height: u16,
     pub background: String,
+    /// Fixed editor grid, in source pixels. Ordinary surfaces use shaped text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_size: Option<[u16; 2]>,
     pub nodes: Vec<Primitive>,
     pub hits: Vec<HitRegion>,
 }
@@ -82,6 +85,7 @@ impl Surface {
             width,
             height,
             background,
+            cell_size: None,
             nodes: vec![],
             hits: vec![],
         }
@@ -99,6 +103,12 @@ impl Surface {
             self.nodes.len() <= 4096 && self.hits.len() <= 256,
             "surface exceeds limits"
         );
+        if let Some([width, height]) = self.cell_size {
+            anyhow::ensure!(
+                width > 0 && height > 0 && width <= 256 && height <= 256,
+                "invalid surface cell size"
+            );
+        }
         let inside = |r: PixelRect| {
             u32::from(r.x) + u32::from(r.width) <= u32::from(self.width)
                 && u32::from(r.y) + u32::from(r.height) <= u32::from(self.height)
