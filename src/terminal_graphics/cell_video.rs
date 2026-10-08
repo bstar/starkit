@@ -38,7 +38,12 @@ impl CellVideo {
         self.asset = None;
         self.graphics.forget_all();
     }
-    pub fn assets(&mut self, scene: &Scene, out: &mut impl Write) -> anyhow::Result<()> {
+    pub fn assets(
+        &mut self,
+        scene: &Scene,
+        live: Option<&str>,
+        out: &mut impl Write,
+    ) -> anyhow::Result<()> {
         for component in &scene.components {
             let Component::Image {
                 id, png: Some(png), ..
@@ -46,6 +51,9 @@ impl CellVideo {
             else {
                 continue;
             };
+            if live == Some(id.as_str()) {
+                continue;
+            }
             if self
                 .asset
                 .as_ref()
@@ -59,6 +67,64 @@ impl CellVideo {
             let image = Arc::clone(&self.asset.as_ref().unwrap().2);
             self.present(scene, id, &image, true, out)?;
         }
+        Ok(())
+    }
+    /// Remove placeholder cells from the old poster before a live Kitty layer
+    /// takes ownership. Cell diffing cannot see images drawn outside its buffer.
+    pub fn clear_live(
+        &mut self,
+        scene: &Scene,
+        id: &str,
+        force: bool,
+        out: &mut impl Write,
+    ) -> anyhow::Result<()> {
+        let old_poster = self.asset.as_ref().is_some_and(|(key, _, _)| key == id);
+        if !force && !old_poster {
+            return Ok(());
+        }
+        let Some(rect) = scene
+            .components
+            .iter()
+            .find_map(|component| match component {
+                Component::Image { rect, id: key, .. } if key == id => {
+                    Some(Rect::new(rect.x, rect.y, rect.width, rect.height))
+                }
+                _ => None,
+            })
+        else {
+            return Ok(());
+        };
+        let rect = rect.intersection(Rect::new(0, 0, scene.viewport.columns, scene.viewport.rows));
+        if rect.is_empty()
+            || scene.components.iter().any(|c| match c {
+                Component::Menu { rect: r } | Component::Dialog { rect: r, .. } => {
+                    rect.intersects(Rect::new(r.x, r.y, r.width, r.height))
+                }
+                _ => false,
+            })
+        {
+            return Ok(());
+        }
+        if old_poster {
+            self.asset = None;
+            self.graphics.forget_all();
+        }
+        let [r, g, b] = super::native::rgb(&scene.background);
+        let frame = Buffer::filled(
+            rect,
+            crate::ratatui::buffer::Cell::default()
+                .set_bg(crate::ratatui::style::Color::Rgb(r, g, b))
+                .clone(),
+        );
+        let mut backend = CrosstermBackend::new(&mut *out);
+        backend.draw(frame.content.iter().enumerate().map(|(i, cell)| {
+            (
+                rect.x + (i % usize::from(rect.width)) as u16,
+                rect.y + (i / usize::from(rect.width)) as u16,
+                cell,
+            )
+        }))?;
+        Backend::flush(&mut backend)?;
         Ok(())
     }
     pub fn present(
@@ -96,7 +162,13 @@ impl CellVideo {
         {
             return Ok(());
         }
-        let mut frame = Buffer::empty(rect);
+        let [r, g, b] = super::native::rgb(&scene.background);
+        let mut frame = Buffer::filled(
+            rect,
+            crate::ratatui::buffer::Cell::default()
+                .set_bg(crate::ratatui::style::Color::Rgb(r, g, b))
+                .clone(),
+        );
         // Only the latest decoded frame and its terminal encoding are retained.
         if self
             .signature
@@ -148,6 +220,7 @@ mod tests {
     use crate::ratatui::buffer::Buffer;
     #[test]
     fn latest_frames_are_bounded_and_do_not_cover_dialogs() {
+        crate::crossterm::style::force_color_output(true);
         let mut video = CellVideo::new(Graphics::disabled());
         let mut scene = Scene::from_buffer(
             &Buffer::empty(Rect::new(0, 0, 20, 10)),
@@ -199,5 +272,32 @@ mod tests {
         assert!(out.is_empty());
         video.reset();
         assert!(video.signature.is_none());
+        scene
+            .components
+            .retain(|c| !matches!(c, Component::Menu { .. }));
+        scene.background = "#20212a".into();
+        if let Component::Image { png, .. } = &mut scene.components[0] {
+            *png = Some("invalid poster must not be decoded".into());
+        }
+        video.asset = Some(("video-test".into(), "old poster".into(), image));
+        video.assets(&scene, Some("video-test"), &mut out).unwrap();
+        assert!(out.is_empty());
+        video
+            .clear_live(&scene, "video-test", false, &mut out)
+            .unwrap();
+        assert!(video.asset.is_none());
+        let text = String::from_utf8(out.clone()).unwrap();
+        assert!(
+            text.contains("48;2;32;33;42"),
+            "Poster clearing must use the preview background: {text:?}"
+        );
+        out.clear();
+        video
+            .clear_live(&scene, "video-test", false, &mut out)
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "Unchanged live frames must not clear the terminal on every frame"
+        );
     }
 }

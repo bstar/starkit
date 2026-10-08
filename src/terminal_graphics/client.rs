@@ -60,6 +60,11 @@ fn present_video(
     out: &mut impl io::Write,
 ) -> Result<()> {
     if pixels || transport == super::capabilities::ImageTransport::Kitty {
+        if !pixels {
+            if let Some((id, _)) = &layer.frame {
+                cells.clear_live(scene, id, force, out)?;
+            }
+        }
         layer.present(scene, viewport, out)?;
     } else if let Some((id, frame)) = &layer.frame {
         cells.present(scene, id, frame, force, out)?;
@@ -1004,7 +1009,11 @@ fn run_impl(
                     }
                     if let Some(scene) = &last_scene {
                         if !pixels {
-                            cell_video.assets(scene, &mut io::stdout().lock())?;
+                            cell_video.assets(
+                                scene,
+                                video_layer.frame.as_ref().map(|(id, _)| id.as_str()),
+                                &mut io::stdout().lock(),
+                            )?;
                         }
                         present_video(
                             &mut video_layer,
