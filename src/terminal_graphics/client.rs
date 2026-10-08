@@ -677,6 +677,8 @@ fn run_impl(
     use std::io::Write;
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut pointer = super::pointer::Pointer::default();
+    let mut hover_point = None;
+    let mut hovered_row = None;
     let mut focused = true;
     let mut mouse_down = false;
     let mut resize_handles = Vec::new();
@@ -848,7 +850,7 @@ fn run_impl(
                             }
                         }
                         if changed {
-                            renderer.scene(scene)?;
+                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
                         }
                     }
                 }
@@ -920,7 +922,12 @@ fn run_impl(
                     video_layer.frame = None;
                     video_layer.clear(&mut io::stdout().lock())?;
                 }
-                renderer.scene(&scene)?;
+                hovered_row = if pixels {
+                    super::pointer::hovered_row(&scene, hover_point)
+                } else {
+                    None
+                };
+                renderer.scene(&super::pointer::hover_scene(&scene, hovered_row))?;
                 last_scene = Some(scene);
             }
         }
@@ -1066,7 +1073,7 @@ fn run_impl(
                         .filter(|s| connected && s.revision == revision)
                     {
                         resize_handles.clone_from(&scene.resize_handles);
-                        pointer_regions.clone_from(&scene.pointer_regions);
+                        pointer_regions = super::pointer::clickable_regions(scene);
                         pointer_placements.clone_from(&scene.placements);
                     }
                     tracing::debug!(
@@ -1251,7 +1258,7 @@ fn run_impl(
                         cell_video.reset();
                         io::stdout().write_all(b"\x1b[2J\x1b[H")?;
                         if let Some(scene) = &last_scene {
-                            renderer.scene(scene)?;
+                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
                         }
                     }
                     if !connected
@@ -1308,6 +1315,16 @@ fn run_impl(
                             .rev()
                             .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
                     };
+                    hover_point = if mouse_down { None } else { logical };
+                    if pixels {
+                        if let Some(scene) = &last_scene {
+                            let next = super::pointer::hovered_row(scene, hover_point);
+                            if next != hovered_row {
+                                hovered_row = next;
+                                renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                            }
+                        }
+                    }
                     let clickable = logical
                         .is_some_and(|(x, y)| pointer_regions.iter().any(|r| r.contains(x, y)));
                     pointer.update(
@@ -1331,10 +1348,19 @@ fn run_impl(
                 Event::FocusLost => {
                     focused = false;
                     mouse_down = false;
+                    hover_point = None;
+                    hovered_row = None;
+                    if pixels {
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                        }
+                    }
                     pointer.reset(&mut io::stdout().lock())?;
                     input = Some(Input::CancelPointer);
                 }
                 Event::Resize(..) => {
+                    hover_point = None;
+                    hovered_row = None;
                     pointer.reset(&mut io::stdout().lock())?;
                     resize_handles.clear();
                     pointer_regions.clear();
