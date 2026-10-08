@@ -23,6 +23,29 @@ struct SourceRect {
     width: u32,
     height: u32,
 }
+pub(crate) fn image_background(scene: &Scene, id: &str) -> [u8; 3] {
+    let color = if scene.placements.is_empty() {
+        scene
+            .components
+            .iter()
+            .find_map(|component| match component {
+                Component::Image { rect, id: key, .. } if key == id => scene
+                    .spans
+                    .iter()
+                    .find(|span| {
+                        span.y == rect.y
+                            && span.x <= rect.x
+                            && usize::from(span.x) + crate::wrap::width_of(&span.text) as usize
+                                > usize::from(rect.x)
+                    })
+                    .map(|span| span.background.as_str()),
+                _ => None,
+            })
+    } else {
+        None
+    };
+    super::native::rgb(color.unwrap_or(&scene.background))
+}
 impl VideoPresenter {
     fn source_rect(scene: &Scene, pixels: &RgbaImage) -> SourceRect {
         let width = pixels.width();
@@ -198,7 +221,7 @@ impl VideoPresenter {
             (u32::from(rect.x + rect.width) * v.width / u32::from(v.columns)).min(output.width());
         let endy =
             (u32::from(rect.y + rect.height) * v.height / u32::from(v.rows)).min(output.height());
-        let [r, g, b] = super::native::rgb(&scene.background);
+        let [r, g, b] = image_background(scene, id);
         for row in y..endy {
             for column in x..endx {
                 output.put_pixel(column, row, crate::image::Rgba([r, g, b, 255]));
@@ -301,7 +324,7 @@ impl VideoPresenter {
             return self.clear(out);
         };
         let pixels = pixels.clone();
-        let background = super::native::rgb(&scene.background);
+        let background = image_background(scene, id);
         let same_background = self
             .background
             .as_ref()
@@ -444,6 +467,7 @@ mod tests {
             1,
         );
         scene.background = "#20212a".into();
+        scene.spans.clear();
         let mut pixels = RgbaImage::from_pixel(1920, 804, crate::image::Rgba([30, 40, 50, 255]));
         for y in [0, 1, 802, 803] {
             for x in 0..1920 {
@@ -480,6 +504,7 @@ mod tests {
             .unwrap();
         assert!(String::from_utf8_lossy(&wire).contains("x=0,y=2,w=1920,h=800"));
         scene.background = "#000000".into();
+        scene.spans.clear();
         wire.clear();
         presenter
             .present(&scene, scene.viewport, &mut wire)
@@ -495,6 +520,7 @@ mod tests {
             }
         );
         scene.background = "#20212a".into();
+        scene.spans.clear();
         let dark = RgbaImage::from_pixel(1920, 804, crate::image::Rgba([1, 1, 1, 255]));
         assert_eq!(VideoPresenter::source_rect(&scene, &dark).height, 804);
     }
@@ -587,7 +613,17 @@ mod tests {
             scale: Default::default(),
             zoom: 100,
         });
-        scene.background = "#20212a".into();
+        scene.background = "#101010".into();
+        scene.spans.clear();
+        scene.spans.push(super::super::protocol::Span {
+            x: rect.x,
+            y: rect.y,
+            text: " ".repeat(usize::from(rect.width)),
+            foreground: "#ffffff".into(),
+            background: "#20212a".into(),
+            bold: false,
+            modifiers: 0,
+        });
         let mut presenter = VideoPresenter::new().unwrap();
         presenter.frame = Some(("movie".into(), Arc::new(RgbaImage::new(1920, 1080))));
         let frame = Arc::new(RgbaImage::from_pixel(
@@ -633,6 +669,7 @@ mod tests {
             "Chrome repaint uploaded the same video frame twice"
         );
         scene.background = "#000000".into();
+        scene.spans.clear();
         presenter
             .present(&scene, scene.viewport, &mut duplicate)
             .unwrap();

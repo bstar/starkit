@@ -109,7 +109,7 @@ impl CellVideo {
             self.asset = None;
             self.graphics.forget_all();
         }
-        let [r, g, b] = super::native::rgb(&scene.background);
+        let [r, g, b] = super::video_presenter::image_background(scene, id);
         let frame = Buffer::filled(
             rect,
             crate::ratatui::buffer::Cell::default()
@@ -162,7 +162,7 @@ impl CellVideo {
         {
             return Ok(());
         }
-        let [r, g, b] = super::native::rgb(&scene.background);
+        let [r, g, b] = super::video_presenter::image_background(scene, id);
         let mut frame = Buffer::filled(
             rect,
             crate::ratatui::buffer::Cell::default()
@@ -275,7 +275,10 @@ mod tests {
         scene
             .components
             .retain(|c| !matches!(c, Component::Menu { .. }));
-        scene.background = "#20212a".into();
+        scene.background = "#101010".into();
+        for span in &mut scene.spans {
+            span.background = "#20212a".into();
+        }
         if let Component::Image { png, .. } = &mut scene.components[0] {
             *png = Some("invalid poster must not be decoded".into());
         }
