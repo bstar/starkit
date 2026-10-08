@@ -65,10 +65,16 @@ impl Capabilities {
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let measured = crate::crossterm::terminal::window_size()
             .is_ok_and(|size| size.width > 0 && size.height > 0);
+        let remote_terminal = std::env::var_os("SSH_CONNECTION").is_some()
+            || std::env::var_os("SSH_TTY").is_some();
         Self {
             cell_presentation: None,
             presentation_switch: false,
-            original_media: true,
+            // Original playback decodes on the presentation machine. An
+            // unbridged SSH shell would instead decode on the server and send
+            // full-resolution RGBA frames over its TTY. Keep that path on the
+            // bounded proxy; local --ssh and Kitty bridge frontends retain it.
+            original_media: !remote_terminal,
             video_player: true,
             audio_relay: true,
             video: true,
