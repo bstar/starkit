@@ -65,8 +65,8 @@ impl Capabilities {
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let measured = crate::crossterm::terminal::window_size()
             .is_ok_and(|size| size.width > 0 && size.height > 0);
-        let remote_terminal = std::env::var_os("SSH_CONNECTION").is_some()
-            || std::env::var_os("SSH_TTY").is_some();
+        let remote_terminal =
+            std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
         Self {
             cell_presentation: None,
             presentation_switch: false,
@@ -76,7 +76,8 @@ impl Capabilities {
             // bounded proxy; local --ssh and Kitty bridge frontends retain it.
             original_media: !remote_terminal,
             video_player: true,
-            audio_relay: true,
+            // A remote TTY has no access to the terminal computer's speakers.
+            audio_relay: !remote_terminal,
             video: true,
             local_media: false,
             image_transport: if graphics.name() == "kitty" {

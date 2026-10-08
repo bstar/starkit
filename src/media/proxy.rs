@@ -18,6 +18,7 @@ impl Video {
     fn drain(&mut self, out: &mut format::context::Output) -> Result<()> {
         let mut f = frame::Video::empty();
         while self.decoder.receive_frame(&mut f).is_ok() {
+            let f = hardware::download(&f)?;
             let seconds = f.timestamp().unwrap_or(0) as f64 * f64::from(self.time) - self.start;
             if seconds < -0.001 {
                 continue;
@@ -168,7 +169,7 @@ pub fn encode_selected_to_fit(
         .context("No video stream")?;
     let index = s.index();
     let time = s.time_base();
-    let decoder = video_decoder(s.parameters())?;
+    let decoder = hardware::checked_decoder(&mut input, index)?;
     anyhow::ensure!(
         u64::from(decoder.width()) * u64::from(decoder.height()) <= 32_000_000,
         "Video exceeds preview limits"
@@ -228,6 +229,7 @@ pub fn encode_selected_to_fit(
             cancel.clone(),
         )?,
     };
+    video.processor.set_preview_bounds(w, h);
     let mut audio = if let Some(s) =
         tracks::audio_index(&input, &options.audio).and_then(|i| input.stream(i))
     {

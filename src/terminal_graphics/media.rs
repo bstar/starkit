@@ -544,7 +544,7 @@ impl Host {
                 if warning.is_some() {
                     self.warning = warning;
                 }
-                if !self.local && !self.paused && !finished {
+                if !self.local && !self.original && !self.paused && !finished {
                     if buffering && !self.last_buffering {
                         self.stalls += 1;
                         self.stable = Instant::now();
@@ -1115,6 +1115,30 @@ mod tests {
         assert_eq!(h.stalls, 0);
         assert!(h.last_buffering);
         assert_eq!(h.quality, Quality::Balanced);
+    }
+    #[test]
+    fn original_stream_never_restarts_for_proxy_quality_adjustments() {
+        let mut h = Host::new(PathBuf::new(), "test".into(), 1, true);
+        h.local = false;
+        h.original = true;
+        let generation = h.generation;
+        for buffering in [false, true, false, true, false, true, false] {
+            h.stable = Instant::now() - Duration::from_secs(30);
+            h.receive(ToHost::Status {
+                session: h.session,
+                generation: h.generation,
+                position: 120.0,
+                buffering,
+                finished: false,
+                warning: None,
+                bandwidth_bps: 100_000_000,
+                buffered_bytes: 8_000_000,
+                dropped_frames: 0,
+                source_bitrate: 18_000_000,
+            });
+            assert_eq!(h.generation, generation);
+            assert_eq!(h.quality, Quality::Balanced);
+        }
     }
     #[test]
     fn stale_credits_cannot_resume_new_seek() {
