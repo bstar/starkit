@@ -6,6 +6,7 @@ use std::{io::Write, path::PathBuf, sync::Arc};
 
 pub struct VideoPresenter {
     corner_radius: u16,
+    cell_mode: bool,
     next: u32,
     local_files: bool,
     stalled_since: Option<std::time::Instant>,
@@ -146,6 +147,7 @@ impl VideoPresenter {
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
         Ok(Self {
             corner_radius,
+            cell_mode: false,
             next: 0x53560000,
             local_files: std::env::var_os("KITTY_PID").is_some()
                 && std::env::var_os("STAR_VIDEO_DIRECT").is_none(),
@@ -157,6 +159,20 @@ impl VideoPresenter {
             root,
             frame: None,
         })
+    }
+    // Kitty draws negative layers after cell backgrounds and before glyphs.
+    // Keep cell controls above the movie without rasterizing terminal text or
+    // resizing the picture when the fullscreen overlay appears.
+    pub(super) fn set_cell_mode(
+        &mut self,
+        cells: bool,
+        out: &mut impl Write,
+    ) -> anyhow::Result<()> {
+        if self.cell_mode != cells {
+            self.clear(out)?;
+            self.cell_mode = cells;
+        }
+        Ok(())
     }
     pub fn image_rect(scene: &Scene, id: &str, terminal: Viewport) -> Option<Rect> {
         let rect = scene.components.iter().find_map(|c| match c {
@@ -359,6 +375,8 @@ impl VideoPresenter {
         } else {
             self.stalled_since = None;
         }
+        let video_z = if self.cell_mode { -1 } else { 1 };
+        let background_z = if self.cell_mode { -2 } else { 0 };
         if !same_background {
             if let Some((_, _, id)) = self.background.take() {
                 write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
@@ -371,7 +389,7 @@ impl VideoPresenter {
             let payload = base64::engine::general_purpose::STANDARD.encode([r, g, b, 255]);
             write!(
                 out,
-                "\x1b[{};{}H\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,C=1,z=0,q=2,c={},r={};{payload}\x1b\\",
+                "\x1b[{};{}H\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,C=1,z={background_z},q=2,c={},r={};{payload}\x1b\\",
                 rect.y + 1,
                 rect.x + 1,
                 rect.width,
@@ -397,7 +415,7 @@ impl VideoPresenter {
             std::fs::write(&path, pixels.as_raw())?;
             let payload = base64::engine::general_purpose::STANDARD
                 .encode(path.as_os_str().as_encoded_bytes());
-            write!(out,"\x1b_Ga=T,f=32,t=t,s={},v={},i={id},p=1,C=1,z=1,q=2,{crop},c={cols},r={rows};{payload}\x1b\\",pixels.width(),pixels.height())?;
+            write!(out,"\x1b_Ga=T,f=32,t=t,s={},v={},i={id},p=1,C=1,z={video_z},q=2,{crop},c={cols},r={rows};{payload}\x1b\\",pixels.width(),pixels.height())?;
             self.files.push_back(path);
         } else {
             let data = base64::engine::general_purpose::STANDARD.encode(pixels.as_raw());
@@ -406,7 +424,7 @@ impl VideoPresenter {
             for (part, chunk) in chunks.enumerate() {
                 let more = usize::from(part + 1 < count);
                 if part == 0 {
-                    write!(out,"\x1b_Ga=T,f=32,t=d,s={},v={},i={id},p=1,C=1,z=1,q=2,{crop},c={cols},r={rows},m={more};",pixels.width(),pixels.height())?
+                    write!(out,"\x1b_Ga=T,f=32,t=d,s={},v={},i={id},p=1,C=1,z={video_z},q=2,{crop},c={cols},r={rows},m={more};",pixels.width(),pixels.height())?
                 } else {
                     write!(out, "\x1b_Gm={more};")?
                 }
@@ -452,6 +470,55 @@ mod tests {
     use super::*;
     // Presenters use a process-owned Kitty transfer directory.
     static PRESENTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn cell_movie_layers_leave_terminal_controls_on_top_and_switch_back() {
+        let _guard = PRESENTER_TEST_LOCK.lock().unwrap();
+        let viewport = Viewport {
+            columns: 80,
+            rows: 24,
+            width: 800,
+            height: 480,
+            generation: 1,
+        };
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 80, 24)),
+            viewport,
+            1,
+        );
+        scene.background = "#000000".into();
+        scene.components.push(Component::Image {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            id: "movie".into(),
+            png: None,
+            scale: Default::default(),
+            zoom: 100,
+        });
+        let mut presenter = VideoPresenter::new().unwrap();
+        presenter.local_files = false;
+        presenter.frame = Some(("movie".into(), Arc::new(RgbaImage::new(8, 8))));
+        let mut wire = vec![];
+        presenter.set_cell_mode(true, &mut wire).unwrap();
+        presenter.present(&scene, viewport, &mut wire).unwrap();
+        let text = String::from_utf8_lossy(&wire);
+        assert!(text.contains("z=-2,q=2"));
+        assert!(text.contains("z=-1,q=2"));
+        assert!(!text.contains("z=1,q=2"));
+        // Switching while paused must invalidate both placements, even though
+        // the frame and its geometry have not changed.
+        wire.clear();
+        presenter.set_cell_mode(false, &mut wire).unwrap();
+        presenter.present(&scene, viewport, &mut wire).unwrap();
+        let text = String::from_utf8_lossy(&wire);
+        assert!(text.contains("a=d,d=I"));
+        assert!(text.contains("z=0,q=2"));
+        assert!(text.contains("z=1,q=2"));
+    }
+
     #[test]
     fn encoded_thin_black_edges_are_trimmed_only_in_pane_preview() {
         let _guard = PRESENTER_TEST_LOCK.lock().unwrap();

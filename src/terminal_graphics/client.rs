@@ -60,6 +60,7 @@ fn present_video(
     out: &mut impl io::Write,
 ) -> Result<()> {
     if pixels || transport == super::capabilities::ImageTransport::Kitty {
+        layer.set_cell_mode(!pixels, out)?;
         if !pixels {
             if let Some((id, _)) = &layer.frame {
                 cells.clear_live(scene, id, force, out)?;

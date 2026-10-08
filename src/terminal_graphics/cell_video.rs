@@ -109,20 +109,13 @@ impl CellVideo {
             self.asset = None;
             self.graphics.forget_all();
         }
-        let [r, g, b] = super::video_presenter::image_background(scene, id);
-        let frame = Buffer::filled(
-            rect,
-            crate::ratatui::buffer::Cell::default()
-                .set_bg(crate::ratatui::style::Color::Rgb(r, g, b))
-                .clone(),
-        );
+        // Redraw authoritative cells, including fullscreen controls and
+        // timeline. Clearing to blanks would erase text above the live image.
+        let frame = super::cells::buffer(scene);
         let mut backend = CrosstermBackend::new(&mut *out);
-        backend.draw(frame.content.iter().enumerate().map(|(i, cell)| {
-            (
-                rect.x + (i % usize::from(rect.width)) as u16,
-                rect.y + (i / usize::from(rect.width)) as u16,
-                cell,
-            )
+        backend.draw((rect.y..rect.bottom()).flat_map(|y| {
+            let frame = &frame;
+            (rect.x..rect.right()).map(move |x| (x, y, &frame[(x, y)]))
         }))?;
         Backend::flush(&mut backend)?;
         Ok(())
@@ -282,6 +275,15 @@ mod tests {
         if let Component::Image { png, .. } = &mut scene.components[0] {
             *png = Some("invalid poster must not be decoded".into());
         }
+        scene.spans.push(super::super::protocol::Span {
+            x: 2,
+            y: 6,
+            text: "PLAY Audio Subtitles".into(),
+            foreground: "#ffffff".into(),
+            background: "#20212a".into(),
+            bold: false,
+            modifiers: 0,
+        });
         video.asset = Some(("video-test".into(), "old poster".into(), image));
         video.assets(&scene, Some("video-test"), &mut out).unwrap();
         assert!(out.is_empty());
@@ -293,6 +295,10 @@ mod tests {
         assert!(
             text.contains("48;2;32;33;42"),
             "Poster clearing must use the preview background: {text:?}"
+        );
+        assert!(
+            text.contains("PLAY Audio"),
+            "Movie redraw erased the fullscreen controls: {text:?}"
         );
         out.clear();
         video
