@@ -133,13 +133,14 @@ impl Player {
     ) -> Result<Self> {
         init()?;
         let ctrl = controls.clone();
-        // A stream cannot reopen its audio independently. Keep a small
-        // bounded video lookahead so demux can prime/refill PCM before the
-        // presentation clock blocks the next video frame.
+        // A stream cannot reopen its audio independently. MPEG-TS may deliver
+        // video ahead of audio: leave enough bounded lookahead for the demuxer
+        // to reach PCM without waiting for the audio-driven video clock.
+        // Proxy frames are limited to 720p (32 frames use at most 113 MiB).
         let (decoded, queue) = bounded::<Frame>(if source.is_some() || remote.is_some() {
             1
         } else {
-            8
+            32
         });
         let (show, frames) = bounded(1);
         let old = frames.clone();

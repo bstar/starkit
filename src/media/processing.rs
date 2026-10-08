@@ -35,6 +35,7 @@ pub struct Processor {
     bitmap: Option<BitmapSubtitles>,
     time: av::Rational,
     rotation: i32,
+    preview_bounds: Option<(u32, u32)>,
 }
 impl Processor {
     pub fn new(
@@ -86,7 +87,11 @@ impl Processor {
             bitmap,
             time,
             rotation,
+            preview_bounds: None,
         })
+    }
+    pub(super) fn set_preview_bounds(&mut self, width: u32, height: u32) {
+        self.preview_bounds = Some((width, height));
     }
     pub fn process(&mut self, source: &frame::Video) -> Result<frame::Video> {
         if self.graph.is_none() {
@@ -96,6 +101,11 @@ impl Processor {
                     | av::color::TransferCharacteristic::ARIB_STD_B67
             );
             let mut filters = vec![];
+            // SSH previews must reduce 4K frames before HDR tone mapping and
+            // RGBA/subtitle composition, rather than doing all work at source size.
+            if let Some((width, height)) = self.preview_bounds {
+                filters.push(format!("scale=w={width}:h={height}:flags=bilinear"));
+            }
             if hdr {
                 let matrix: av::ffi::AVColorSpace = source.color_space().into();
                 let primaries: av::ffi::AVColorPrimaries = source.color_primaries().into();

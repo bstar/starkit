@@ -319,6 +319,36 @@ mod integration {
         assert_eq!((poster.width, poster.height), (320, 240));
         assert!(poster.audio);
         assert!(poster.duration >= 1.9);
+        // Each scrub creates a fresh proxy with timestamps relative to the
+        // requested position. Verify audio keeps advancing after repeated seeks.
+        for position in [0.8, 1.2, 0.2] {
+            let output = dir.path().join("seek.ts");
+            proxy::encode(
+                &source,
+                position,
+                Quality::Balanced,
+                std::fs::File::create(&output).unwrap(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let mut input = av::format::input(&output).unwrap();
+            let stream = input.streams().best(av::media::Type::Audio).unwrap();
+            let index = stream.index();
+            let time = stream.time_base();
+            let timestamps: Vec<_> = input
+                .packets()
+                .filter(|(s, _)| s.index() == index)
+                .filter_map(|(_, p)| p.pts())
+                .take(8)
+                .map(|pts| pts as f64 * f64::from(time))
+                .collect();
+            assert!(timestamps.len() >= 4);
+            assert!(timestamps.windows(2).all(|pair| pair[1] > pair[0]));
+            assert!(
+                timestamps[0] < 0.1,
+                "Seek must reset proxy timestamps: {timestamps:?}"
+            );
+        }
         let proxy = dir.path().join("preview.ts");
         proxy::encode(
             &source,
