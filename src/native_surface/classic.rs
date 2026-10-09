@@ -11,6 +11,8 @@ pub struct Colors {
     pub accent: String,
     pub highlight: String,
     pub shadow: String,
+    pub raised: String,
+    pub title: String,
 }
 fn blend(a: [u8; 3], b: [u8; 3], amount: u16) -> String {
     let mut c = [0; 3];
@@ -22,13 +24,15 @@ fn blend(a: [u8; 3], b: [u8; 3], amount: u16) -> String {
 impl Colors {
     pub fn new(bg: [u8; 3], fg: [u8; 3], dim: [u8; 3], accent: [u8; 3], border: [u8; 3]) -> Self {
         Self {
-            panel: blend(bg, border, 48),
-            inset: blend(bg, [0; 3], 36),
+            panel: blend(bg, fg, 30),
+            inset: blend(bg, [0; 3], 100),
             ink: blend(fg, fg, 0),
             dim: blend(dim, dim, 0),
             accent: blend(accent, accent, 0),
-            highlight: blend(border, fg, 60),
-            shadow: blend(bg, [0; 3], 120),
+            highlight: blend(border, fg, 96),
+            shadow: blend(bg, [0; 3], 160),
+            raised: blend(bg, fg, 76),
+            title: blend(bg, border, 24),
         }
     }
 }
@@ -52,21 +56,47 @@ pub fn frame(s: &mut Surface, rect: R, colors: &Colors, radius: u16, inset: bool
         },
         radius,
     });
-    if radius == 0 {
-        let (top, bottom) = if inset {
-            (&colors.shadow, &colors.highlight)
-        } else {
-            (&colors.highlight, &colors.shadow)
-        };
-        s.fill(R::new(rect.x, rect.y, rect.width, 1), top, 0);
-        s.fill(R::new(rect.x, rect.y, 1, rect.height), top, 0);
+    if !inset && rect.width > 8 && rect.height > 8 {
+        s.nodes.push(Primitive::Border {
+            rect: R::new(rect.x + 2, rect.y + 2, rect.width - 4, rect.height - 4),
+            color: colors.shadow.clone(),
+            radius: radius.saturating_sub(2),
+        });
+    }
+    let (top, bottom) = if inset {
+        (&colors.shadow, &colors.highlight)
+    } else {
+        (&colors.highlight, &colors.shadow)
+    };
+    let edge = radius.max(3).min(rect.width / 2).min(rect.height / 2);
+    if rect.height > 4 && rect.width > 4 {
         s.fill(
-            R::new(rect.x, rect.y + rect.height - 1, rect.width, 1),
+            R::new(rect.x + edge, rect.y + 2, rect.width - edge * 2, 1),
+            top,
+            0,
+        );
+        s.fill(
+            R::new(rect.x + 2, rect.y + edge, 1, rect.height - edge * 2),
+            top,
+            0,
+        );
+        s.fill(
+            R::new(
+                rect.x + edge,
+                rect.y + rect.height - 3,
+                rect.width - edge * 2,
+                1,
+            ),
             bottom,
             0,
         );
         s.fill(
-            R::new(rect.x + rect.width - 1, rect.y, 1, rect.height),
+            R::new(
+                rect.x + rect.width - 3,
+                rect.y + edge,
+                1,
+                rect.height - edge * 2,
+            ),
             bottom,
             0,
         );
@@ -99,8 +129,23 @@ pub fn button(
     size: u16,
     active: bool,
 ) {
-    frame(s, rect, colors, 0, active);
-    let pad = 6.min(rect.width / 4);
+    let mut raised = colors.clone();
+    raised.panel = if active {
+        colors.highlight.clone()
+    } else {
+        colors.raised.clone()
+    };
+    frame(s, rect, &raised, 0, false);
+    let text_width = (text.chars().count() as u16)
+        .saturating_mul(size)
+        .saturating_mul(3)
+        / 5;
+    let pad = rect
+        .width
+        .saturating_sub(text_width)
+        .saturating_div(2)
+        .max(3)
+        .min(rect.width / 4);
     label(
         s,
         R::new(
@@ -110,9 +155,9 @@ pub fn button(
             rect.height,
         ),
         text,
-        if active { &colors.accent } else { &colors.ink },
+        if active { &colors.shadow } else { &colors.ink },
         size,
-        false,
+        true,
     );
     s.hits.push(HitRegion {
         rect,
