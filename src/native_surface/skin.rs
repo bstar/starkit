@@ -33,6 +33,13 @@ fn inside(image: &RgbaImage, rect: PixelRect) -> bool {
         && u32::from(rect.y) + u32::from(rect.height) <= image.height()
 }
 fn over(dst: &mut Rgba<u8>, src: Rgba<u8>) {
+    if src[3] == 0 {
+        return;
+    }
+    if src[3] == 255 {
+        *dst = src;
+        return;
+    }
     let a = u32::from(src[3]);
     let back = u32::from(dst[3]) * (255 - a);
     let out = a * 255 + back;
@@ -197,6 +204,20 @@ impl BitmapFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skin_alpha_preserves_transparency_and_blends_partial_coverage() {
+        let mut dst = Rgba([10, 20, 30, 255]);
+        over(&mut dst, Rgba([200, 100, 0, 0]));
+        assert_eq!(dst, Rgba([10, 20, 30, 255]));
+        over(&mut dst, Rgba([200, 100, 0, 255]));
+        assert_eq!(dst, Rgba([200, 100, 0, 255]));
+        let mut clear = Rgba([0, 0, 0, 0]);
+        over(&mut clear, Rgba([200, 100, 0, 128]));
+        assert_eq!(clear, Rgba([200, 100, 0, 128]));
+        over(&mut dst, Rgba([0, 0, 0, 128]));
+        assert_eq!(dst, Rgba([100, 50, 0, 255]));
+    }
+
     #[test]
     fn corners_survive_resizing_and_centers_tile() {
         let source = RgbaImage::from_fn(5, 5, |x, y| Rgba([x as u8 * 40, y as u8 * 40, 0, 255]));
