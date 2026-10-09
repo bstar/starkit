@@ -267,7 +267,22 @@ impl Drop for SocketGuard {
     }
 }
 
-pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result<()> {
+pub fn serve(root: &Path, name: &str, controller: impl Controller) -> Result<()> {
+    serve_with_policy(root, name, controller, false)
+}
+
+/// Serve one independent window, rejecting attachment while another frontend is active.
+/// A disconnected frontend can still reconnect to its own running controller.
+pub fn serve_exclusive(root: &Path, name: &str, controller: impl Controller) -> Result<()> {
+    serve_with_policy(root, name, controller, true)
+}
+
+fn serve_with_policy(
+    root: &Path,
+    name: &str,
+    mut controller: impl Controller,
+    exclusive: bool,
+) -> Result<()> {
     private_root(root)?;
     let path = socket_path(root, name)?;
     // A stale socket is removed only when no running server accepts it.
@@ -342,6 +357,19 @@ pub fn serve(root: &Path, name: &str, mut controller: impl Controller) -> Result
                     };
                     let (candidate, _) = candidates.swap_remove(index);
                     if valid {
+                        if exclusive && peer.is_some() {
+                            // No output is queued before Hello, so this socket has
+                            // no competing writer. Deliver the error before Drop
+                            // closes it; never alter the active window's state.
+                            let mut socket = &candidate.socket;
+                            let _ = write_message(
+                                &ServerMessage::Error {
+                                    message: format!("Session '{name}' is already open in another window. Launch starfold without --attach for an independent instance."),
+                                },
+                                &mut socket,
+                            );
+                            continue;
+                        }
                         if peer.as_ref().is_some_and(|p| p.client.is_some()) {
                             controller.detached();
                         }
