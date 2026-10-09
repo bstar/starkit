@@ -23,14 +23,27 @@ fn blend(a: [u8; 3], b: [u8; 3], amount: u16) -> String {
 }
 impl Colors {
     pub fn new(bg: [u8; 3], fg: [u8; 3], dim: [u8; 3], accent: [u8; 3], border: [u8; 3]) -> Self {
+        let light = bg.iter().map(|v| u16::from(*v)).sum::<u16>() > 384;
         Self {
             panel: blend(bg, fg, 30),
-            inset: blend(bg, [0; 3], 100),
+            inset: if light {
+                blend(bg, [255; 3], 128)
+            } else {
+                blend(bg, [0; 3], 100)
+            },
             ink: blend(fg, fg, 0),
             dim: blend(dim, dim, 0),
             accent: blend(accent, accent, 0),
-            highlight: blend(border, fg, 96),
-            shadow: blend(bg, [0; 3], 160),
+            highlight: if light {
+                blend(bg, [255; 3], 180)
+            } else {
+                blend(border, fg, 96)
+            },
+            shadow: if light {
+                blend(bg, fg, 160)
+            } else {
+                blend(bg, [0; 3], 160)
+            },
             raised: blend(bg, fg, 76),
             title: blend(bg, border, 24),
         }
