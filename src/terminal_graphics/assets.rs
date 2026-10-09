@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 enum Source {
     Still(Arc<RgbaImage>),
+    Raster(Arc<RgbaImage>),
     Animation(Arc<crate::animation::Animation>),
 }
 
@@ -33,6 +34,7 @@ impl Default for Thumbnailer {
                         };
                         encode_png(&image.to_rgba8())
                     }
+                    Source::Raster(image) => encode_png(&image),
                     Source::Animation(animation) => encode_animation(&animation)
                         .or_else(|_| animation.frame(0).and_then(|image| encode_png(&image))),
                 };
@@ -57,6 +59,11 @@ impl Thumbnailer {
     }
     pub fn request(&self, id: String, image: Arc<RgbaImage>) {
         self.submit(id, Source::Still(image));
+    }
+    /// Transport an already sized document raster losslessly, without a thumbnail pass.
+    /// Encoding and validation retain the shared pixel and transport limits.
+    pub fn request_raster(&self, id: String, image: Arc<RgbaImage>) {
+        self.submit(id, Source::Raster(image));
     }
     fn submit(&self, id: String, image: Source) {
         if let Err(crossbeam_channel::TrySendError::Full(request)) =
@@ -104,6 +111,24 @@ pub fn validate_png(png: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn document_raster_preserves_fine_detail_above_thumbnail_size() {
+        let source = RgbaImage::from_fn(1800, 40, |x, y| {
+            let ink = if (x + y) % 2 == 0 { 0 } else { 255 };
+            crate::image::Rgba([ink, ink, ink, 255])
+        });
+        let worker = Thumbnailer::default();
+        worker.request_raster("document".into(), Arc::new(source.clone()));
+        let (_, png) = worker
+            .output
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap();
+        let decoded = crate::image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(decoded, source);
+    }
     #[test]
     fn tiny_preview_retains_source_dimensions_and_colors() {
         let source = RgbaImage::from_fn(2, 1, |x, _| {
