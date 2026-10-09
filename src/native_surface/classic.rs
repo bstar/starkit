@@ -176,9 +176,149 @@ pub fn clock(s: &mut Surface, rect: R, text: &str, color: &str) {
         }
     }
 }
+/// Present an existing grid-based form through native primitives while retaining
+/// its exact cell geometry for keyboard and pointer routing. This keeps mature
+/// application forms usable while their dedicated compositions evolve.
+pub fn form(
+    buffer: &crate::ratatui::buffer::Buffer,
+    width: u16,
+    height: u16,
+    font: u16,
+    colors: &Colors,
+    radius: u16,
+) -> Surface {
+    use crate::ratatui::style::{Color, Modifier};
+    let area = buffer.area;
+    let cw = f64::from(width) / f64::from(area.width.max(1));
+    let ch = f64::from(height) / f64::from(area.height.max(1));
+    let rect = |x: u16, y: u16, w: u16, h: u16| {
+        R::new(
+            (f64::from(x) * cw) as u16,
+            (f64::from(y) * ch) as u16,
+            ((f64::from(x + w) * cw) as u16).saturating_sub((f64::from(x) * cw) as u16),
+            ((f64::from(y + h) * ch) as u16).saturating_sub((f64::from(y) * ch) as u16),
+        )
+    };
+    let color = |c: Color, fallback: &str| match c {
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => fallback.into(),
+    };
+    let mut surface = Surface::new(width, height, colors.panel.clone());
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let symbol = buffer[(area.x + x, area.y + y)].symbol();
+            if !matches!(symbol, "┌" | "╭" | "╔" | "┏") {
+                continue;
+            }
+            let right = (x + 1..area.width).find(|&xx| {
+                matches!(
+                    buffer[(area.x + xx, area.y + y)].symbol(),
+                    "┐" | "╮" | "╗" | "┓"
+                )
+            });
+            let bottom = (y + 1..area.height).find(|&yy| {
+                matches!(
+                    buffer[(area.x + x, area.y + yy)].symbol(),
+                    "└" | "╰" | "╚" | "┗"
+                )
+            });
+            if let (Some(right), Some(bottom)) = (right, bottom) {
+                frame(
+                    &mut surface,
+                    rect(x, y, right - x + 1, bottom - y + 1),
+                    colors,
+                    radius,
+                    false,
+                );
+            }
+        }
+    }
+    for y in 0..area.height {
+        let mut x = 0;
+        while x < area.width {
+            let start = x;
+            let first = &buffer[(area.x + x, area.y + y)];
+            let fg = first.fg;
+            let bg = first.bg;
+            let mods = first.modifier;
+            let mut text = String::new();
+            while x < area.width {
+                let cell = &buffer[(area.x + x, area.y + y)];
+                if cell.fg != fg || cell.bg != bg || cell.modifier != mods {
+                    break;
+                }
+                if cell.diff_option != ratatui::buffer::CellDiffOption::Skip {
+                    let symbol = cell.symbol();
+                    if symbol
+                        .chars()
+                        .all(|c| "│║─━═┌┐└┘┏┓┗┛╔╗╚╝┬┴├┤┼╭╮╰╯".contains(c))
+                    {
+                        text.push(' ');
+                    } else {
+                        text.push_str(symbol);
+                    }
+                }
+                x += 1;
+            }
+            if text.trim().is_empty() {
+                continue;
+            }
+            let r = rect(start, y, x - start, 1);
+            if matches!(bg, Color::Rgb(..)) {
+                surface.fill(r, &color(bg, &colors.panel), 0);
+            }
+            label(
+                &mut surface,
+                r,
+                text,
+                &color(fg, &colors.ink),
+                font,
+                mods.contains(Modifier::BOLD),
+            );
+        }
+    }
+    surface
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forms_keep_selection_colors_and_bounds_without_text_borders() {
+        use crate::ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            style::{Color, Style},
+            widgets::{Block, Borders, Widget},
+        };
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 8));
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Library")
+            .render(buffer.area, &mut buffer);
+        buffer.set_string(
+            2,
+            2,
+            "Selected album",
+            Style::default()
+                .fg(Color::Rgb(240, 240, 240))
+                .bg(Color::Rgb(30, 40, 50)),
+        );
+        let c = Colors::new([16; 3], [240; 3], [128; 3], [160, 220, 140], [80; 3]);
+        let surface = form(&buffer, 400, 160, 16, &c, 8);
+        surface.validate().unwrap();
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n,Primitive::Fill{color,..} if color=="#1e2832")));
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n,Primitive::Text{text,..} if text.contains("Selected album"))));
+        assert!(surface.nodes.iter().all(
+            |n| !matches!(n,Primitive::Text{text,..} if text.contains('┌')||text.contains('│'))
+        ));
+    }
     #[test]
     fn small_clocks_and_frames_remain_bounded() {
         for w in [20, 80, 160] {
