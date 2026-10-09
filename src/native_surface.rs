@@ -181,7 +181,10 @@ impl Surface {
                 && self.height > 0
                 && self.width <= 8192
                 && self.height <= 8192
-                && u32::from(self.width) * u32::from(self.height) <= 8_000_000,
+                // Surfaces describe canvas coordinates, not decoded images.
+                // Match the terminal viewport budget so a 4K rack does not
+                // have to shrink its canvas and stretch fixed bitmap glyphs.
+                && u32::from(self.width) * u32::from(self.height) <= 32_000_000,
             "invalid surface size"
         );
         anyhow::ensure!(
@@ -351,6 +354,16 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn full_screen_surface_coordinates_match_the_viewport_budget() {
+        assert!(Surface::new(3840, 2160, "#000000".into())
+            .validate()
+            .is_ok());
+        assert!(Surface::new(7680, 4320, "#000000".into())
+            .validate()
+            .is_err());
+        assert!(Surface::new(8193, 1, "#000000".into()).validate().is_err());
+    }
     #[test]
     fn density_scales_layout_text_and_hits_without_scaling_source_art() {
         let mut s = Surface::new(40, 20, "#000000".into());

@@ -112,8 +112,11 @@ impl Renderer {
                             *png = None;
                         }
                     }
-                    previous = Some(scene);
                     let failed = matches!(message, RenderMessage::Error { .. });
+                    if let RenderMessage::Error { message } = &message {
+                        tracing::error!(revision = scene.revision, generation = scene.viewport.generation, %message, "Native renderer failed");
+                    }
+                    previous = Some(scene);
                     if let Err(crossbeam_channel::TrySendError::Full(message)) =
                         frames.try_send(message)
                     {

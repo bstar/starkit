@@ -14,6 +14,15 @@ enum Frontend {
     Pixels(Renderer),
     Cells(super::cells::Cells),
 }
+fn stopped_renderer_message(output: &Receiver<RenderMessage>) -> String {
+    output
+        .try_iter()
+        .find_map(|message| match message {
+            RenderMessage::Error { message } => Some(message),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Graphical renderer stopped".into())
+}
 impl Frontend {
     fn spawn(pixels: bool, font: super::font::Font, options: PresentationOptions) -> Result<Self> {
         if pixels {
@@ -1079,7 +1088,10 @@ fn run_impl(
             }
         }
         if !renderer.alive()? {
-            fatal = Some("Graphical renderer stopped".into());
+            // The worker can fail after this iteration drained its output.
+            // It queues the cause before exiting; do not replace it with a
+            // generic lifecycle error just because is_finished won the race.
+            fatal.get_or_insert_with(|| stopped_renderer_message(renderer.output()));
             break;
         }
         if connected && ping.elapsed() >= Duration::from_secs(2) {
@@ -1431,6 +1443,24 @@ fn control_input(input: &Input) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finished_worker_preserves_its_queued_failure_reason() {
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        tx.send(super::RenderMessage::Ready).unwrap();
+        tx.send(super::RenderMessage::Error {
+            message: "Native renderer: Sprite scaling requires slice metadata".into(),
+        })
+        .unwrap();
+        drop(tx);
+        assert_eq!(
+            super::stopped_renderer_message(&rx),
+            "Native renderer: Sprite scaling requires slice metadata"
+        );
+        assert_eq!(
+            super::stopped_renderer_message(&rx),
+            "Graphical renderer stopped"
+        );
+    }
     use super::*;
 
     #[test]

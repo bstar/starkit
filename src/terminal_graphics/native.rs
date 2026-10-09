@@ -520,7 +520,7 @@ impl Painter {
                             pixels = sprite;
                         }
                         let mut raw = pixels.into_raw();
-                        for p in raw.chunks_exact_mut(4) {
+                        for p in raw.as_chunks_mut::<4>().0 {
                             for c in 0..3 {
                                 p[c] = ((u16::from(p[c]) * u16::from(p[3]) + 127) / 255) as u8;
                             }
@@ -840,7 +840,7 @@ impl Painter {
             "Overlay dimensions must match surface"
         );
         let mut pixels = base.as_raw().clone();
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             for c in 0..3 {
                 p[c] = ((u16::from(p[c]) * u16::from(p[3]) + 127) / 255) as u8;
             }
@@ -854,7 +854,7 @@ impl Painter {
             [0., 0., base.width() as f32, base.height() as f32],
         )?;
         let mut pixels = canvas.take();
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             if p[3] != 0 {
                 for c in 0..3 {
                     p[c] = ((u32::from(p[c]) * 255 + u32::from(p[3]) / 2) / u32::from(p[3]))
