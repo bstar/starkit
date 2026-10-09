@@ -319,11 +319,20 @@ impl Painter {
         })
     }
     fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
+        fill(canvas, area, &surface.background);
+        self.surface_nodes(canvas, surface, area);
+    }
+
+    fn surface_nodes(
+        &mut self,
+        canvas: &mut Pixmap,
+        surface: &super::surface::Surface,
+        area: [f32; 4],
+    ) {
         use super::surface::Primitive;
         let [x, y, width, height] = area;
         let sx = width / f32::from(surface.width);
         let sy = height / f32::from(surface.height);
-        fill(canvas, area, &surface.background);
         for node in &surface.nodes {
             let r = node.rect();
             let mut rect = [
@@ -692,6 +701,42 @@ impl Painter {
                 column += width;
             }
         }
+    }
+
+    pub fn overlay(
+        &mut self,
+        base: &RgbaImage,
+        surface: &super::surface::Surface,
+    ) -> Result<RgbaImage> {
+        surface.validate()?;
+        anyhow::ensure!(
+            base.width() == u32::from(surface.width) && base.height() == u32::from(surface.height),
+            "Overlay dimensions must match surface"
+        );
+        let mut pixels = base.as_raw().clone();
+        for p in pixels.chunks_exact_mut(4) {
+            for c in 0..3 {
+                p[c] = ((u16::from(p[c]) * u16::from(p[3]) + 127) / 255) as u8;
+            }
+        }
+        let size = tiny_skia::IntSize::from_wh(base.width(), base.height())
+            .context("Overlay dimensions")?;
+        let mut canvas = Pixmap::from_vec(pixels, size).context("Overlay pixels")?;
+        self.surface_nodes(
+            &mut canvas,
+            surface,
+            [0., 0., base.width() as f32, base.height() as f32],
+        );
+        let mut pixels = canvas.take();
+        for p in pixels.chunks_exact_mut(4) {
+            if p[3] != 0 {
+                for c in 0..3 {
+                    p[c] = ((u32::from(p[c]) * 255 + u32::from(p[3]) / 2) / u32::from(p[3]))
+                        .min(255) as u8;
+                }
+            }
+        }
+        RgbaImage::from_raw(base.width(), base.height(), pixels).context("Overlay output")
     }
 
     pub fn render(&mut self, scene: &Scene) -> Result<RgbaImage> {

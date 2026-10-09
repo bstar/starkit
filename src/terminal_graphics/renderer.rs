@@ -504,10 +504,37 @@ pub fn render_reference(scene: &Scene) -> anyhow::Result<RgbaImage> {
     super::native::Painter::with_font(super::font::Font::default().configured()).render(scene)
 }
 
+/// Draw native text and shapes over a skin bitmap without clearing its background.
+/// The surface and bitmap must have identical pixel dimensions. No scaling occurs.
+pub fn render_surface_overlay(
+    base: &RgbaImage,
+    surface: &super::surface::Surface,
+) -> anyhow::Result<RgbaImage> {
+    super::native::Painter::with_font(super::font::Font::default().configured())
+        .overlay(base, surface)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn skin_overlay_preserves_background_and_checks_dimensions() {
+        let base = RgbaImage::from_pixel(20, 20, crate::image::Rgba([30, 40, 50, 255]));
+        let mut surface = super::super::surface::Surface::new(20, 20, "#ffffff".into());
+        assert_eq!(render_surface_overlay(&base, &surface).unwrap(), base);
+        surface.nodes.push(super::super::surface::Primitive::Fill {
+            rect: crate::native_surface::PixelRect::new(5, 5, 5, 5),
+            color: "#ff0000".into(),
+            radius: 0,
+        });
+        let drawn = render_surface_overlay(&base, &surface).unwrap();
+        assert_eq!(drawn.get_pixel(0, 0), base.get_pixel(0, 0));
+        assert_eq!(drawn.get_pixel(7, 7).0, [255, 0, 0, 255]);
+        surface.width = 21;
+        assert!(render_surface_overlay(&base, &surface).is_err());
+    }
 
     #[test]
     fn native_worker_reports_invalid_data_and_shuts_down_without_a_runtime() {

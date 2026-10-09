@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 pub mod classic;
+#[cfg(feature = "image")]
+pub mod skin;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PixelRect {
