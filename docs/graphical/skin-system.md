@@ -26,7 +26,9 @@ an assembled screenshot to fit. Reject undersized nine-slice destinations.
 5. EQ, Album, Activity, Playlist and dialogs follow individually.
 6. Capability-negotiated asset transport, frontend cache and SSH measurements.
 
-Do not extend the wire protocol until the asset manifest and visual proof settle.
+The manifest and interactive proof now supply the initial wire contract. Keep
+production skin use negotiated; visual acceptance and physical SSH/Mac checks
+remain required before describing the design as complete.
 The initial proof uses the existing image component and native text compositor.
 This demonstrates composition, not the final transport or performance profile.
 
@@ -56,3 +58,35 @@ then resize using the component's slice metadata. Tint roles affect individual
 coverage masks before composition, preserving antialiased edges. Unknown roles,
 invalid source rectangles, implicit sprite scaling and mixed densities fail.
 Applications own their palette-role mapping and original SVG masters.
+
+## Negotiated skin sprites
+
+A frontend advertises `native_skins` independently of `native_surfaces`. An
+application must retain ordinary primitives for older frontends. A surface
+may declare `assets`, mapping `skin/<sha256 of PNG bytes>` to a base64 PNG or
+`null` for a cached reference. `Primitive::Sprite` names that asset, a physical
+atlas source rectangle, and a physical destination rectangle. Its optional
+`insets` are left/top/right/bottom source pixels: corners remain unscaled and
+the center/edges tile. Without insets, source and destination sizes must match.
+An optional tint replaces RGB while retaining mask alpha. Applications select
+1x/2x artwork and lay out at that density; finished text or frames are never
+implicitly resampled.
+
+The session sends PNGs over the reliable Asset channel once per connection,
+then replaces surface payloads with cached references. The frontend hydrates
+both newly received scenes and scenes waiting for a late asset, so discarding
+an obsolete scene does not lose artwork. Preview-cache churn does not clear
+skins. New connections receive assets again. Budgets are 256 declarations and
+4 MB of payloads per surface, 512 retained skin IDs / 8 MB encoded / 32 MB
+encoded plus anticipated decoded storage per frontend. The native painter
+separately bounds decoded originals and resized sprites at 32 MB each.
+
+Tests cover exact corner colors, cached reference repaint, rejected implicit
+scaling, wrong content IDs, decoded-size budgets, late-asset hydration, and
+one-time reliable delivery. These are protocol and renderer checks; they do
+not prove physical SSH latency or macOS visual fidelity.
+
+`Surface::at_density(1..=4)` transforms layout boxes, text sizes, path points,
+strokes and hit regions into physical pixels. Source atlas rectangles and
+slice insets remain in their already-selected physical source density. The
+result is validated before use; overflows and oversized surfaces return errors.

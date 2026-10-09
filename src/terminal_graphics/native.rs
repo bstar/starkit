@@ -52,6 +52,18 @@ pub(super) struct Painter {
     text: HashMap<TextKey, Buffer>,
     text_bytes: usize,
     assets: HashMap<String, Asset>,
+    skin_assets: crate::native_surface::skin::assets::AssetCache,
+    skin_scaled: HashMap<SkinKey, Pixmap>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct SkinKey {
+    asset: String,
+    source: crate::native_surface::PixelRect,
+    insets: Option<[u16; 4]>,
+    width: u16,
+    height: u16,
+    tint: Option<String>,
 }
 
 pub(super) fn rgb(value: &str) -> [u8; 3] {
@@ -318,9 +330,14 @@ impl Painter {
                 .is_some_and(|seq| seq.len() > 1 && !seq.finished(a.started.elapsed()))
         })
     }
-    fn surface(&mut self, canvas: &mut Pixmap, surface: &super::surface::Surface, area: [f32; 4]) {
+    fn surface(
+        &mut self,
+        canvas: &mut Pixmap,
+        surface: &super::surface::Surface,
+        area: [f32; 4],
+    ) -> Result<()> {
         fill(canvas, area, &surface.background);
-        self.surface_nodes(canvas, surface, area);
+        self.surface_nodes(canvas, surface, area)
     }
 
     fn surface_nodes(
@@ -328,8 +345,14 @@ impl Painter {
         canvas: &mut Pixmap,
         surface: &super::surface::Surface,
         area: [f32; 4],
-    ) {
+    ) -> Result<()> {
         use super::surface::Primitive;
+        for (id, png) in &surface.assets {
+            if let Some(png) = png {
+                let (bytes, _) = super::assets::skin_payload(id, png)?;
+                self.skin_assets.insert_png(id, &bytes)?;
+            }
+        }
         let [x, y, width, height] = area;
         let sx = width / f32::from(surface.width);
         let sy = height / f32::from(surface.height);
@@ -426,11 +449,112 @@ impl Painter {
                         );
                     }
                 }
+                Primitive::Sprite {
+                    asset,
+                    source,
+                    insets,
+                    tint,
+                    ..
+                } => {
+                    let key = SkinKey {
+                        asset: asset.clone(),
+                        source: *source,
+                        insets: *insets,
+                        width: rect[2].round().clamp(1., 8192.) as u16,
+                        height: rect[3].round().clamp(1., 8192.) as u16,
+                        tint: tint.clone(),
+                    };
+                    if !self.skin_assets.contains(asset) {
+                        continue;
+                    }
+                    if !self.skin_scaled.contains_key(&key) {
+                        use crate::native_surface::skin::{Insets, NineSlice, Repeat};
+                        let mut sprite = self.skin_assets.sprite(
+                            &crate::native_surface::skin::assets::Sprite {
+                                asset: asset.clone(),
+                                rect: *source,
+                                density: 1,
+                                content: Insets {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                },
+                                nine_slice: None,
+                            },
+                        )?;
+                        if let Some(tint) = tint {
+                            let c = rgb(tint);
+                            for p in sprite.pixels_mut() {
+                                p[0] = c[0];
+                                p[1] = c[1];
+                                p[2] = c[2];
+                            }
+                        }
+                        anyhow::ensure!(
+                            u32::from(key.width) * u32::from(key.height) <= 8_000_000,
+                            "Scaled skin exceeds budget"
+                        );
+                        let mut pixels = RgbaImage::new(key.width.into(), key.height.into());
+                        if let Some([left, top, right, bottom]) = insets {
+                            NineSlice {
+                                insets: Insets {
+                                    left: *left,
+                                    top: *top,
+                                    right: *right,
+                                    bottom: *bottom,
+                                },
+                                horizontal: Repeat::Tile,
+                                vertical: Repeat::Tile,
+                            }
+                            .paint(
+                                &sprite,
+                                &mut pixels,
+                                crate::native_surface::PixelRect::new(0, 0, key.width, key.height),
+                            )?;
+                        } else {
+                            anyhow::ensure!(
+                                sprite.dimensions() == pixels.dimensions(),
+                                "Sprite scaling requires slice metadata"
+                            );
+                            pixels = sprite;
+                        }
+                        let mut raw = pixels.into_raw();
+                        for p in raw.chunks_exact_mut(4) {
+                            for c in 0..3 {
+                                p[c] = ((u16::from(p[c]) * u16::from(p[3]) + 127) / 255) as u8;
+                            }
+                        }
+                        let pixmap = Pixmap::from_vec(
+                            raw,
+                            tiny_skia::IntSize::from_wh(key.width.into(), key.height.into())
+                                .context("Sprite dimensions")?,
+                        )
+                        .context("Sprite pixels")?;
+                        let retained: usize =
+                            self.skin_scaled.values().map(|p| p.data().len()).sum();
+                        if retained + pixmap.data().len() > 32_000_000
+                            || self.skin_scaled.len() >= 256
+                        {
+                            self.skin_scaled.clear();
+                        }
+                        self.skin_scaled.insert(key.clone(), pixmap);
+                    }
+                    canvas.draw_pixmap(
+                        rect[0].round() as i32,
+                        rect[1].round() as i32,
+                        self.skin_scaled[&key].as_ref(),
+                        &tiny_skia::PixmapPaint::default(),
+                        Transform::identity(),
+                        None,
+                    );
+                }
                 Primitive::Icon { name, color, .. } => {
                     draw_icon(canvas, name, rect[0], rect[1], rect[2].min(rect[3]), color)
                 }
             }
         }
+        Ok(())
     }
     pub(crate) fn live_image(&mut self, id: String, pixels: Arc<RgbaImage>) {
         self.assets.insert(
@@ -480,6 +604,8 @@ impl Painter {
             text: HashMap::new(),
             text_bytes: 0,
             assets: HashMap::new(),
+            skin_assets: crate::native_surface::skin::assets::AssetCache::new(32_000_000),
+            skin_scaled: HashMap::new(),
         }
     }
 
@@ -726,7 +852,7 @@ impl Painter {
             &mut canvas,
             surface,
             [0., 0., base.width() as f32, base.height() as f32],
-        );
+        )?;
         let mut pixels = canvas.take();
         for p in pixels.chunks_exact_mut(4) {
             if p[3] != 0 {
@@ -888,7 +1014,7 @@ impl Painter {
             match component {
                 Component::Surface { surface, .. } => {
                     surface.validate()?;
-                    self.surface(&mut canvas, surface, area);
+                    self.surface(&mut canvas, surface, area)?;
                 }
                 Component::Panel { active, .. } => rounded_width(
                     &mut canvas,
@@ -1667,6 +1793,65 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 mod tests {
     use super::*;
     #[test]
+    fn skin_sprites_keep_corners_and_render_from_cached_ids_without_resampling() {
+        use crate::native_surface::{PixelRect, Primitive, Surface};
+        let source = RgbaImage::from_fn(3, 3, |x, y| {
+            crate::image::Rgba([x as u8 * 100, y as u8 * 100, 50, 255])
+        });
+        let png = super::super::assets::encode_png(&source).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png)
+            .unwrap();
+        let id = super::super::assets::skin_id(&bytes);
+        let mut surface = Surface::new(20, 14, "#ffffff".into());
+        surface.assets.insert(id.clone(), Some(png.clone()));
+        surface.nodes.push(Primitive::Sprite {
+            rect: PixelRect::new(2, 2, 16, 10),
+            asset: id.clone(),
+            source: PixelRect::new(0, 0, 3, 3),
+            insets: Some([1, 1, 1, 1]),
+            tint: None,
+        });
+        surface.validate().unwrap();
+        let mut painter = Painter::new();
+        let mut canvas = Pixmap::new(20, 14).unwrap();
+        painter
+            .surface(&mut canvas, &surface, [0., 0., 20., 14.])
+            .unwrap();
+        assert_eq!(canvas.pixel(2, 2).unwrap().red(), 0);
+        assert_eq!(canvas.pixel(17, 2).unwrap().red(), 200);
+        assert_eq!(canvas.pixel(17, 11).unwrap().green(), 200);
+        assert_eq!(canvas.pixel(8, 6).unwrap().red(), 100);
+        assert_eq!(canvas.pixel(0, 0).unwrap().red(), 255);
+        let first = canvas.data().to_vec();
+        surface.assets.insert(id.clone(), None);
+        painter
+            .surface(&mut canvas, &surface, [0., 0., 20., 14.])
+            .unwrap();
+        assert_eq!(canvas.data(), first.as_slice());
+        assert_eq!(painter.skin_scaled.len(), 1);
+        // A new painter waits for the reliable asset instead of crashing.
+        let mut missing = Painter::new();
+        missing
+            .surface(&mut canvas, &surface, [0., 0., 20., 14.])
+            .unwrap();
+        assert_eq!(canvas.pixel(8, 6).unwrap().red(), 255);
+        surface.assets.insert(id.clone(), Some(png));
+        if let Primitive::Sprite { source, .. } = &mut surface.nodes[0] {
+            source.x = 3;
+        }
+        assert!(painter
+            .surface(&mut canvas, &surface, [0., 0., 20., 14.])
+            .is_err());
+        surface.assets.insert(
+            id,
+            Some(super::super::assets::encode_png(&RgbaImage::new(3, 3)).unwrap()),
+        );
+        assert!(painter
+            .surface(&mut canvas, &surface, [0., 0., 20., 14.])
+            .is_err());
+    }
+    #[test]
     fn editor_cell_edges_join_at_fractional_placements() {
         use crate::native_surface::{PixelRect, Surface};
         for width in [79., 80., 83., 127.] {
@@ -1676,7 +1861,9 @@ mod tests {
             surface.fill(PixelRect::new(24, 0, 56, 36), "#445566", 0);
             let mut painter = Painter::new();
             let mut canvas = Pixmap::new(140, 40).unwrap();
-            painter.surface(&mut canvas, &surface, [0.3, 0.4, width, 36.]);
+            painter
+                .surface(&mut canvas, &surface, [0.3, 0.4, width, 36.])
+                .unwrap();
             let boundary = (0.3 + 24. * width / 80.).round() as u32;
             for y in 0..36 {
                 for x in 0..width.round() as u32 {

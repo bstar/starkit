@@ -684,7 +684,7 @@ fn run_impl(
     let mut resize_handles = Vec::new();
     let mut pointer_regions = Vec::new();
     let mut pointer_placements: Vec<super::placement::Placement> = Vec::new();
-    let mut assets = std::collections::HashMap::<String, String>::new();
+    let mut assets = super::assets::FrontendAssets::default();
     let mut epoch: Option<String> = None;
     // Keep startup outside the pixel renderer. Its first capture must belong
     // to the application, rather than a competing placeholder scene.
@@ -827,29 +827,11 @@ fn run_impl(
                 ServerMessage::LaunchMovie { path } => direct_play = Some(path),
                 ServerMessage::Clipboard { text } => renderer.clipboard(&text)?,
                 ServerMessage::Asset { id, png } => {
-                    super::assets::validate_png(&png)?;
-                    if assets.len() > 8 {
-                        assets.clear();
-                    }
-                    assets.insert(id.clone(), png.clone());
-                    // Control and latest-scene queues are independent. An asset
-                    // can arrive just after the scene that references it.
+                    assets.insert(id, png)?;
+                    // Control and latest-scene queues are independent. Hydrate
+                    // both late scenes and late assets from the same cache.
                     if let Some(scene) = &mut last_scene {
-                        let mut changed = false;
-                        for component in &mut scene.components {
-                            if let Component::Image {
-                                id: image_id,
-                                png: image,
-                                ..
-                            } = component
-                            {
-                                if *image_id == id {
-                                    *image = Some(png.clone());
-                                    changed = true;
-                                }
-                            }
-                        }
-                        if changed {
+                        if assets.hydrate(scene) {
                             renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
                         }
                     }
@@ -908,11 +890,7 @@ fn run_impl(
                 "Graphical scene received"
             );
             if scene.viewport.generation == size.generation {
-                for component in &mut scene.components {
-                    if let Component::Image { id, png, .. } = component {
-                        *png = assets.get(id).cloned();
-                    }
-                }
+                assets.hydrate(&mut scene);
                 if video_layer.frame.as_ref().is_some_and(|(id, _)| {
                     !scene
                         .components

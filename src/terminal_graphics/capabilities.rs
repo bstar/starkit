@@ -54,6 +54,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub native_surfaces: bool,
     #[serde(default)]
+    pub native_skins: bool,
+    #[serde(default)]
     pub native_paths: bool,
     #[serde(default)]
     pub pixel_layout: bool,
@@ -94,6 +96,7 @@ impl Capabilities {
             paste: interactive,
             presentation_ack: interactive,
             native_surfaces: true,
+            native_skins: true,
             native_paths: true,
             pixel_layout: true,
             animated_images: true,
@@ -105,6 +108,16 @@ impl Capabilities {
 mod tests {
     use super::*;
 
+    #[test]
+    fn old_frontends_do_not_opt_into_skin_primitives() {
+        let mut encoded = serde_json::to_value(Capabilities::detected(
+            &crate::graphics::Graphics::disabled(),
+        ))
+        .unwrap();
+        encoded.as_object_mut().unwrap().remove("native_skins");
+        let old: Capabilities = serde_json::from_value(encoded).unwrap();
+        assert!(!old.native_skins);
+    }
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
@@ -122,6 +135,7 @@ mod tests {
             paste: true,
             presentation_ack: true,
             native_surfaces: true,
+            native_skins: true,
             native_paths: true,
             pixel_layout: true,
             animated_images: true,

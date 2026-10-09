@@ -212,10 +212,28 @@ impl Peer {
         }
         let mut scene = scene.clone();
         let mut assets = self.assets.lock().expect("asset cache");
-        if assets.len() > 8 {
-            assets.clear();
+        if assets.iter().filter(|id| !id.starts_with("skin/")).count() > 8 {
+            assets.retain(|id| id.starts_with("skin/"));
         }
         for component in &mut scene.components {
+            if let Component::Surface { surface, .. } = component {
+                for (id, png) in &mut surface.assets {
+                    if let Some(png) = png.take() {
+                        if !assets.contains(id) {
+                            if assets.iter().filter(|id| id.starts_with("skin/")).count()
+                                >= super::assets::SKIN_COUNT
+                                || !self.control(ServerMessage::Asset {
+                                    id: id.clone(),
+                                    png,
+                                })
+                            {
+                                return false;
+                            }
+                            assets.insert(id.clone());
+                        }
+                    }
+                }
+            }
             if let Component::Image { id, png, .. } = component {
                 if let Some(png) = png.take() {
                     if !assets.contains(id) {
@@ -647,6 +665,85 @@ pub fn relay(socket: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn skin_assets_use_reliable_channel_once_and_survive_scene_replacement() {
+        use crate::native_surface::{PixelRect, Primitive, Surface};
+        use base64::Engine;
+        let (client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(client);
+        let mut peer = Peer::new(server).unwrap();
+        peer.client = Some("skins".into());
+        let png = super::super::assets::encode_png(&crate::image::RgbaImage::new(3, 3)).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png)
+            .unwrap();
+        let id = super::super::assets::skin_id(&bytes);
+        let mut surface = Surface::new(20, 20, "#000000".into());
+        surface.assets.insert(id.clone(), Some(png.clone()));
+        surface.nodes.push(Primitive::Sprite {
+            rect: PixelRect::new(0, 0, 20, 20),
+            asset: id.clone(),
+            source: PixelRect::new(0, 0, 3, 3),
+            insets: Some([1, 1, 1, 1]),
+            tint: None,
+        });
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 2, 2)),
+            Viewport {
+                columns: 2,
+                rows: 2,
+                ..Viewport::default()
+            },
+            1,
+        );
+        scene.components.push(Component::Surface {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            surface,
+        });
+        assert!(peer.scene(&scene));
+        let mut asset_count = 0;
+        loop {
+            match read_message::<ServerMessage>(&mut reader).unwrap().unwrap() {
+                ServerMessage::Asset {
+                    id: sent,
+                    png: payload,
+                } => {
+                    assert_eq!(sent, id);
+                    assert_eq!(payload, png);
+                    asset_count += 1;
+                }
+                ServerMessage::Scene { scene: wire } => {
+                    assert!(!serde_json::to_string(&wire).unwrap().contains(&png));
+                    let Component::Surface { surface, .. } = &wire.components[0] else {
+                        panic!("surface")
+                    };
+                    assert_eq!(surface.assets.get(&id), Some(&None));
+                    break;
+                }
+                _ => panic!("unexpected message"),
+            }
+        }
+        assert_eq!(asset_count, 1);
+        // Preview rotation cannot make the reliable skin cache forget its IDs.
+        for n in 0..10 {
+            peer.assets.lock().unwrap().insert(format!("preview/{n}"));
+        }
+        scene.revision = 2;
+        assert!(peer.scene(&scene));
+        assert!(matches!(
+            read_message::<ServerMessage>(&mut reader).unwrap(),
+            Some(ServerMessage::Scene { .. })
+        ));
+        assert!(peer.assets.lock().unwrap().contains(&id));
+    }
     #[test]
     fn ignored_input_is_acknowledged_without_resending_the_scene() {
         struct Quiet(bool);

@@ -108,9 +108,206 @@ pub fn validate_png(png: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stable content ID for immutable skin artwork. Unlike previews, these small
+/// assets survive scene replacement and preview-cache churn for a connection.
+pub fn skin_id(png_bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("skin/{:x}", Sha256::digest(png_bytes))
+}
+/// Encode original player artwork and its immutable transport ID together.
+pub fn encode_skin(image: &RgbaImage) -> anyhow::Result<(String, String)> {
+    let png = encode_png(image)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&png)?;
+    Ok((skin_id(&bytes), png))
+}
+pub(super) const SKIN_COUNT: usize = 512;
+const SKIN_ENCODED: usize = 8_000_000;
+const SKIN_RETAINED: usize = 32_000_000;
+
+pub(super) fn skin_payload(id: &str, png: &str) -> anyhow::Result<(Vec<u8>, usize)> {
+    anyhow::ensure!(png.len() <= 1_000_000, "Skin asset exceeds transport limit");
+    validate_png(png)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(png)?;
+    anyhow::ensure!(id == skin_id(&bytes), "Skin content ID mismatch");
+    let width = u32::from_be_bytes(bytes[16..20].try_into()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into()?);
+    let retained = png.len() + width as usize * height as usize * 4;
+    Ok((bytes, retained))
+}
+
+/// Reliable assets are cached independently of the replaceable scene queue.
+/// The decoded-size budget anticipates the native painter's retained storage.
+#[derive(Default)]
+pub(super) struct FrontendAssets {
+    previews: std::collections::HashMap<String, String>,
+    skins: std::collections::HashMap<String, String>,
+    skin_encoded: usize,
+    skin_retained: usize,
+}
+impl FrontendAssets {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+    pub fn insert(&mut self, id: String, png: String) -> anyhow::Result<()> {
+        if id.starts_with("skin/") {
+            if let Some(old) = self.skins.get(&id) {
+                anyhow::ensure!(old == &png, "Immutable skin asset changed");
+                return Ok(());
+            }
+            let (_, retained) = skin_payload(&id, &png)?;
+            anyhow::ensure!(
+                self.skins.len() < SKIN_COUNT,
+                "Skin asset count exceeds budget"
+            );
+            anyhow::ensure!(
+                self.skin_encoded + png.len() <= SKIN_ENCODED,
+                "Skin asset transport exceeds budget"
+            );
+            anyhow::ensure!(
+                self.skin_retained + retained <= SKIN_RETAINED,
+                "Decoded skin assets exceed budget"
+            );
+            self.skin_encoded += png.len();
+            self.skin_retained += retained;
+            self.skins.insert(id, png);
+        } else {
+            validate_png(&png)?;
+            if self.previews.len() > 8 {
+                self.previews.clear();
+            }
+            self.previews.insert(id, png);
+        }
+        Ok(())
+    }
+    /// Also called after a late asset arrives. Only an actual payload change
+    /// requests a redraw; unrelated artwork must not cause a repaint.
+    pub fn hydrate(&self, scene: &mut super::protocol::Scene) -> bool {
+        use super::protocol::Component;
+        let mut changed = false;
+        for component in &mut scene.components {
+            match component {
+                Component::Surface { surface, .. } => {
+                    for (id, png) in &mut surface.assets {
+                        if let Some(cached) = self.skins.get(id) {
+                            if png.as_ref() != Some(cached) {
+                                *png = Some(cached.clone());
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Component::Image { id, png, .. } => {
+                    if let Some(cached) = self.previews.get(id) {
+                        if png.as_ref() != Some(cached) {
+                            *png = Some(cached.clone());
+                            changed = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn skin_fixture() -> (String, String) {
+        let png = encode_png(&RgbaImage::from_pixel(
+            3,
+            3,
+            crate::image::Rgba([12, 34, 56, 255]),
+        ))
+        .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png)
+            .unwrap();
+        (skin_id(&bytes), png)
+    }
+    fn skin_scene(id: &str) -> super::super::protocol::Scene {
+        use super::super::protocol::{Component, Rect, Scene, Viewport};
+        use crate::native_surface::{PixelRect, Primitive, Surface};
+        let mut surface = Surface::new(20, 20, "#000000".into());
+        surface.assets.insert(id.into(), None);
+        surface.nodes.push(Primitive::Sprite {
+            rect: PixelRect::new(0, 0, 20, 20),
+            asset: id.into(),
+            source: PixelRect::new(0, 0, 3, 3),
+            insets: Some([1, 1, 1, 1]),
+            tint: None,
+        });
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 2, 2)),
+            Viewport {
+                columns: 2,
+                rows: 2,
+                ..Viewport::default()
+            },
+            1,
+        );
+        scene.components.push(Component::Surface {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            surface,
+        });
+        scene
+    }
+    #[test]
+    fn skin_hydration_survives_dropped_scenes_late_assets_and_preview_churn() {
+        let (id, png) = skin_fixture();
+        let mut cache = FrontendAssets::default();
+        let mut late = skin_scene(&id);
+        assert!(!cache.hydrate(&mut late));
+        cache.insert(id.clone(), png.clone()).unwrap();
+        assert!(cache.hydrate(&mut late));
+        assert!(!cache.hydrate(&mut late));
+        let retained = cache.skin_retained;
+        cache.insert(id.clone(), png.clone()).unwrap();
+        assert_eq!(cache.skin_retained, retained);
+        for n in 0..24 {
+            cache.insert(format!("preview/{n}"), png.clone()).unwrap();
+        }
+        let mut newest = skin_scene(&id);
+        assert!(cache.hydrate(&mut newest));
+        assert!(cache.skins.contains_key(&id));
+        cache.clear();
+        assert!(!cache.hydrate(&mut skin_scene(&id)));
+    }
+    #[test]
+    fn skin_assets_reject_wrong_content_and_bound_decoded_memory_before_paint() {
+        let (id, png) = skin_fixture();
+        let mut cache = FrontendAssets::default();
+        assert!(cache
+            .insert(format!("skin/{}", "0".repeat(64)), png.clone())
+            .is_err());
+        assert!(cache
+            .insert(format!("skin/{}", id[5..].to_uppercase()), png.clone())
+            .is_err());
+        cache.insert(id.clone(), png.clone()).unwrap();
+        let other = encode_png(&RgbaImage::from_pixel(
+            3,
+            3,
+            crate::image::Rgba([1, 2, 3, 255]),
+        ))
+        .unwrap();
+        assert!(cache.insert(id, other).is_err());
+        let mut bytes = base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap();
+        bytes[16..20].copy_from_slice(&3000u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&2600u32.to_be_bytes());
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        cache.insert(skin_id(&bytes), encoded).unwrap();
+        bytes[16..20].copy_from_slice(&2999u32.to_be_bytes());
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        assert!(cache.insert(skin_id(&bytes), encoded).is_err());
+    }
     #[test]
     fn document_raster_preserves_fine_detail_above_thumbnail_size() {
         let source = RgbaImage::from_fn(1800, 40, |x, y| {
