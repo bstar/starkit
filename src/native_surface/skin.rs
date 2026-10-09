@@ -1,5 +1,7 @@
 //! Bitmap skin composition, independent of applications and terminal transport.
 //! Source artwork is immutable; resize layout boxes rather than finished frames.
+pub mod assets;
+
 use super::PixelRect;
 use crate::image::{Rgba, RgbaImage};
 use anyhow::{ensure, Result};
