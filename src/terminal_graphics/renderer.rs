@@ -837,4 +837,3 @@ mod tests {
         assert!(p.present("\x1b", 80, 24, &mut vec![]).is_err());
     }
 }
-
