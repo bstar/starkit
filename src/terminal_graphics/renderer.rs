@@ -498,6 +498,12 @@ fn pixel_rect(
     (x, y, right - x, bottom - y)
 }
 
+/// Render a self-contained scene without opening a display or terminal.
+/// Useful for application visual acceptance fixtures and exported previews.
+pub fn render_reference(scene: &Scene) -> anyhow::Result<RgbaImage> {
+    super::native::Painter::with_font(super::font::Font::default().configured()).render(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,3 +837,4 @@ mod tests {
         assert!(p.present("\x1b", 80, 24, &mut vec![]).is_err());
     }
 }
+

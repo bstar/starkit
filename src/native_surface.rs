@@ -2,6 +2,8 @@
 //! Hosts place the surface; its owner retains layout and interaction semantics.
 use serde::{Deserialize, Serialize};
 
+pub mod classic;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PixelRect {
     pub x: u16,
@@ -47,6 +49,13 @@ pub enum Primitive {
         bold: bool,
         mono: bool,
     },
+    /// A bounded polyline in local pixels; negotiate `native_paths` first.
+    Path {
+        rect: PixelRect,
+        points: Vec<[u16; 2]>,
+        color: String,
+        width: u16,
+    },
     Icon {
         rect: PixelRect,
         name: String,
@@ -59,7 +68,8 @@ impl Primitive {
             Self::Fill { rect, .. }
             | Self::Border { rect, .. }
             | Self::Text { rect, .. }
-            | Self::Icon { rect, .. } => *rect,
+            | Self::Icon { rect, .. }
+            | Self::Path { rect, .. } => *rect,
         }
     }
 }
@@ -117,9 +127,28 @@ impl Surface {
             s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|c| c.is_ascii_hexdigit())
         };
         anyhow::ensure!(color(&self.background), "invalid surface background");
+        let mut path_points = 0usize;
         for node in &self.nodes {
             anyhow::ensure!(inside(node.rect()), "primitive outside surface");
             match node {
+                Primitive::Path {
+                    rect,
+                    points,
+                    color: c,
+                    width,
+                } => {
+                    path_points = path_points.saturating_add(points.len());
+                    anyhow::ensure!(
+                        (2..=2048).contains(&points.len())
+                            && path_points <= 8192
+                            && (1..=8).contains(width)
+                            && color(c)
+                            && points
+                                .iter()
+                                .all(|p| p[0] < rect.width && p[1] < rect.height),
+                        "invalid surface path"
+                    );
+                }
                 Primitive::Text {
                     text,
                     size,
@@ -202,6 +231,22 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paths_refuse_unbounded_points_and_strokes() {
+        let mut s = Surface::new(100, 60, "#112233".into());
+        s.nodes.push(Primitive::Path {
+            rect: PixelRect::new(10, 10, 80, 40),
+            points: vec![[0, 0], [79, 39]],
+            color: "#ffffff".into(),
+            width: 1,
+        });
+        assert!(s.validate().is_ok());
+        let Primitive::Path { points, .. } = &mut s.nodes[0] else {
+            unreachable!()
+        };
+        points.push([80, 40]);
+        assert!(s.validate().is_err());
+    }
     #[test]
     fn bounds_and_shared_hit_geometry() {
         let mut s = Surface::new(200, 100, "#112233".into());

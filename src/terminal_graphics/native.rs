@@ -388,6 +388,35 @@ impl Painter {
                         self.text(canvas, text, rect, style);
                     }
                 }
+                Primitive::Path {
+                    points,
+                    color,
+                    width,
+                    ..
+                } => {
+                    let mut path = PathBuilder::new();
+                    for (i, p) in points.iter().enumerate() {
+                        let px = rect[0] + f32::from(p[0]) * sx;
+                        let py = rect[1] + f32::from(p[1]) * sy;
+                        if i == 0 {
+                            path.move_to(px, py);
+                        } else {
+                            path.line_to(px, py);
+                        }
+                    }
+                    if let Some(path) = path.finish() {
+                        canvas.stroke_path(
+                            &path,
+                            &paint(color),
+                            &Stroke {
+                                width: f32::from(*width) * sx.min(sy),
+                                ..Stroke::default()
+                            },
+                            Transform::identity(),
+                            None,
+                        );
+                    }
+                }
                 Primitive::Icon { name, color, .. } => {
                     draw_icon(canvas, name, rect[0], rect[1], rect[2].min(rect[3]), color)
                 }
@@ -1442,6 +1471,14 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
         let mut p = PathBuilder::new();
         let polygons: Vec<Vec<(f32, f32)>> = match kind {
             "play" => vec![vec![(8., 5.14), (8., 19.14), (19., 12.14)]],
+            "next" => vec![
+                vec![(6., 6.), (14., 12.), (6., 18.)],
+                vec![(16., 6.), (18., 6.), (18., 18.), (16., 18.)],
+            ],
+            "previous" => vec![
+                vec![(18., 6.), (10., 12.), (18., 18.)],
+                vec![(6., 6.), (8., 6.), (8., 18.), (6., 18.)],
+            ],
             "pause" => vec![
                 vec![(6., 5.), (10., 5.), (10., 19.), (6., 19.)],
                 vec![(14., 5.), (18., 5.), (18., 19.), (14., 19.)],

@@ -54,6 +54,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub native_surfaces: bool,
     #[serde(default)]
+    pub native_paths: bool,
+    #[serde(default)]
     pub pixel_layout: bool,
     /// Decode and play animation assets locally without new controller scenes.
     #[serde(default)]
@@ -92,6 +94,7 @@ impl Capabilities {
             paste: interactive,
             presentation_ack: interactive,
             native_surfaces: true,
+            native_paths: true,
             pixel_layout: true,
             animated_images: true,
         }
@@ -119,6 +122,7 @@ mod tests {
             paste: true,
             presentation_ack: true,
             native_surfaces: true,
+            native_paths: true,
             pixel_layout: true,
             animated_images: true,
         };
