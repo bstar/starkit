@@ -8,6 +8,11 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed
+
+- Native text now contributes glyph opacity on transparent canvases, keeping
+  footer labels visible in Kitty without painting the terminal background.
+
 ### Added
 
 - Experimental native media previews: bounded FFmpeg posters, H.264/AAC SSH

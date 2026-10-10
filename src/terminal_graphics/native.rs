@@ -730,6 +730,30 @@ impl Painter {
                 }
                 let offset = ((dy as u32 * width + dx as u32) * 4) as usize;
                 let rgba = color.as_rgba();
+                // The canvas stores premultiplied RGBA. Opaque pane text can
+                // blend directly, but text over terminal gaps must also add
+                // coverage to alpha or Kitty treats the glyph as invisible.
+                let dst_alpha = u32::from(pixels[offset + 3]);
+                let src_alpha = u32::from(rgba[3]);
+                if dst_alpha != 255 {
+                    let alpha = src_alpha + (dst_alpha * (255 - src_alpha) + 127) / 255;
+                    if alpha == 0 {
+                        return;
+                    }
+                    let coverage = ((src_alpha * 255 + alpha / 2) / alpha) as u8;
+                    for c in 0..3 {
+                        let background = if dst_alpha == 0 {
+                            0
+                        } else {
+                            ((u32::from(pixels[offset + c]) * 255 + dst_alpha / 2) / dst_alpha)
+                                .min(255) as u8
+                        };
+                        let straight = blend_text_channel(rgba[c], background, coverage);
+                        pixels[offset + c] = ((u32::from(straight) * alpha + 127) / 255) as u8;
+                    }
+                    pixels[offset + 3] = alpha as u8;
+                    return;
+                }
                 for c in 0..3 {
                     pixels[offset + c] = blend_text_channel(rgba[c], pixels[offset + c], rgba[3]);
                 }
@@ -2043,6 +2067,14 @@ mod tests {
         scene.spans.clear();
         let mut surface = Surface::new(120, 80, "transparent".into());
         surface.fill(PixelRect::new(10, 10, 40, 40), "#ffffff", 8);
+        crate::native_surface::classic::label(
+            &mut surface,
+            PixelRect::new(60, 10, 50, 30),
+            "Theme",
+            "#ffffff",
+            12,
+            false,
+        );
         surface.validate().unwrap();
         scene.components.push(Component::Surface {
             rect: super::super::protocol::Rect {
@@ -2056,6 +2088,18 @@ mod tests {
         let image = Painter::new().render(&scene).unwrap();
         assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 0]);
         assert_eq!(image.get_pixel(20, 20).0, [255, 255, 255, 255]);
+        assert!(
+            (10..40).any(|y| (60..110).any(|x| image.get_pixel(x, y)[3] > 0)),
+            "text on a transparent footer must contribute visible alpha"
+        );
+        for y in 10..40 {
+            for x in 60..110 {
+                let pixel = image.get_pixel(x, y);
+                if pixel[3] > 0 {
+                    assert_eq!(&pixel.0[..3], &[255, 255, 255]);
+                }
+            }
+        }
         assert!(
             image.pixels().any(|p| p[3] > 0
                 && p[3] < 255
