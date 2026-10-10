@@ -82,6 +82,9 @@ fn paint(value: &str) -> Paint<'static> {
     p
 }
 fn fill(canvas: &mut Pixmap, rect: [f32; 4], color: &str) {
+    if color == "transparent" {
+        return;
+    }
     if let Some(rect) = tiny_skia::Rect::from_xywh(rect[0], rect[1], rect[2], rect[3]) {
         let mut p = paint(color);
         p.anti_alias = false;
@@ -896,8 +899,13 @@ impl Painter {
         anyhow::ensure!(images.len() <= 8, "Too many preview assets");
         self.assets.retain(|id, _| images.contains(id));
         let [r, g, b] = rgb(&scene.background);
+        let alpha = if scene.background == "transparent" {
+            0
+        } else {
+            255
+        };
         let mut frame =
-            RgbaImage::from_pixel(v.width, v.height, crate::image::Rgba([r, g, b, 255]));
+            RgbaImage::from_pixel(v.width, v.height, crate::image::Rgba([r, g, b, alpha]));
         let font = ((v.height as f32 / f32::from(v.rows) * 0.84)
             .min(v.width as f32 / f32::from(v.columns) / 0.6))
         .floor()
@@ -952,7 +960,9 @@ impl Painter {
         let mut canvas =
             Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?;
         let [r, g, b] = rgb(&scene.background);
-        canvas.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
+        if scene.background != "transparent" {
+            canvas.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
+        }
         self.spans(&mut canvas, scene, [cw, ch, font], None, placement);
         let active_images: HashSet<_> = scene
             .components
@@ -1364,8 +1374,20 @@ impl Painter {
         if manage_assets {
             self.assets.retain(|id, _| used.contains(id));
         }
-        RgbaImage::from_raw(viewport.width, viewport.height, canvas.take())
-            .context("Native frame pixels")
+        let mut pixels = canvas.take();
+        if scene.background == "transparent" {
+            // Kitty expects straight RGBA. Unpremultiply antialiased edges so
+            // text and rounded corners don't develop dark halos over the terminal.
+            for p in pixels.as_chunks_mut::<4>().0 {
+                if p[3] != 0 {
+                    for c in 0..3 {
+                        p[c] = ((u32::from(p[c]) * 255 + u32::from(p[3]) / 2) / u32::from(p[3]))
+                            .min(255) as u8;
+                    }
+                }
+            }
+        }
+        RgbaImage::from_raw(viewport.width, viewport.height, pixels).context("Native frame pixels")
     }
 }
 
@@ -2000,6 +2022,48 @@ mod tests {
             serde_json::from_value::<Component>(old).unwrap(),
             Component::Tab { number: None, .. }
         ));
+    }
+
+    #[test]
+    fn transparent_native_canvas_preserves_terminal_gaps_and_straight_edges() {
+        use crate::native_surface::{PixelRect, Surface};
+        let v = super::super::protocol::Viewport {
+            width: 120,
+            height: 80,
+            columns: 12,
+            rows: 4,
+            generation: 0,
+        };
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(0, 0, 12, 4)),
+            v,
+            1,
+        );
+        scene.background = "transparent".into();
+        scene.spans.clear();
+        let mut surface = Surface::new(120, 80, "transparent".into());
+        surface.fill(PixelRect::new(10, 10, 40, 40), "#ffffff", 8);
+        surface.validate().unwrap();
+        scene.components.push(Component::Surface {
+            rect: super::super::protocol::Rect {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: 4,
+            },
+            surface,
+        });
+        let image = Painter::new().render(&scene).unwrap();
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(20, 20).0, [255, 255, 255, 255]);
+        assert!(
+            image.pixels().any(|p| p[3] > 0
+                && p[3] < 255
+                && p[0] == 255
+                && p[1] == 255
+                && p[2] == 255),
+            "rounded edges stay white at partial alpha"
+        );
     }
 
     #[test]

@@ -94,6 +94,7 @@ pub struct HitRegion {
 pub struct Surface {
     pub width: u16,
     pub height: u16,
+    /// Opaque RGB, or `"transparent"` to preserve the canvas beneath this surface.
     pub background: String,
     /// Fixed editor grid, in source pixels. Ordinary surfaces use shaped text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,7 +205,10 @@ impl Surface {
         let color = |s: &str| {
             s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|c| c.is_ascii_hexdigit())
         };
-        anyhow::ensure!(color(&self.background), "invalid surface background");
+        anyhow::ensure!(
+            self.background == "transparent" || color(&self.background),
+            "invalid surface background"
+        );
         let skin_id = |id: &str| {
             id.strip_prefix("skin/").is_some_and(|h| {
                 h.len() == 64
