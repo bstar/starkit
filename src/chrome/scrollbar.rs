@@ -80,16 +80,18 @@ struct Geometry {
 /// `None` when there is nothing to scroll -- the content fits in the track,
 /// or there is no track to draw on.
 fn geometry(track: u16, total: u32) -> Option<Geometry> {
-    geometry_visible(track, total, u32::from(track))
+    geometry_visible(track, total, u32::from(track), 1)
 }
-fn geometry_visible(track: u16, total: u32, visible: u32) -> Option<Geometry> {
+fn geometry_visible(track: u16, total: u32, visible: u32, minimum: u16) -> Option<Geometry> {
     if track == 0 || visible == 0 || total <= visible {
         return None;
     }
     let track64 = u64::from(track);
     let total64 = u64::from(total);
-    let max_len = std::cmp::max(1, track / THUMB_MAX_DIV);
-    let len = ((track64 * u64::from(visible)) / total64).clamp(1, u64::from(max_len)) as u16;
+    let min_len = minimum.max(1).min(track);
+    let max_len = (track / THUMB_MAX_DIV).max(min_len);
+    let len = ((track64 * u64::from(visible)) / total64)
+        .clamp(u64::from(min_len), u64::from(max_len)) as u16;
     let room = track - len;
     // total > track was just checked, so this is strictly positive.
     let scrolled = total64 - u64::from(visible);
@@ -127,10 +129,10 @@ fn start_for(track: Rect, room: u16, grip: u16, y: u16) -> u16 {
 /// or there is no track to draw on -- which callers take as "do not draw a
 /// scrollbar" rather than a zero-length one.
 pub fn thumb(track: u16, total: u32, above: u32) -> Option<Thumb> {
-    thumb_visible(track, total, above, u32::from(track))
+    thumb_visible(track, total, above, u32::from(track), 1)
 }
-fn thumb_visible(track: u16, total: u32, above: u32, visible: u32) -> Option<Thumb> {
-    let g = geometry_visible(track, total, visible)?;
+fn thumb_visible(track: u16, total: u32, above: u32, visible: u32, minimum: u16) -> Option<Thumb> {
+    let g = geometry_visible(track, total, visible, minimum)?;
     let above = std::cmp::min(u64::from(above), g.scrolled);
     // Rounded to the nearest row rather than truncated, so that `above ==
     // scrolled` (the view scrolled all the way) lands the thumb flush with
@@ -290,6 +292,7 @@ pub struct Grab {
     total: u32,
     grip: u16,
     visible: u32,
+    minimum: u16,
 }
 
 /// A left press at `(x, y)` against a bar drawn on `track` for content
@@ -304,7 +307,7 @@ pub struct Grab {
 /// -- and `above` is that jump applied now, in the same call, rather than
 /// waiting for the drag that will usually follow immediately after.
 pub fn grab(track: Rect, total: u32, above: u32, x: u16, y: u16) -> Option<(Grab, u32)> {
-    grab_visible(track, total, above, x, y, u32::from(track.height))
+    grab_visible(track, total, above, x, y, u32::from(track.height), 1)
 }
 fn grab_visible(
     track: Rect,
@@ -313,12 +316,13 @@ fn grab_visible(
     x: u16,
     y: u16,
     visible: u32,
+    minimum: u16,
 ) -> Option<(Grab, u32)> {
     if x < track.x || x >= track.x + track.width || y < track.y || y >= track.y + track.height {
         return None;
     }
-    let g = geometry_visible(track.height, total, visible)?;
-    let t = thumb_visible(track.height, total, above, visible)?;
+    let g = geometry_visible(track.height, total, visible, minimum)?;
+    let t = thumb_visible(track.height, total, above, visible, minimum)?;
     let row = y - track.y;
 
     if row >= t.start && row < t.start + t.len {
@@ -329,6 +333,7 @@ fn grab_visible(
                 total,
                 grip,
                 visible,
+                minimum,
             },
             above,
         ));
@@ -343,6 +348,7 @@ fn grab_visible(
             total,
             grip,
             visible,
+            minimum,
         },
         above,
     ))
@@ -354,7 +360,7 @@ fn grab_visible(
 /// grab, which is what lets a reader fling the thumb to the top or bottom
 /// without lining the pointer up with the track's exact last row.
 pub fn drag(g: &Grab, y: u16) -> u32 {
-    let Some(geo) = geometry_visible(g.track.height, g.total, g.visible) else {
+    let Some(geo) = geometry_visible(g.track.height, g.total, g.visible, g.minimum) else {
         return 0;
     };
     let start = start_for(g.track, geo.room, g.grip, y);
@@ -397,6 +403,7 @@ struct Bar<K> {
     total: u32,
     above: u32,
     visible: u32,
+    minimum: u16,
 }
 
 impl<K: Copy + Eq> Default for Scrollbars<K> {
@@ -428,6 +435,22 @@ impl<K: Copy + Eq> Scrollbars<K> {
 
     /// Native rows may be denser than the terminal cells making up the track.
     pub fn record_viewport(&mut self, key: K, track: Rect, total: u32, above: u32, visible: u32) {
+        self.record_viewport_with_minimum(key, track, total, above, visible, 1);
+    }
+
+    /// Pixel tracks need a grab target larger than one pixel for long lists.
+    /// `minimum` uses the track's coordinate units and is bounded by its height.
+    /// Drawing, track jumps and held drags all use this same geometry. Existing
+    /// terminal callers retain the one-row minimum through `record_viewport`.
+    pub fn record_viewport_with_minimum(
+        &mut self,
+        key: K,
+        track: Rect,
+        total: u32,
+        above: u32,
+        visible: u32,
+        minimum: u16,
+    ) {
         self.drawn.retain(|bar| bar.key != key);
         self.drawn.push(Bar {
             key,
@@ -435,6 +458,7 @@ impl<K: Copy + Eq> Scrollbars<K> {
             total,
             above,
             visible,
+            minimum,
         });
     }
 
@@ -456,8 +480,14 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// Visible track and thumb geometry, shared with native pixel presentation.
     pub fn visible(&self) -> impl Iterator<Item = (Rect, Thumb)> + '_ {
         self.drawn.iter().filter_map(|bar| {
-            thumb_visible(bar.track.height, bar.total, bar.above, bar.visible)
-                .map(|thumb| (bar.track, thumb))
+            thumb_visible(
+                bar.track.height,
+                bar.total,
+                bar.above,
+                bar.visible,
+                bar.minimum,
+            )
+            .map(|thumb| (bar.track, thumb))
         })
     }
 
@@ -473,9 +503,15 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// the press is not this scrollbar's to answer.
     pub fn press(&mut self, x: u16, y: u16) -> Option<(K, u32)> {
         for bar in &self.drawn {
-            if let Some((g, above)) =
-                grab_visible(bar.track, bar.total, bar.above, x, y, bar.visible)
-            {
+            if let Some((g, above)) = grab_visible(
+                bar.track,
+                bar.total,
+                bar.above,
+                x,
+                y,
+                bar.visible,
+                bar.minimum,
+            ) {
                 let key = bar.key;
                 self.held = Some((key, g));
                 return Some((key, above));
@@ -838,6 +874,39 @@ mod tests {
             "past the end lands on the last item"
         );
         assert_eq!(index_at(&[], 0), 0, "nothing to land on");
+    }
+
+    #[test]
+    fn pixel_minimum_preserves_grab_and_full_scroll_range_at_both_densities() {
+        for density in [1, 2] {
+            let track = Rect::new(100, 50, 16 * density, 400 * density);
+            let minimum = 24 * density;
+            let mut bars = Scrollbars::new();
+            for total in [30_000, 3_000_000] {
+                bars.record_viewport_with_minimum((), track, total, 0, 20, minimum);
+                let (_, thumb) = bars.visible().next().unwrap();
+                assert_eq!(thumb.len, minimum);
+                let y = track.y + thumb.len - 1;
+                assert_eq!(
+                    bars.press(track.x + 2, y),
+                    Some(((), 0)),
+                    "the bottom of the visible thumb is still a grab, not a jump"
+                );
+                assert_eq!(
+                    bars.drag(track.y + track.height + minimum),
+                    Some(((), total - 20))
+                );
+                assert_eq!(bars.drag(0), Some(((), 0)));
+                bars.release();
+                bars.record_viewport_with_minimum((), track, total, total - 20, 20, minimum);
+                let (_, thumb) = bars.visible().next().unwrap();
+                assert_eq!(thumb.start + thumb.len, track.height);
+            }
+            bars.record_viewport_with_minimum((), Rect::new(0, 0, 10, 8), 100, 0, 4, minimum);
+            assert_eq!(bars.visible().next().unwrap().1.len, 8);
+            bars.record_viewport_with_minimum((), track, 20, 0, 20, minimum);
+            assert!(bars.visible().next().is_none());
+        }
     }
 
     #[test]
