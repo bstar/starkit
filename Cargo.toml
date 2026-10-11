@@ -137,3 +137,8 @@ proptest = { version = "1", default-features = false, features = [
 [[example]]
 name = "terminal-graphics"
 required-features = ["terminal-graphics"]
+
+# A controller fixture for the real frontend/SGR mouse regression harness.
+[[example]]
+name = "pixel-mouse-probe"
+required-features = ["terminal-graphics"]

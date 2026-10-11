@@ -10,6 +10,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed
 
+- Kitty graphical sessions use SGR pixel mouse coordinates when geometry is
+  measured, avoiding character-cell steps during EQ and other native drags.
+  Ordinary terminals and multiplexers retain cell input. The optional
+  `pixel_mouse` capability preserves legacy reports, and shutdown/panic restore
+  the terminal mode. `scripts/test-pixel-mouse.py` exercises actual SGR input
+  through the frontend and relay using the isolated `pixel-mouse-probe` example.
+
 - Native text now contributes glyph opacity on transparent canvases, keeping
   footer labels visible in Kitty without painting the terminal background.
 

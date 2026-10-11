@@ -342,7 +342,8 @@ pub enum Input {
         button: u8,
         x: u16,
         y: u16,
-        /// Original terminal cell centre in viewport pixels, before UI scaling.
+        /// Original terminal position in viewport pixels, before UI scaling.
+        /// SGR 1016 frontends retain exact pixels; cell input uses cell centres.
         /// Older peers can ignore this and keep using x/y logical cells.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pixel: Option<[u32; 2]>,

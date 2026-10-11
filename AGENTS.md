@@ -161,7 +161,10 @@ The contract is available without the renderer feature so a helper can own its
 UI without linking a rasterizer. Pixel coordinates are local, bounded and clipped
 to the containing surface; opaque hit actions remain the helper's responsibility.
 `native_surfaces` is an additive negotiated frontend capability. Terminal input
-is still cell precision; do not advertise pixel pointer precision.
+defaults to cell precision. The Kitty frontend can enable SGR 1016 only with
+measured pixel geometry, outside multiplexers. `pixel_mouse` reports that enabled
+mode separately from the legacy cell-precision enum; graphics support alone must
+not claim pixel pointer precision. Restore 1016 on normal exit and panic.
 
 Pixel root layout uses `terminal_graphics::placement`: bounded logical regions
 mapped to pixel destinations, with shared column/split gaps and optional panel

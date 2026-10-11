@@ -9,6 +9,7 @@ pub mod cells;
 pub mod client;
 mod drop_bridge;
 mod font;
+mod mouse;
 mod native;
 pub mod placement;
 mod pointer;

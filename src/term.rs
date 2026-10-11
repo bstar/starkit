@@ -117,6 +117,9 @@ fn enter(out: &mut impl Write) -> io::Result<()> {
 
 /// The inverse of [`enter`], in the opposite order.
 fn leave(out: &mut impl Write) -> io::Result<()> {
+    // The graphical frontend may have enabled SGR pixel mouse coordinates.
+    // Include this in panic restoration as well as its normal mode guard.
+    out.write_all(b"\x1b[?1016l")?;
     execute!(
         out,
         Show,
@@ -184,6 +187,7 @@ mod tests {
                 "{name} is left on"
             );
         }
+        assert!(off.contains("\u{1b}[?1016l"), "pixel mouse mode is left on");
         assert!(on.contains("\u{1b}[>5u"));
         assert!(off.contains("\u{1b}[<1u"));
         assert!(on.contains("\u{1b}[?25l"), "the cursor is left visible");

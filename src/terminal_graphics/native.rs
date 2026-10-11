@@ -742,12 +742,10 @@ impl Painter {
                     }
                     let coverage = ((src_alpha * 255 + alpha / 2) / alpha) as u8;
                     for c in 0..3 {
-                        let background = if dst_alpha == 0 {
-                            0
-                        } else {
-                            ((u32::from(pixels[offset + c]) * 255 + dst_alpha / 2) / dst_alpha)
-                                .min(255) as u8
-                        };
+                        let background = (u32::from(pixels[offset + c]) * 255 + dst_alpha / 2)
+                            .checked_div(dst_alpha)
+                            .unwrap_or(0)
+                            .min(255) as u8;
                         let straight = blend_text_channel(rgba[c], background, coverage);
                         pixels[offset + c] = ((u32::from(straight) * alpha + 127) / 255) as u8;
                     }

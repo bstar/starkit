@@ -624,11 +624,20 @@ fn run_impl(
         && std::env::var_os("SSH_CONNECTION").is_none();
     capabilities.video = true;
     capabilities.presentation_switch = preference.is_some();
-    tracing::info!(?capabilities, "Terminal presentation capabilities");
     let graphical_available =
         capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
     let mut pixels = graphical_available && !preference.as_ref().is_some_and(|p| p.cells);
     capabilities.cell_presentation = Some(!pixels);
+    // SGR 1016 uses the same event encoding as 1006, with pixel coordinates.
+    // Enable it only on a known Kitty terminal with measured pixel geometry;
+    // graphics support alone is not evidence of pixel mouse support.
+    capabilities.pixel_mouse = super::mouse::supported(
+        graphical_available,
+        capabilities.pixel_geometry == super::capabilities::PixelGeometry::Measured,
+        std::env::var("TERM").ok().as_deref(),
+        std::env::var_os("TMUX").is_some() || std::env::var_os("STY").is_some(),
+    );
+    tracing::info!(?capabilities, "Terminal presentation capabilities");
     let cell = graphics.cell_size().unwrap_or((10, 20));
     font.cell = Some(cell);
     let mut size = viewport(1, cell)?;
@@ -683,6 +692,7 @@ fn run_impl(
         })?;
     let _terminal = crate::term::init()?;
     let _guard = TerminalGuard;
+    let _pixel_mouse = super::mouse::Mode::enable(capabilities.pixel_mouse)?;
     use std::io::Write;
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut pointer = super::pointer::Pointer::default();
@@ -1290,15 +1300,24 @@ fn run_impl(
                         Some(MouseButton::Middle) => 2,
                         _ => 0,
                     };
-                    let pixel = [
-                        terminal_pixel(m.column, terminal_grid.0, size.width),
-                        terminal_pixel(m.row, terminal_grid.1, size.height),
-                    ];
-                    let logical = if pointer_placements.is_empty() {
-                        Some((
+                    let pixel = if capabilities.pixel_mouse {
+                        [u32::from(m.column), u32::from(m.row)]
+                    } else {
+                        [
+                            terminal_pixel(m.column, terminal_grid.0, size.width),
+                            terminal_pixel(m.row, terminal_grid.1, size.height),
+                        ]
+                    };
+                    let logical_point = if capabilities.pixel_mouse {
+                        super::mouse::logical(pixel, size)
+                    } else {
+                        [
                             logical_coordinate(m.column, terminal_grid.0, size.columns),
                             logical_coordinate(m.row, terminal_grid.1, size.rows),
-                        ))
+                        ]
+                    };
+                    let logical = if pointer_placements.is_empty() {
+                        Some((logical_point[0], logical_point[1]))
                     } else {
                         pointer_placements
                             .iter()
@@ -1329,8 +1348,8 @@ fn run_impl(
                         pixel: Some(pixel),
                         action: action.into(),
                         button,
-                        x: logical_coordinate(m.column, terminal_grid.0, size.columns),
-                        y: logical_coordinate(m.row, terminal_grid.1, size.rows),
+                        x: logical_point[0],
+                        y: logical_point[1],
                         modifiers: m.modifiers.bits(),
                     });
                 }

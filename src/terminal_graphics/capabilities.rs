@@ -24,7 +24,8 @@ pub enum PointerPrecision {
 }
 
 /// A Kitty image reply does not imply pixel-precise mouse events. Current
-/// crossterm input uses cells, even when image dimensions are measured pixels.
+/// input defaults to cells, even when image dimensions are measured pixels.
+/// `pixel_mouse` separately reports an enabled SGR pixel mouse mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     /// Explicit mode; absent for legacy peers that inferred it from images.
@@ -45,6 +46,10 @@ pub struct Capabilities {
     pub image_transport: ImageTransport,
     pub pixel_geometry: PixelGeometry,
     pub pointer_precision: PointerPrecision,
+    /// True only when this frontend has enabled SGR 1016. The baseline enum
+    /// remains cell precision so older controllers can deserialize the report.
+    #[serde(default)]
+    pub pixel_mouse: bool,
     pub keyboard: bool,
     pub paste: bool,
     /// This frontend acknowledges scenes after terminal presentation. Older
@@ -92,6 +97,7 @@ impl Capabilities {
             } else {
                 PointerPrecision::None
             },
+            pixel_mouse: false,
             keyboard: interactive,
             paste: interactive,
             presentation_ack: interactive,
@@ -115,8 +121,10 @@ mod tests {
         ))
         .unwrap();
         encoded.as_object_mut().unwrap().remove("native_skins");
+        encoded.as_object_mut().unwrap().remove("pixel_mouse");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
         assert!(!old.native_skins);
+        assert!(!old.pixel_mouse);
     }
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
@@ -131,6 +139,7 @@ mod tests {
             image_transport: ImageTransport::Kitty,
             pixel_geometry: PixelGeometry::Measured,
             pointer_precision: PointerPrecision::Cells,
+            pixel_mouse: false,
             keyboard: true,
             paste: true,
             presentation_ack: true,
@@ -144,6 +153,7 @@ mod tests {
         assert_eq!(report["image_transport"], "kitty");
         assert_eq!(report["pixel_geometry"], "measured");
         assert_eq!(report["pointer_precision"], "cells");
+        assert_eq!(report["pixel_mouse"], false);
         assert_eq!(
             serde_json::from_value::<Capabilities>(report).unwrap(),
             capabilities
