@@ -195,6 +195,7 @@ struct RegionCache {
     pixels: Arc<RgbaImage>,
     columns: u16,
     rows: u16,
+    generation: u64,
     placements: Vec<(super::protocol::Rect, u32)>,
 }
 impl Default for KittyPresenter {
@@ -289,7 +290,8 @@ impl KittyPresenter {
         viewport.validate()?;
         anyhow::ensure!(png.len() <= 15_000_000, "Frame exceeds encoded limit");
         let same_geometry = self.regions.as_ref().is_some_and(|old| {
-            old.columns == viewport.columns
+            old.generation == viewport.generation
+                && old.columns == viewport.columns
                 && old.rows == viewport.rows
                 && old.pixels.dimensions() == (viewport.width, viewport.height)
         });
@@ -341,7 +343,8 @@ impl KittyPresenter {
             )?);
         }
         let same_geometry = self.regions.as_ref().is_some_and(|old| {
-            old.columns == viewport.columns
+            old.generation == viewport.generation
+                && old.columns == viewport.columns
                 && old.rows == viewport.rows
                 && old.pixels.dimensions() == pixels.dimensions()
         });
@@ -444,6 +447,7 @@ impl KittyPresenter {
             pixels,
             columns: viewport.columns,
             rows: viewport.rows,
+            generation: viewport.generation,
             placements,
         });
         Ok(payload_bytes)
@@ -818,6 +822,49 @@ mod tests {
         apply_wire(&wire, &mut images);
         assert!(images.is_empty());
     }
+    #[test]
+    fn coalesced_resize_replaces_placements_even_when_final_size_is_unchanged() {
+        let viewport = super::super::protocol::Viewport {
+            columns: 80,
+            rows: 20,
+            width: 320,
+            height: 160,
+            generation: 1,
+        };
+        let frame = RgbaImage::from_pixel(320, 160, crate::image::Rgba([20, 30, 40, 255]));
+        let mut presenter = KittyPresenter::default();
+        let mut images = BTreeMap::new();
+        let mut wire = Vec::new();
+        let png = encode_frame(&frame);
+        presenter
+            .present_regions(&png, viewport, &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        let old_ids: Vec<_> = images.keys().copied().collect();
+        // A terminal can clip/reflow placements while intermediate layouts
+        // are skipped. Equal final dimensions do not make those IDs reusable.
+        images.clear();
+        wire.clear();
+        presenter
+            .present_regions(
+                &png,
+                super::super::protocol::Viewport {
+                    generation: 3,
+                    ..viewport
+                },
+                &mut wire,
+            )
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        assert_eq!(images.len(), old_ids.len());
+        assert!(old_ids.iter().all(|id| !images.contains_key(id)));
+        let mut composed = RgbaImage::new(320, 160);
+        for (x, y, image) in images.values() {
+            crate::image::imageops::replace(&mut composed, image, i64::from(*x), i64::from(*y));
+        }
+        assert_eq!(composed, frame);
+    }
+
     #[test]
     fn repaint_and_resize_burst_reconstructs_every_presented_frame() {
         let mut presenter = KittyPresenter::default();

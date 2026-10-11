@@ -10,6 +10,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed
 
+- Terminal resize generations invalidate graphical image placements and cell
+  diff buffers, including rapid shrink/grow sequences that finish at the same
+  dimensions. The next frame replaces the complete presentation.
+
 - Kitty graphical sessions use SGR pixel mouse coordinates when geometry is
   measured, avoiding character-cell steps during EQ and other native drags.
   Ordinary terminals and multiplexers retain cell input. The optional

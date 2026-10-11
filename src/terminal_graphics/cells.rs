@@ -213,6 +213,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
 
 pub struct Cells {
     previous: Option<Buffer>,
+    generation: Option<u64>,
     output: Receiver<RenderMessage>,
     frames: Sender<RenderMessage>,
 }
@@ -221,6 +222,7 @@ impl Default for Cells {
         let (frames, output) = bounded(1);
         Self {
             previous: None,
+            generation: None,
             output,
             frames,
         }
@@ -234,10 +236,11 @@ impl Cells {
         let next = buffer(scene);
         let mut out = io::stdout().lock();
         out.write_all(b"\x1b[?2026h")?;
-        if self
-            .previous
-            .as_ref()
-            .is_none_or(|old| old.area != next.area)
+        if self.generation != Some(scene.viewport.generation)
+            || self
+                .previous
+                .as_ref()
+                .is_none_or(|old| old.area != next.area)
         {
             out.write_all(b"\x1b[2J\x1b[H")?;
             self.previous = Some(Buffer::empty(next.area));
@@ -249,6 +252,7 @@ impl Cells {
         out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
         self.previous = Some(next);
+        self.generation = Some(scene.viewport.generation);
         // Cell drawing is synchronous: acknowledgements follow the actual
         // terminal write.
         let _ = self.output.try_recv();
