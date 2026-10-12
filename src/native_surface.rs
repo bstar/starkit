@@ -90,6 +90,13 @@ pub struct HitRegion {
     pub rect: PixelRect,
     pub action: String,
 }
+/// A presentation-only hover color for an existing background fill. It does
+/// not carry an action or alter the controller's selection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoverFill {
+    pub node: u16,
+    pub color: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Surface {
     pub width: u16,
@@ -104,6 +111,9 @@ pub struct Surface {
     pub assets: std::collections::BTreeMap<String, Option<String>>,
     pub nodes: Vec<Primitive>,
     pub hits: Vec<HitRegion>,
+    /// Negotiate `surface_hover` before relying on frontend hover presentation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hover_fills: Vec<HoverFill>,
 }
 impl Surface {
     pub fn new(width: u16, height: u16, background: String) -> Self {
@@ -115,6 +125,7 @@ impl Surface {
             assets: Default::default(),
             nodes: vec![],
             hits: vec![],
+            hover_fills: vec![],
         }
     }
     /// Lay out logical design units at an explicit density. Text is reshaped at
@@ -189,7 +200,7 @@ impl Surface {
             "invalid surface size"
         );
         anyhow::ensure!(
-            self.nodes.len() <= 4096 && self.hits.len() <= 256,
+            self.nodes.len() <= 4096 && self.hits.len() <= 256 && self.hover_fills.len() <= 256,
             "surface exceeds limits"
         );
         if let Some([width, height]) = self.cell_size {
@@ -208,6 +219,14 @@ impl Surface {
         anyhow::ensure!(
             self.background == "transparent" || color(&self.background),
             "invalid surface background"
+        );
+        anyhow::ensure!(
+            self.hover_fills.iter().all(|hover| color(&hover.color)
+                && matches!(
+                    self.nodes.get(usize::from(hover.node)),
+                    Some(Primitive::Fill { .. })
+                )),
+            "invalid surface hover fill"
         );
         let skin_id = |id: &str| {
             id.strip_prefix("skin/").is_some_and(|h| {

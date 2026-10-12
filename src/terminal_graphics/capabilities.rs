@@ -62,6 +62,9 @@ pub struct Capabilities {
     pub native_skins: bool,
     #[serde(default)]
     pub native_paths: bool,
+    /// Native surface background hover is painted without controller input.
+    #[serde(default)]
+    pub surface_hover: bool,
     #[serde(default)]
     pub pixel_layout: bool,
     /// Decode and play animation assets locally without new controller scenes.
@@ -104,6 +107,7 @@ impl Capabilities {
             native_surfaces: true,
             native_skins: true,
             native_paths: true,
+            surface_hover: true,
             pixel_layout: true,
             animated_images: true,
         }
@@ -122,8 +126,10 @@ mod tests {
         .unwrap();
         encoded.as_object_mut().unwrap().remove("native_skins");
         encoded.as_object_mut().unwrap().remove("pixel_mouse");
+        encoded.as_object_mut().unwrap().remove("surface_hover");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
         assert!(!old.native_skins);
+        assert!(!old.surface_hover);
         assert!(!old.pixel_mouse);
     }
     #[test]
@@ -146,6 +152,7 @@ mod tests {
             native_surfaces: true,
             native_skins: true,
             native_paths: true,
+            surface_hover: true,
             pixel_layout: true,
             animated_images: true,
         };

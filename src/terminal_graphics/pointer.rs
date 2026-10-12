@@ -95,6 +95,84 @@ pub(super) fn clickable_regions(scene: &super::protocol::Scene) -> Vec<super::pr
     regions
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HoverTarget {
+    Row(super::protocol::Rect),
+    Surface { component: usize, fill: usize },
+}
+impl HoverTarget {
+    pub fn is_surface(self) -> bool {
+        matches!(self, Self::Surface { .. })
+    }
+}
+pub(super) fn hovered(
+    scene: &super::protocol::Scene,
+    logical: Option<(u16, u16)>,
+    pixel: Option<[u32; 2]>,
+) -> Option<HoverTarget> {
+    use super::protocol::Component;
+    if scene
+        .components
+        .iter()
+        .any(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
+    {
+        return None;
+    }
+    if let Some([x, y]) = pixel.filter(|_| scene.placements.is_empty()) {
+        // Surface rectangles use the scene's logical grid. Project directly
+        // from physical pixels so adjacent rows do not inherit cell stepping.
+        let v = scene.viewport;
+        for (component, c) in scene.components.iter().enumerate().rev() {
+            let Component::Surface { rect, surface } = c else {
+                continue;
+            };
+            let left = u32::from(rect.x) * v.width / u32::from(v.columns.max(1));
+            let top = u32::from(rect.y) * v.height / u32::from(v.rows.max(1));
+            let right =
+                (u32::from(rect.x) + u32::from(rect.width)) * v.width / u32::from(v.columns.max(1));
+            let bottom =
+                (u32::from(rect.y) + u32::from(rect.height)) * v.height / u32::from(v.rows.max(1));
+            if x < left || x >= right || y < top || y >= bottom {
+                continue;
+            }
+            let sx = ((x - left) * u32::from(surface.width) / (right - left)) as u16;
+            let sy = ((y - top) * u32::from(surface.height) / (bottom - top)) as u16;
+            if let Some(fill) = surface.hover_fills.iter().rposition(|h| {
+                surface
+                    .nodes
+                    .get(usize::from(h.node))
+                    .is_some_and(|n| n.rect().contains(sx, sy))
+            }) {
+                return Some(HoverTarget::Surface { component, fill });
+            }
+        }
+    }
+    hovered_row(scene, logical).map(HoverTarget::Row)
+}
+pub(super) fn paint_hover(
+    scene: &super::protocol::Scene,
+    hover: Option<HoverTarget>,
+) -> super::protocol::Scene {
+    use super::protocol::Component;
+    use crate::native_surface::Primitive;
+    if let Some(HoverTarget::Row(rect)) = hover {
+        return hover_scene(scene, Some(rect));
+    }
+    let mut result = scene.clone();
+    if let Some(HoverTarget::Surface { component, fill }) = hover {
+        if let Some(Component::Surface { surface, .. }) = result.components.get_mut(component) {
+            if let Some(h) = surface.hover_fills.get(fill) {
+                if let Some(Primitive::Fill { color, .. }) =
+                    surface.nodes.get_mut(usize::from(h.node))
+                {
+                    color.clone_from(&h.color);
+                }
+            }
+        }
+    }
+    result
+}
+
 // Hover is presentation-only: no controller selection or remote round trip.
 pub(super) fn hovered_row(
     scene: &super::protocol::Scene,
@@ -291,6 +369,84 @@ mod tests {
         let regions = clickable_regions(&scene);
         assert!(regions.iter().any(|r| r.contains(5, 3)));
         assert!(!regions.iter().any(|r| r.contains(3, 3)));
+    }
+    #[test]
+    fn native_hover_uses_physical_rows_and_never_changes_base_or_selection() {
+        use super::super::protocol::{Component, Rect};
+        use crate::native_surface::{HoverFill, PixelRect, Primitive, Surface};
+        for density in [1, 2] {
+            let mut scene = row_scene();
+            scene.components.clear();
+            let mut surface = Surface::new(400, 200, "#101010".into());
+            surface.fill(PixelRect::new(10, 21, 200, 22), "#101010", 0);
+            surface.hover_fills.push(HoverFill {
+                node: 0,
+                color: "#303030".into(),
+            });
+            surface.fill(PixelRect::new(10, 43, 200, 22), "#555555", 0);
+            // A selected row keeps its selection even under the pointer.
+            surface.hover_fills.push(HoverFill {
+                node: 1,
+                color: "#555555".into(),
+            });
+            let surface = surface.at_density(density).unwrap();
+            scene.viewport.width *= u32::from(density);
+            scene.viewport.height *= u32::from(density);
+            scene.components.push(Component::Surface {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 10,
+                },
+                surface,
+            });
+            let first = hovered(
+                &scene,
+                None,
+                Some([20 * u32::from(density), 42 * u32::from(density)]),
+            );
+            let second = hovered(
+                &scene,
+                None,
+                Some([20 * u32::from(density), 43 * u32::from(density)]),
+            );
+            assert_ne!(
+                first, second,
+                "adjacent physical rows must not snap to cells"
+            );
+            let painted = paint_hover(&scene, first);
+            let Component::Surface { surface: base, .. } = &scene.components[0] else {
+                panic!()
+            };
+            let Component::Surface { surface: drawn, .. } = &painted.components[0] else {
+                panic!()
+            };
+            assert!(matches!(&base.nodes[0], Primitive::Fill { color, .. } if color == "#101010"));
+            assert!(matches!(&drawn.nodes[0], Primitive::Fill { color, .. } if color == "#303030"));
+            assert_eq!(drawn.nodes[1], base.nodes[1]);
+            assert_eq!(paint_hover(&scene, None), scene);
+            assert_eq!(paint_hover(&scene, second), scene);
+            scene.components.push(Component::Menu {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 10,
+                },
+            });
+            assert!(hovered(&scene, None, Some([20, 30])).is_none());
+        }
+        let mut invalid = Surface::new(40, 20, "#101010".into());
+        invalid.hover_fills.push(HoverFill {
+            node: 0,
+            color: "#303030".into(),
+        });
+        assert!(invalid.validate().is_err());
+        invalid.fill(PixelRect::new(0, 0, 40, 20), "#101010", 0);
+        assert!(invalid.validate().is_ok());
+        invalid.hover_fills[0].color = "bad".into();
+        assert!(invalid.validate().is_err());
     }
     #[test]
     fn clickable_hover_uses_hand_and_resets_without_repeated_output() {

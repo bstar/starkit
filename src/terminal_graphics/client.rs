@@ -697,6 +697,7 @@ fn run_impl(
     let mut presenter = PresenterGuard(KittyPresenter::default());
     let mut pointer = super::pointer::Pointer::default();
     let mut hover_point = None;
+    let mut hover_pixel = None;
     let mut hovered_row = None;
     let mut focused = true;
     let mut mouse_down = false;
@@ -852,7 +853,7 @@ fn run_impl(
                     // both late scenes and late assets from the same cache.
                     if let Some(scene) = &mut last_scene {
                         if assets.hydrate(scene) {
-                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
                         }
                     }
                 }
@@ -921,11 +922,11 @@ fn run_impl(
                     video_layer.clear(&mut io::stdout().lock())?;
                 }
                 hovered_row = if pixels {
-                    super::pointer::hovered_row(&scene, hover_point)
+                    super::pointer::hovered(&scene, hover_point, hover_pixel)
                 } else {
                     None
                 };
-                renderer.scene(&super::pointer::hover_scene(&scene, hovered_row))?;
+                renderer.scene(&super::pointer::paint_hover(&scene, hovered_row))?;
                 last_scene = Some(scene);
             }
         }
@@ -1270,7 +1271,7 @@ fn run_impl(
                         cell_video.reset();
                         io::stdout().write_all(b"\x1b[2J\x1b[H")?;
                         if let Some(scene) = &last_scene {
-                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
                         }
                     }
                     if !connected
@@ -1337,12 +1338,14 @@ fn run_impl(
                             .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
                     };
                     hover_point = if mouse_down { None } else { logical };
+                    hover_pixel = (!mouse_down).then_some(pixel);
+                    let previous_hover = hovered_row;
                     if pixels {
                         if let Some(scene) = &last_scene {
-                            let next = super::pointer::hovered_row(scene, hover_point);
+                            let next = super::pointer::hovered(scene, hover_point, hover_pixel);
                             if next != hovered_row {
                                 hovered_row = next;
-                                renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                                renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
                             }
                         }
                     }
@@ -1364,16 +1367,23 @@ fn run_impl(
                         y: logical_point[1],
                         modifiers: m.modifiers.bits(),
                     });
+                    if action == "move"
+                        && previous_hover.is_some_and(super::pointer::HoverTarget::is_surface)
+                        && hovered_row.is_some_and(super::pointer::HoverTarget::is_surface)
+                    {
+                        input = None;
+                    }
                 }
                 Event::Paste(text) => input = Some(Input::Paste { text }),
                 Event::FocusLost => {
                     focused = false;
                     mouse_down = false;
                     hover_point = None;
+                    hover_pixel = None;
                     hovered_row = None;
                     if pixels {
                         if let Some(scene) = &last_scene {
-                            renderer.scene(&super::pointer::hover_scene(scene, hovered_row))?;
+                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
                         }
                     }
                     pointer.reset(&mut io::stdout().lock())?;
@@ -1381,6 +1391,7 @@ fn run_impl(
                 }
                 Event::Resize(..) => {
                     hover_point = None;
+                    hover_pixel = None;
                     hovered_row = None;
                     pointer.reset(&mut io::stdout().lock())?;
                     resize_handles.clear();

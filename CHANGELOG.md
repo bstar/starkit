@@ -10,6 +10,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed
 
+- Native surface row hover can be painted by the frontend in physical pixels,
+  without waiting for controller scene rebuilds or sending motion within the
+  surface. Negotiated hover fills preserve selection and legacy clients.
+
 - Graphical frontends coalesce queued hover motion before forwarding input,
   avoiding lag and session input queue overflow during fast pointer movement.
   Clicks, drags, wheel input, keyboard events and resizes retain their order.
