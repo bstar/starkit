@@ -14,6 +14,11 @@ use std::sync::{
 use std::time::Duration;
 
 struct Active {
+    cache: Arc<super::pcm_cache::Cache>,
+    paused: Arc<AtomicBool>,
+    cache_mode: Arc<AtomicBool>,
+    buffered_reported: u64,
+    spool_worker: Option<std::thread::JoinHandle<()>>,
     played: Arc<AtomicU64>,
     reported: u64,
     session: u64,
@@ -30,6 +35,9 @@ struct Active {
 impl Drop for Active {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.spool_worker.take() {
+            let _ = worker.join();
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -54,6 +62,12 @@ impl Frontend {
                 spec.validate()?;
                 self.active = None;
                 let (tx, rx) = bounded(WINDOW_BLOCKS);
+                let cache = Arc::new(super::pcm_cache::Cache::new()?);
+                let cache_mode = Arc::new(AtomicBool::new(false));
+                let output_cache = cache.clone();
+                let output_mode = cache_mode.clone();
+                let paused = Arc::new(AtomicBool::new(false));
+                let output_paused = paused.clone();
                 let (credit, credits) = bounded(WINDOW_BLOCKS);
                 let (events, receive) = bounded(2);
                 let played = Arc::new(AtomicU64::new(0));
@@ -64,11 +78,35 @@ impl Frontend {
                 let compatibility = *compatibility;
                 let sid = *session;
                 let eid = *epoch;
+                let spool_cache = cache.clone();
+                let spool_mode = cache_mode.clone();
+                let spool_cancel = stop.clone();
+                let spool_events = events.clone();
+                let spool_credit = credit.clone();
+                let spool_worker = std::thread::Builder::new()
+                    .name("star-pcm-cache".into())
+                    .spawn(move || {
+                        let result = spool(
+                            rx,
+                            spool_cache,
+                            spool_mode,
+                            spool_credit,
+                            &spool_cancel,
+                            source.channels,
+                        );
+                        if let Err(error) = result {
+                            let _ =
+                                spool_events.try_send(Err(format!("Local audio cache: {error:#}")));
+                            spool_cancel.store(true, Ordering::Release);
+                        }
+                    })?;
                 let worker = std::thread::Builder::new()
                     .name("star-pcm-output".into())
                     .spawn(move || {
                         if let Err(e) = play(
-                            rx,
+                            output_cache,
+                            output_mode,
+                            output_paused,
                             credit,
                             events.clone(),
                             cancel.clone(),
@@ -85,6 +123,11 @@ impl Frontend {
                         }
                     })?;
                 self.active = Some(Active {
+                    cache,
+                    paused,
+                    cache_mode,
+                    buffered_reported: 0,
+                    spool_worker: Some(spool_worker),
                     played,
                     reported: 0,
                     session: *session,
@@ -98,6 +141,28 @@ impl Frontend {
                     pending: 0,
                     pending_event: None,
                 });
+            }
+            ToClient::PcmPause {
+                session,
+                epoch,
+                paused,
+            } => {
+                if let Some(a) = self
+                    .active
+                    .as_mut()
+                    .filter(|a| a.session == *session && a.epoch == *epoch)
+                {
+                    a.paused.store(*paused, Ordering::Release);
+                }
+            }
+            ToClient::PcmCache { session, epoch } => {
+                if let Some(a) = self
+                    .active
+                    .as_mut()
+                    .filter(|a| a.session == *session && a.epoch == *epoch)
+                {
+                    a.cache_mode.store(true, Ordering::Release);
+                }
             }
             ToClient::PcmChunk {
                 session,
@@ -160,6 +225,21 @@ impl Frontend {
         let Some(a) = self.active.as_mut() else {
             return;
         };
+        let buffered = a.cache.frames.load(Ordering::Acquire);
+        if a.cache_mode.load(Ordering::Acquire)
+            && buffered != a.buffered_reported
+            && out
+                .try_send(ClientMessage::Media {
+                    message: ToHost::PcmBuffered {
+                        session: a.session,
+                        epoch: a.epoch,
+                        frames: buffered,
+                    },
+                })
+                .is_ok()
+        {
+            a.buffered_reported = buffered;
+        }
         let played = a.played.load(Ordering::Acquire);
         if played != a.reported
             && out
@@ -219,7 +299,9 @@ impl Frontend {
 }
 #[allow(clippy::too_many_arguments)]
 fn play(
-    blocks: Receiver<Option<(crate::pcm::SampleFormat, bool, Vec<u8>)>>,
+    cache: Arc<super::pcm_cache::Cache>,
+    cache_mode: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     credit: Sender<()>,
     events: Sender<Result<ToHost, String>>,
     stop: Arc<AtomicBool>,
@@ -235,8 +317,10 @@ fn play(
     let channels = plan.config.channels;
     let format = format!("{:?}", plan.format);
     let converted = plan.converted;
+    // A half-second device reserve absorbs brief scheduling stalls while the
+    // independent worker feeds the whole-song disk cache into this bounded ring.
     let (mut producer, consumer) =
-        rtrb::RingBuffer::new((rate as usize * channels as usize / 10).max(1024));
+        rtrb::RingBuffer::new((rate as usize * channels as usize / 2).max(1024));
     let (errors, error) = bounded(1);
     let mut device_frames = 0u64;
     let began = std::time::Instant::now();
@@ -244,12 +328,8 @@ fn play(
     let callback_deadline = playback_deadline.clone();
     let consumed = Arc::new(AtomicU64::new(0));
     let callback_consumed = consumed.clone();
-    let stream = plan.open_with_timing(
-        consumer,
-        source,
-        Arc::new(AtomicBool::new(false)),
-        errors,
-        move |values, _, delay| {
+    let stream =
+        plan.open_with_timing(consumer, source, paused, errors, move |values, _, delay| {
             device_frames += values.len() as u64 / u64::from(channels);
             if !values.is_empty() {
                 callback_deadline.store(
@@ -264,8 +344,7 @@ fn play(
                 Ordering::Release,
             );
             callback_consumed.store(device_frames, Ordering::Release);
-        },
-    )?;
+        })?;
     stream.play()?;
     let mut converter = if rate != source.sample_rate || channels != source.channels || converted {
         Some(crate::pcm_output::Converter::new(source, channels, rate)?)
@@ -285,9 +364,9 @@ fn play(
         if let Ok(e) = error.try_recv() {
             anyhow::bail!("{e}");
         }
-        let (format, processed, bytes) = match blocks.recv_timeout(Duration::from_millis(10)) {
-            Ok(Some(b)) => b,
-            Ok(None) => {
+        let (format, processed, bytes) = match cache.next()? {
+            super::pcm_cache::Next::Block(b) => b,
+            super::pcm_cache::Next::End => {
                 if let Some(c) = converter.as_mut() {
                     let tail = c.finish()?;
                     queued_frames += tail.len() as u64 / u64::from(channels);
@@ -309,8 +388,10 @@ fn play(
                 }
                 return Ok(());
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-            Err(_) => break,
+            super::pcm_cache::Next::Waiting => {
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
         };
         let samples = crate::pcm::Spec { format, ..source }.decode(&bytes)?;
         let samples = if let Some(c) = converter.as_mut() {
@@ -326,7 +407,36 @@ fn play(
             &stop,
             &error,
         )?;
-        let _ = credit.try_send(());
+        if !cache_mode.load(Ordering::Acquire) {
+            let _ = credit.try_send(());
+        }
+    }
+    Ok(())
+}
+
+fn spool(
+    blocks: Receiver<Option<super::pcm_cache::Block>>,
+    cache: Arc<super::pcm_cache::Cache>,
+    cache_mode: Arc<AtomicBool>,
+    credit: Sender<()>,
+    stop: &AtomicBool,
+    channels: u16,
+) -> Result<()> {
+    while !stop.load(Ordering::Acquire) {
+        match blocks.recv_timeout(Duration::from_millis(5)) {
+            Ok(Some(block)) => {
+                cache.append(block, channels)?;
+                if cache_mode.load(Ordering::Acquire) {
+                    let _ = credit.try_send(());
+                }
+            }
+            Ok(None) => {
+                cache.finish();
+                return Ok(());
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(_) => return Ok(()),
+        }
     }
     Ok(())
 }
@@ -379,6 +489,11 @@ mod tests {
         (
             Frontend {
                 active: Some(Active {
+                    cache: Arc::new(super::super::pcm_cache::Cache::new().unwrap()),
+                    paused: Arc::new(AtomicBool::new(false)),
+                    cache_mode: Arc::new(AtomicBool::new(false)),
+                    buffered_reported: 0,
+                    spool_worker: None,
                     played: Arc::new(AtomicU64::new(0)),
                     reported: 0,
                     session: 11,
@@ -395,6 +510,83 @@ mod tests {
             },
             receive,
         )
+    }
+    #[test]
+    fn disk_credits_download_a_song_without_a_playback_consumer() {
+        let (blocks, receive) = bounded(WINDOW_BLOCKS);
+        let (credit, credits) = bounded(WINDOW_BLOCKS);
+        let cache = Arc::new(super::super::pcm_cache::Cache::new().unwrap());
+        let stored = cache.clone();
+        let worker = std::thread::spawn(move || {
+            spool(
+                receive,
+                stored,
+                Arc::new(AtomicBool::new(true)),
+                credit,
+                &AtomicBool::new(false),
+                2,
+            )
+            .unwrap()
+        });
+        for _ in 0..300 {
+            blocks
+                .send(Some((
+                    crate::pcm::SampleFormat::I32,
+                    false,
+                    vec![0; 960 * 8],
+                )))
+                .unwrap();
+            credits.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        blocks.send(None).unwrap();
+        worker.join().unwrap();
+        assert_eq!(cache.frames.load(Ordering::Acquire), 288000);
+        for _ in 0..300 {
+            assert!(matches!(
+                cache.next().unwrap(),
+                super::super::pcm_cache::Next::Block(_)
+            ));
+        }
+        assert!(matches!(
+            cache.next().unwrap(),
+            super::super::pcm_cache::Next::End
+        ));
+    }
+    #[test]
+    fn stale_cache_and_pause_do_not_change_active_audio() {
+        let (mut frontend, _) = fixture();
+        frontend
+            .receive(&ToClient::PcmCache {
+                session: 11,
+                epoch: 2,
+            })
+            .unwrap();
+        frontend
+            .receive(&ToClient::PcmPause {
+                session: 11,
+                epoch: 2,
+                paused: true,
+            })
+            .unwrap();
+        let active = frontend.active.as_ref().unwrap();
+        assert!(!active.cache_mode.load(Ordering::Acquire));
+        assert!(!active.paused.load(Ordering::Acquire));
+        frontend
+            .receive(&ToClient::PcmCache {
+                session: 11,
+                epoch: 3,
+            })
+            .unwrap();
+        frontend
+            .receive(&ToClient::PcmPause {
+                session: 11,
+                epoch: 3,
+                paused: true,
+            })
+            .unwrap();
+        let active = frontend.active.as_ref().unwrap();
+        assert!(active.cache_mode.load(Ordering::Acquire));
+        assert!(active.paused.load(Ordering::Acquire));
     }
     #[test]
     fn stale_close_end_and_chunks_cannot_affect_a_new_epoch() {

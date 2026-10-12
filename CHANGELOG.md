@@ -8,6 +8,20 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+### Added
+
+- Negotiated whole-track PCM disk caching, paused background downloads and
+  received-buffer progress for SSH audio. Legacy frontends keep bounded credits.
+
+### Fixed
+
+- Audio refill and playback run independently of UI polling, with a larger device
+  reserve to tolerate workspace changes and drawing stalls.
+- Resize handling measures cells and pixels together, detects settled geometry
+  after missed events and invalidates cached presentations before redrawing.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

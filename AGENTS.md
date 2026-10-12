@@ -198,7 +198,12 @@ Standalone AMP uses the additive `audio_pcm_v2` capability and `Pcm*` messages.
 `pcm` validates bounded source-format blocks without a device; `pcm_output`
 owns native format selection and optional float64 conversion. `audio_v2` owns
 the frontend worker, eight credits, epoch cancellation, callback progress and
-end-of-stream drain. Block format and processing provenance may differ from
+end-of-stream drain. Negotiated `audio_cache_v1` returns credits after PCM is
+written to an anonymous whole-track disk cache; legacy PCM returns them after
+conversion enters the playback ring. Cached pause preserves the file. Standalone
+connection workers receive, refill and play PCM independently of UI presentation.
+Received frame reports drive the buffer bar; audible completion drives the queue.
+Block format and processing provenance may differ from
 the original source spec without reopening the output. Preserve the legacy
 fixed-format relay for FOLD/embed clients. Never silently convert a strict PCM
 route or fall back to server audio on a device error.

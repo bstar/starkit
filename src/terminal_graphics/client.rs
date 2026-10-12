@@ -187,6 +187,30 @@ impl Connection {
         let (scene_tx, frames) = bounded(1);
         let old = frames.clone();
         let terminal = socket.is_some();
+        // PCM reception and refill must not wait for terminal writes or rendering.
+        let (pcm_tx, pcm_rx) = bounded(8);
+        let pcm_out = input.clone();
+        let pcm_errors = control.clone();
+        std::thread::spawn(move || {
+            let mut pcm = super::audio_v2::Frontend::default();
+            loop {
+                match pcm_rx.recv_timeout(Duration::from_millis(5)) {
+                    Ok(message) => {
+                        if let Err(error) = pcm.receive(&message) {
+                            let _ = pcm_errors.try_send(ServerMessage::Error {
+                                message: format!("Local audio: {error:#}"),
+                            });
+                            break;
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                    Err(_) => break,
+                }
+                pcm.tick(&pcm_out);
+            }
+            pcm.reset();
+        });
+
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
@@ -203,6 +227,21 @@ impl Connection {
                         {
                             let _ = old.try_recv();
                             let _ = scene_tx.try_send(scene);
+                        }
+                    }
+                    Ok(Some(ServerMessage::Media { message }))
+                        if matches!(
+                            message,
+                            super::media::ToClient::PcmPause { .. }
+                                | super::media::ToClient::PcmOpen { .. }
+                                | super::media::ToClient::PcmCache { .. }
+                                | super::media::ToClient::PcmChunk { .. }
+                                | super::media::ToClient::PcmEnd { .. }
+                                | super::media::ToClient::PcmClose { .. }
+                        ) =>
+                    {
+                        if pcm_tx.send(message).is_err() {
+                            return;
                         }
                     }
                     Ok(Some(message)) => {
@@ -337,8 +376,13 @@ fn authenticate(launch: &Launch) -> Result<Option<SshGuard>> {
 }
 
 fn viewport(generation: u64, cell: (u16, u16)) -> Result<Viewport> {
-    let (columns, rows) = crate::crossterm::terminal::size()?;
+    // Read cells and pixels from one winsize snapshot. Two separate queries
+    // can straddle a resize and describe a canvas wider than the actual window.
     let size = crate::crossterm::terminal::window_size().ok();
+    let (columns, rows) = match &size {
+        Some(size) if size.columns > 0 && size.rows > 0 => (size.columns, size.rows),
+        _ => crate::crossterm::terminal::size()?,
+    };
     let width = size
         .as_ref()
         .map(|s| u32::from(s.width))
@@ -718,6 +762,7 @@ fn run_impl(
     let mut last_reply = Instant::now();
     let mut ping = Instant::now();
     let mut last_input = Instant::now();
+    let mut geometry_probe = Instant::now();
     let mut reconnect = Instant::now() + Duration::from_secs(5);
     let mut fatal = None;
     let mut frames = 0u64;
@@ -1246,6 +1291,19 @@ fn run_impl(
         } else {
             16
         };
+        // SIGWINCH notifications can be coalesced during a drag. Recheck the
+        // settled geometry even when the final resize notification was lost.
+        if pending_event.is_none() && geometry_probe.elapsed() >= Duration::from_millis(250) {
+            geometry_probe = Instant::now();
+            if let Ok(measured) = viewport(size.generation, cell) {
+                if (measured.columns, measured.rows) != terminal_grid
+                    || measured.width != size.width
+                    || measured.height != size.height
+                {
+                    pending_event = Some(Event::Resize(measured.columns, measured.rows));
+                }
+            }
+        }
         if pending_event.is_some() || event::poll(Duration::from_millis(poll_ms))? {
             last_input = Instant::now();
             window.cursor(false);
@@ -1397,6 +1455,12 @@ fn run_impl(
                     resize_handles.clear();
                     pointer_regions.clear();
                     pointer_placements.clear();
+                    geometry_probe = Instant::now();
+                    // The terminal may have clipped or moved an existing Kitty
+                    // placement. Its cached pixels no longer prove it is visible.
+                    presenter.clear(&mut io::stdout().lock())?;
+                    video_layer.clear(&mut io::stdout().lock())?;
+                    cell_video.reset();
                     size = viewport(size.generation + 1, cell)?;
                     terminal_grid = (size.columns, size.rows);
                     size = scaled_viewport(size, if pixels { pixel_scale } else { 100 });
@@ -1505,6 +1569,109 @@ fn coalesce_motion(
 
 #[cfg(test)]
 mod tests {
+    /// Run only against an isolated ALSA null device. Deliberately never poll
+    /// Connection.messages or frames: terminal processing is suspended.
+    #[test]
+    #[ignore]
+    fn pcm_cache_refills_without_polling_the_ui() {
+        use super::super::media::{ToClient, ToHost};
+        use super::*;
+        use base64::Engine as _;
+        assert!(std::env::var_os("STAR_PCM_DEVICE_TEST").is_some());
+        let (mut host, client) = std::os::unix::net::UnixStream::pair().unwrap();
+        host.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+        let connection =
+            Connection::streams(client.try_clone().unwrap(), client, None, None).unwrap();
+        let mut input = BufReader::new(host.try_clone().unwrap());
+        let mut send =
+            |message| write_message(&ServerMessage::Media { message }, &mut host).unwrap();
+        send(ToClient::PcmOpen {
+            session: 11,
+            epoch: 3,
+            spec: crate::pcm::Spec {
+                sample_rate: 48000,
+                channels: 2,
+                channel_mask: 3,
+                format: crate::pcm::SampleFormat::I32,
+                valid_bits: Some(32),
+            },
+            compatibility: false,
+        });
+        send(ToClient::PcmCache {
+            session: 11,
+            epoch: 3,
+        });
+        send(ToClient::PcmPause {
+            session: 11,
+            epoch: 3,
+            paused: true,
+        });
+        let started = Instant::now();
+        let data = base64::engine::general_purpose::STANDARD.encode(vec![0; 960 * 8]);
+        let mut sent = 0;
+        let mut end = false;
+        loop {
+            let Some(ClientMessage::Media { message }) =
+                read_message::<ClientMessage>(&mut input).unwrap()
+            else {
+                continue;
+            };
+            match message {
+                ToHost::AudioCredit { blocks, .. } => {
+                    for _ in 0..blocks {
+                        if sent < 300 {
+                            send(ToClient::PcmChunk {
+                                session: 11,
+                                epoch: 3,
+                                format: crate::pcm::SampleFormat::I32,
+                                processed: false,
+                                data: data.clone(),
+                            });
+                            sent += 1;
+                        } else if !end {
+                            send(ToClient::PcmEnd {
+                                session: 11,
+                                epoch: 3,
+                            });
+                            end = true;
+                        }
+                    }
+                }
+                ToHost::PcmBuffered { frames, .. } if frames == 300 * 960 => break,
+                ToHost::PcmProgress { frames, .. } => assert_eq!(frames, 0, "paused cache played"),
+                ToHost::PcmFinished { .. } => panic!("paused cache finished"),
+                ToHost::AudioError { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+        assert_eq!(sent, 300);
+        if !end {
+            send(ToClient::PcmEnd {
+                session: 11,
+                epoch: 3,
+            });
+        }
+        assert!(started.elapsed() < Duration::from_secs(3));
+        send(ToClient::PcmPause {
+            session: 11,
+            epoch: 3,
+            paused: false,
+        });
+        loop {
+            if let Some(ClientMessage::Media { message }) =
+                read_message::<ClientMessage>(&mut input).unwrap()
+            {
+                match message {
+                    ToHost::PcmFinished { .. } => break,
+                    ToHost::AudioError { message, .. } => panic!("{message}"),
+                    _ => {}
+                }
+            }
+            assert!(started.elapsed() < Duration::from_secs(10));
+        }
+        drop(connection);
+    }
     #[test]
     fn motion_bursts_keep_the_latest_position_without_reordering_actions() {
         use crate::crossterm::event::{

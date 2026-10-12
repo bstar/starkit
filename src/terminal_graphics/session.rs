@@ -549,8 +549,16 @@ fn serve_with_policy(
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
         if let Some(p) = &peer {
-            if p.media.len() <= 6 {
-                for message in controller.media_chunks() {
+            // Drain short bursts at network speed; controls still get a turn.
+            for _ in 0..16 {
+                if p.media.len() > 6 {
+                    break;
+                }
+                let chunks = controller.media_chunks();
+                if chunks.is_empty() {
+                    break;
+                }
+                for message in chunks {
                     let _ = p.media.try_send(message);
                 }
             }

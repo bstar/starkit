@@ -17,6 +17,16 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {
+    /// Enable full-song caching for a negotiated audio_cache_v1 frontend.
+    PcmPause {
+        session: u64,
+        epoch: u64,
+        paused: bool,
+    },
+    PcmCache {
+        session: u64,
+        epoch: u64,
+    },
     PcmOpen {
         session: u64,
         epoch: u64,
@@ -103,6 +113,12 @@ pub enum ToClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToHost {
+    /// Source frames received and stored on the presentation machine.
+    PcmBuffered {
+        session: u64,
+        epoch: u64,
+        frames: u64,
+    },
     PcmProgress {
         session: u64,
         epoch: u64,
@@ -824,6 +840,8 @@ impl Frontend {
             ToClient::AudioOpen { .. }
             | ToClient::AudioChunk { .. }
             | ToClient::AudioClose { .. }
+            | ToClient::PcmPause { .. }
+            | ToClient::PcmCache { .. }
             | ToClient::PcmOpen { .. }
             | ToClient::PcmChunk { .. }
             | ToClient::PcmClose { .. }

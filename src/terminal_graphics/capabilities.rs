@@ -41,6 +41,9 @@ pub struct Capabilities {
     pub audio_relay: bool,
     #[serde(default)]
     pub audio_pcm_v2: bool,
+    /// Whole-track PCM caching independent of terminal presentation.
+    #[serde(default)]
+    pub audio_cache_v1: bool,
     #[serde(default)]
     pub video: bool,
     #[serde(default)]
@@ -86,6 +89,7 @@ impl Capabilities {
             video_player: true,
             audio_relay: true,
             audio_pcm_v2: true,
+            audio_cache_v1: true,
             video: true,
             local_media: false,
             image_transport: if graphics.name() == "kitty" {
@@ -144,6 +148,7 @@ mod tests {
             video_player: true,
             audio_relay: true,
             audio_pcm_v2: true,
+            audio_cache_v1: true,
             video: true,
             local_media: false,
             image_transport: ImageTransport::Kitty,
