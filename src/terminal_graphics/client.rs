@@ -700,6 +700,7 @@ fn run_impl(
     let mut hovered_row = None;
     let mut focused = true;
     let mut mouse_down = false;
+    let mut pending_event = None;
     let mut resize_handles = Vec::new();
     let mut pointer_regions = Vec::new();
     let mut pointer_placements: Vec<super::placement::Placement> = Vec::new();
@@ -1244,10 +1245,21 @@ fn run_impl(
         } else {
             16
         };
-        if event::poll(Duration::from_millis(poll_ms))? {
+        if pending_event.is_some() || event::poll(Duration::from_millis(poll_ms))? {
             last_input = Instant::now();
             window.cursor(false);
-            let event = event::read()?;
+            let first = match pending_event.take() {
+                Some(event) => event,
+                None => event::read()?,
+            };
+            let (event, boundary) = coalesce_motion(first, || {
+                if event::poll(Duration::ZERO)? {
+                    event::read().map(Some)
+                } else {
+                    Ok(None)
+                }
+            })?;
+            pending_event = boundary;
             let mut input = custom(&event);
             match event {
                 Event::Key(k) if k.kind == crate::crossterm::event::KeyEventKind::Press => {
@@ -1460,8 +1472,81 @@ fn control_input(input: &Input) -> bool {
     }
 }
 
+// A terminal can queue hundreds of hover positions while a frame is being
+// presented. Only the latest contiguous position matters. Preserve every
+// button, wheel, drag, key and geometry event, including its ordering.
+fn coalesce_motion(
+    mut event: Event,
+    mut next: impl FnMut() -> io::Result<Option<Event>>,
+) -> io::Result<(Event, Option<Event>)> {
+    if matches!(&event, Event::Mouse(m) if m.kind == MouseEventKind::Moved) {
+        // Bound the drain so continuous motion cannot starve frame delivery.
+        for _ in 0..255 {
+            match next()? {
+                Some(Event::Mouse(m)) if m.kind == MouseEventKind::Moved => event = Event::Mouse(m),
+                Some(boundary) => return Ok((event, Some(boundary))),
+                None => break,
+            }
+        }
+    }
+    Ok((event, None))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn motion_bursts_keep_the_latest_position_without_reordering_actions() {
+        use crate::crossterm::event::{
+            Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        use std::collections::VecDeque;
+        let mouse = |kind, column| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let moved = |column| mouse(MouseEventKind::Moved, column);
+        let boundaries = [
+            mouse(MouseEventKind::Down(MouseButton::Left), 10),
+            mouse(MouseEventKind::Drag(MouseButton::Left), 11),
+            mouse(MouseEventKind::Drag(MouseButton::Left), 12),
+            mouse(MouseEventKind::Up(MouseButton::Left), 13),
+            mouse(MouseEventKind::ScrollDown, 14),
+            Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Event::Resize(100, 40),
+            Event::FocusLost,
+            Event::Paste("text".into()),
+        ];
+        let mut events = VecDeque::new();
+        let mut expected = Vec::new();
+        for boundary in boundaries {
+            events.extend([moved(1), moved(2), moved(3), boundary.clone()]);
+            expected.extend([moved(3), boundary]);
+        }
+        let mut actual = Vec::new();
+        let mut pending = None;
+        while let Some(first) = pending.take().or_else(|| events.pop_front()) {
+            let (event, boundary) =
+                super::coalesce_motion(first, || Ok(events.pop_front())).unwrap();
+            actual.push(event);
+            pending = boundary;
+        }
+        assert_eq!(actual, expected);
+        let mut events: VecDeque<_> = (1..1000).map(moved).collect();
+        let (latest, boundary) =
+            super::coalesce_motion(moved(0), || Ok(events.pop_front())).unwrap();
+        assert_eq!(latest, moved(255));
+        assert!(boundary.is_none());
+        assert_eq!(
+            events.front(),
+            Some(&moved(256)),
+            "continuous motion must yield to rendering"
+        );
+    }
+
     #[test]
     fn finished_worker_preserves_its_queued_failure_reason() {
         let (tx, rx) = crossbeam_channel::bounded(2);
