@@ -90,6 +90,17 @@ pub struct HitRegion {
     pub rect: PixelRect,
     pub action: String,
 }
+/// A divider following a text node's rendered ink, measured on the frontend.
+/// Older renderers ignore this optional surface decoration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextRule {
+    pub node: u16,
+    pub end: u16,
+    pub gap: u16,
+    pub width: u16,
+    pub color: String,
+}
+
 /// A presentation-only hover color for an existing background fill. It does
 /// not carry an action or alter the controller's selection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +125,8 @@ pub struct Surface {
     /// Negotiate `surface_hover` before relying on frontend hover presentation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hover_fills: Vec<HoverFill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_rules: Vec<TextRule>,
 }
 impl Surface {
     pub fn new(width: u16, height: u16, background: String) -> Self {
@@ -126,6 +139,7 @@ impl Surface {
             nodes: vec![],
             hits: vec![],
             hover_fills: vec![],
+            text_rules: vec![],
         }
     }
     /// Lay out logical design units at an explicit density. Text is reshaped at
@@ -181,6 +195,11 @@ impl Surface {
                 Primitive::Sprite { rect: r, .. } | Primitive::Icon { rect: r, .. } => rect(r)?,
             }
         }
+        for rule in &mut self.text_rules {
+            rule.end = scale(rule.end)?;
+            rule.gap = scale(rule.gap)?;
+            rule.width = scale(rule.width)?;
+        }
         for hit in &mut self.hits {
             rect(&mut hit.rect)?;
         }
@@ -200,7 +219,10 @@ impl Surface {
             "invalid surface size"
         );
         anyhow::ensure!(
-            self.nodes.len() <= 4096 && self.hits.len() <= 256 && self.hover_fills.len() <= 256,
+            self.nodes.len() <= 4096
+                && self.hits.len() <= 256
+                && self.hover_fills.len() <= 256
+                && self.text_rules.len() <= 256,
             "surface exceeds limits"
         );
         if let Some([width, height]) = self.cell_size {
@@ -227,6 +249,15 @@ impl Surface {
                     Some(Primitive::Fill { .. })
                 )),
             "invalid surface hover fill"
+        );
+        anyhow::ensure!(
+            self.text_rules.iter().all(|rule| color(&rule.color)
+                && rule.end <= self.width
+                && rule.gap <= 256
+                && (1..=8).contains(&rule.width)
+                && matches!(self.nodes.get(usize::from(rule.node)),
+                    Some(Primitive::Text { rect, .. }) if rect.x <= rule.end)),
+            "invalid surface text rule"
         );
         let skin_id = |id: &str| {
             id.strip_prefix("skin/").is_some_and(|h| {
@@ -377,6 +408,33 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_rules_validate_targets_and_scale_with_density() {
+        let mut s = Surface::new(200, 30, "#000000".into());
+        s.text(PixelRect::new(10, 0, 100, 30), "Album", "#ffffff", 12, true);
+        s.text_rules.push(TextRule {
+            node: 0,
+            end: 190,
+            gap: 10,
+            width: 1,
+            color: "#808080".into(),
+        });
+        s.validate().unwrap();
+        let doubled = s.clone().at_density(2).unwrap();
+        assert_eq!(
+            (
+                doubled.text_rules[0].end,
+                doubled.text_rules[0].gap,
+                doubled.text_rules[0].width
+            ),
+            (380, 20, 2)
+        );
+        s.text_rules[0].node = 1;
+        assert!(s.validate().is_err());
+        s.text_rules[0].node = 0;
+        s.text_rules[0].end = 201;
+        assert!(s.validate().is_err());
+    }
     #[test]
     fn full_screen_surface_coordinates_match_the_viewport_budget() {
         assert!(Surface::new(3840, 2160, "#000000".into())

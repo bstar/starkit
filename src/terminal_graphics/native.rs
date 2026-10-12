@@ -359,7 +359,7 @@ impl Painter {
         let [x, y, width, height] = area;
         let sx = width / f32::from(surface.width);
         let sy = height / f32::from(surface.height);
-        for node in &surface.nodes {
+        for (node_index, node) in surface.nodes.iter().enumerate() {
             let r = node.rect();
             let mut rect = [
                 x + f32::from(r.x) * sx,
@@ -420,7 +420,30 @@ impl Painter {
                             style,
                         );
                     } else {
-                        self.text(canvas, text, rect, style);
+                        let edge = self.text(canvas, text, rect, style);
+                        if let Some(edge) = edge {
+                            for rule in surface
+                                .text_rules
+                                .iter()
+                                .filter(|r| usize::from(r.node) == node_index)
+                            {
+                                let left = edge + f32::from(rule.gap) * sx;
+                                let right = x + f32::from(rule.end) * sx;
+                                let thickness = f32::from(rule.width) * sy;
+                                if right - left >= thickness {
+                                    fill(
+                                        canvas,
+                                        [
+                                            left,
+                                            (rect[1] + rect[3] / 2.).floor(),
+                                            right - left,
+                                            thickness,
+                                        ],
+                                        &rule.color,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 Primitive::Path {
@@ -639,7 +662,13 @@ impl Painter {
             at = end;
         }
     }
-    fn text(&mut self, canvas: &mut Pixmap, value: &str, rect: [f32; 4], style: TextStyle<'_>) {
+    fn text(
+        &mut self,
+        canvas: &mut Pixmap,
+        value: &str,
+        rect: [f32; 4],
+        style: TextStyle<'_>,
+    ) -> Option<f32> {
         let TextStyle {
             size,
             color,
@@ -650,7 +679,7 @@ impl Painter {
         } = style;
         let [x, y, w, h] = rect;
         if value.trim().is_empty() || w <= 0. || h <= 0. {
-            return;
+            return None;
         }
         // Placed panel rows may be shorter than the source terminal cells.
         // Shape at a size whose complete line fits the destination, including
@@ -710,6 +739,7 @@ impl Painter {
         let width = canvas.width();
         let height = canvas.height();
         let pixels = canvas.data_mut();
+        let mut ink_end = None::<f32>;
         buffer.draw(
             fonts,
             &mut self.glyphs,
@@ -730,6 +760,9 @@ impl Painter {
                 }
                 let offset = ((dy as u32 * width + dx as u32) * 4) as usize;
                 let rgba = color.as_rgba();
+                if rgba[3] > 0 {
+                    ink_end = Some(ink_end.unwrap_or(0.).max((dx + 1) as f32));
+                }
                 // The canvas stores premultiplied RGBA. Opaque pane text can
                 // blend directly, but text over terminal gaps must also add
                 // coverage to alpha or Kitty treats the glyph as invisible.
@@ -758,7 +791,7 @@ impl Painter {
             },
         );
         if clipped {
-            self.text(
+            let ellipsis_end = self.text(
                 canvas,
                 "…",
                 [x + w - size, y, size, h],
@@ -771,7 +804,11 @@ impl Painter {
                     grid: false,
                 },
             );
+            if let Some(edge) = ellipsis_end {
+                ink_end = Some(ink_end.unwrap_or(0.).max(edge));
+            }
         }
+        ink_end
     }
 
     fn spans(
@@ -1836,6 +1873,63 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn heading_rules_keep_a_fixed_gap_after_shaped_and_ellipsized_text() {
+        use crate::native_surface::{PixelRect, Surface, TextRule};
+        let mut painter = Painter::new();
+        let long = "Album ".repeat(40);
+        for density in [1, 2] {
+            for size in [10, 12, 16] {
+                for title in [
+                    "1980 · Heaven And Hell",
+                    "1980 · Blizzard Of Ozz [AudioPhil edition]",
+                    "1997 · Björk — Homogenic",
+                    "東京 · アルバム",
+                    &long,
+                ] {
+                    let mut s = Surface::new(660, 30, "#000000".into());
+                    s.text(PixelRect::new(10, 0, 610, 30), title, "#ffffff", size, true);
+                    s.text_rules.push(TextRule {
+                        node: 0,
+                        end: 650,
+                        gap: 10,
+                        width: 1,
+                        color: "#00ff00".into(),
+                    });
+                    let s = s.at_density(density).unwrap();
+                    let mut canvas = Pixmap::new(u32::from(s.width), u32::from(s.height)).unwrap();
+                    painter
+                        .surface(
+                            &mut canvas,
+                            &s,
+                            [0., 0., f32::from(s.width), f32::from(s.height)],
+                        )
+                        .unwrap();
+                    let mut text_right = None;
+                    let mut rule_left = None;
+                    for y in 0..canvas.height() {
+                        for x in 0..canvas.width() {
+                            let pixel = canvas.pixel(x, y).unwrap();
+                            if pixel.red() > 0
+                                && pixel.red() == pixel.green()
+                                && pixel.red() == pixel.blue()
+                            {
+                                text_right = Some(text_right.unwrap_or(0).max(x));
+                            }
+                            if pixel.green() > 0 && pixel.red() == 0 && pixel.blue() == 0 {
+                                rule_left = Some(rule_left.unwrap_or(u32::MAX).min(x));
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        rule_left.unwrap() - text_right.unwrap() - 1,
+                        u32::from(10 * density),
+                        "{title}, size {size}, density {density}"
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn skin_sprites_keep_corners_and_render_from_cached_ids_without_resampling() {
         use crate::native_surface::{PixelRect, Primitive, Surface};

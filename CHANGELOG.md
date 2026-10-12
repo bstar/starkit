@@ -8,6 +8,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-12
+
+### Added
+
+- Optional native surface text rules placed after the actual rendered glyph
+  edge, including ellipsized text, local font selection and display density.
+  Older frontends safely ignore the decoration.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added
