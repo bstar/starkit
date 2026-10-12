@@ -40,6 +40,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub audio_relay: bool,
     #[serde(default)]
+    pub audio_pcm_v2: bool,
+    #[serde(default)]
     pub video: bool,
     #[serde(default)]
     pub local_media: bool,
@@ -83,6 +85,7 @@ impl Capabilities {
             original_media: true,
             video_player: true,
             audio_relay: true,
+            audio_pcm_v2: true,
             video: true,
             local_media: false,
             image_transport: if graphics.name() == "kitty" {
@@ -140,6 +143,7 @@ mod tests {
             original_media: true,
             video_player: true,
             audio_relay: true,
+            audio_pcm_v2: true,
             video: true,
             local_media: false,
             image_transport: ImageTransport::Kitty,

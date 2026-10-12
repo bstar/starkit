@@ -17,6 +17,27 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {
+    PcmOpen {
+        session: u64,
+        epoch: u64,
+        spec: crate::pcm::Spec,
+        compatibility: bool,
+    },
+    PcmChunk {
+        session: u64,
+        epoch: u64,
+        format: crate::pcm::SampleFormat,
+        processed: bool,
+        data: String,
+    },
+    PcmClose {
+        session: u64,
+        epoch: u64,
+    },
+    PcmEnd {
+        session: u64,
+        epoch: u64,
+    },
     OriginalOpen {
         session: u64,
         generation: u64,
@@ -82,6 +103,23 @@ pub enum ToClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToHost {
+    PcmProgress {
+        session: u64,
+        epoch: u64,
+        frames: u64,
+    },
+    PcmFinished {
+        session: u64,
+        epoch: u64,
+    },
+    PcmReady {
+        session: u64,
+        epoch: u64,
+        sample_rate: u32,
+        channels: u16,
+        format: String,
+        converted: bool,
+    },
     Read {
         session: u64,
         generation: u64,
@@ -671,6 +709,7 @@ pub struct Frontend {
     local: bool,
     pending_control: Option<(u64, u64, bool, u8)>,
     audio: super::audio::Frontend,
+    pcm: super::audio_v2::Frontend,
 }
 impl Frontend {
     pub fn video_playing(&self) -> bool {
@@ -682,6 +721,7 @@ impl Frontend {
     pub fn reset(&mut self) {
         self.active = None;
         self.audio.reset();
+        self.pcm.reset();
         self.pending_control = None;
     }
     pub fn new(local: bool) -> Self {
@@ -690,10 +730,11 @@ impl Frontend {
             local,
             pending_control: None,
             audio: super::audio::Frontend::default(),
+            pcm: super::audio_v2::Frontend::default(),
         }
     }
     pub fn receive(&mut self, msg: ToClient, out: &Sender<ClientMessage>) -> anyhow::Result<()> {
-        if self.audio.receive(&msg)? {
+        if self.pcm.receive(&msg)? || self.audio.receive(&msg)? {
             return Ok(());
         }
         match msg {
@@ -782,7 +823,11 @@ impl Frontend {
             }
             ToClient::AudioOpen { .. }
             | ToClient::AudioChunk { .. }
-            | ToClient::AudioClose { .. } => unreachable!(),
+            | ToClient::AudioClose { .. }
+            | ToClient::PcmOpen { .. }
+            | ToClient::PcmChunk { .. }
+            | ToClient::PcmClose { .. }
+            | ToClient::PcmEnd { .. } => unreachable!(),
             ToClient::Open {
                 session,
                 generation,
@@ -957,6 +1002,7 @@ impl Frontend {
         out: &Sender<ClientMessage>,
     ) -> Option<(String, Arc<crate::image::RgbaImage>)> {
         self.audio.tick(out);
+        self.pcm.tick(out);
         let a = self.active.as_mut()?;
         a.pending_credit += a.consumed.try_iter().sum::<usize>();
         if a.pending_credit > 0

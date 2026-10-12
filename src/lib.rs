@@ -70,3 +70,9 @@ pub mod media;
 /// Verified standalone application updates from GitHub releases.
 #[cfg(all(feature = "update", unix))]
 pub mod update;
+
+/// Lossless PCM stream metadata and precision conversion.
+pub mod pcm;
+
+#[cfg(feature = "audio-output")]
+pub mod pcm_output;

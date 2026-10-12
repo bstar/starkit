@@ -31,3 +31,5 @@ pub mod audio;
 pub mod window;
 
 pub mod video_presenter;
+
+mod audio_v2;

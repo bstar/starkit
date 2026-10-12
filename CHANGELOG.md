@@ -8,6 +8,19 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-12
+
+### Added
+
+- Negotiated `audio_pcm_v2` SSH audio alongside the existing audio relay.
+  Source rate, speaker layout, valid precision and integer/float representation
+  travel with bounded, epoch-scoped PCM blocks. Float64 processing provenance,
+  credits, device progress and end-of-stream draining preserve audio and timing.
+  Shared native output selects a preserving device format or requires explicit
+  compatibility conversion, with float64 resampling and TPDF integer dither.
+- Terminal bridge attachments can choose their initial cell or pixel
+  presentation without starting another SSH connection.
+
 ### Fixed
 
 - Native surface row hover can be painted by the frontend in physical pixels,

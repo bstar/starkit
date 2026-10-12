@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.90"
 description = "The terminal-UI foundation shared by staramp and starcord"
@@ -40,7 +40,9 @@ update = ["net", "dep:sha2", "dep:serde_json", "dep:semver", "dep:tar", "dep:fla
 # Optional native Rust pixel renderer and SSH scene relay.
 terminal-graphics = ["media", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
 
-media = ["image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
+audio-output = ["dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
+
+media = ["audio-output","image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"], optional = true }

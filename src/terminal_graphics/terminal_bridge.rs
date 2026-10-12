@@ -121,10 +121,15 @@ impl Attachment {
         self.relay_with_play(path, None)
     }
     /// Open a host movie after the existing terminal frontend attaches.
-    pub fn relay_with_play(
+    pub fn relay_with_play(self, path: &std::path::Path, play: Option<String>) -> Result<()> {
+        self.relay_with_presentation(path, play, None)
+    }
+    /// Choose the initial presentation while reusing the terminal's frontend.
+    pub fn relay_with_presentation(
         mut self,
         path: &std::path::Path,
         mut play: Option<String>,
+        cells: Option<bool>,
     ) -> Result<()> {
         let socket = UnixStream::connect(path).context("Attach terminal bridge session")?;
         let mut input_socket = socket.try_clone()?;
@@ -132,6 +137,8 @@ impl Attachment {
         let nonce = self.nonce.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
+        let initial_cells = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let detected_cells = initial_cells.clone();
         let input = std::thread::spawn(move || {
             let prefix = format!("STAR_KIT_BRIDGE {nonce} ");
             let mut lines = Lines::default();
@@ -143,6 +150,16 @@ impl Attachment {
                                 break;
                             }
                             let message: ClientMessage = serde_json::from_str(data)?;
+                            if let ClientMessage::Hello {
+                                capabilities: Some(cap),
+                                ..
+                            } = &message
+                            {
+                                if let Some(cells) = cap.cell_presentation {
+                                    detected_cells
+                                        .store(if cells { 1 } else { 2 }, Ordering::Release);
+                                }
+                            }
                             write_message(&message, &mut input_socket)?;
                         }
                     } else {
@@ -172,6 +189,17 @@ impl Attachment {
                     emit(&self.nonce, "data", Some(&STANDARD.encode(chunk)))?;
                 }
                 emit(&self.nonce, "end", None)?;
+                if matches!(message, ServerMessage::Hello { .. })
+                    && cells.is_some_and(|wanted| match initial_cells.load(Ordering::Acquire) {
+                        1 => !wanted,
+                        2 => wanted,
+                        _ => false,
+                    })
+                {
+                    let bytes = serde_json::to_vec(&ServerMessage::TogglePresentation)?;
+                    emit(&self.nonce, "data", Some(&STANDARD.encode(bytes)))?;
+                    emit(&self.nonce, "end", None)?;
+                }
                 if matches!(message, ServerMessage::Closed) {
                     break;
                 }
