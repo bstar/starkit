@@ -8,6 +8,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-13
+
+### Fixed
+
+- ASCII adaptation preserves the columns reserved for combining text, flags and
+  ZWJ emoji instead of expanding each codepoint into a replacement character.
+
 ## [0.8.0] - 2026-10-13
 
 ### Added

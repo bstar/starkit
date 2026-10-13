@@ -44,7 +44,7 @@ applications use exactly one copy of each.
 ## Status
 
 Applications pin immutable git tags and lock the resolved revision. The current
-framework release is `v0.8.0`; see [the changelog](CHANGELOG.md). CI checks all
+framework release is `v0.8.1`; see [the changelog](CHANGELOG.md). CI checks all
 four consumers against the candidate checkout as well as KIT's full and minimal
 feature sets. This catches shared API regressions before the next tag.
 

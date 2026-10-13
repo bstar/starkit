@@ -228,7 +228,19 @@ impl Profile {
             cell.bg = map(cell.bg);
             cell.underline_color = map(cell.underline_color);
             if self.glyphs == Glyphs::Ascii && !cell.symbol().is_ascii() {
-                let text: String = cell.symbol().chars().map(ascii).collect();
+                // A terminal cell contains a grapheme, which may have several
+                // codepoints (combining marks, flags, ZWJ emoji). Never expand
+                // it beyond the columns reserved by the original layout.
+                use unicode_width::UnicodeWidthChar as _;
+                let width = usize::from(crate::wrap::width_of(cell.symbol()).clamp(1, 2));
+                let mut text: String = cell
+                    .symbol()
+                    .chars()
+                    .filter(|c| c.width() != Some(0))
+                    .map(ascii)
+                    .take(width)
+                    .collect();
+                text.extend(std::iter::repeat_n(' ', width.saturating_sub(text.len())));
                 cell.set_symbol(&text);
             }
         }
@@ -360,6 +372,21 @@ mod tests {
         o.bridge = true;
         let p = Profile::resolve(&e, o);
         assert!(p.audio && p.local_paths);
+    }
+    #[test]
+    fn ascii_graphemes_never_expand_their_reserved_columns() {
+        use crate::ratatui::layout::Rect;
+        let mut e = env();
+        e.ascii = true;
+        let profile = Profile::resolve(&e, Observed::default());
+        for symbol in ["a\u{301}", "👩‍🚀", "🇺🇸", "界", "╬"] {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 1));
+            buffer[(0, 0)].set_symbol(symbol);
+            let width = crate::wrap::width_of(symbol);
+            profile.adapt_buffer(&mut buffer);
+            assert!(buffer[(0, 0)].symbol().is_ascii());
+            assert_eq!(crate::wrap::width_of(buffer[(0, 0)].symbol()), width);
+        }
     }
     #[test]
     fn ascii_color_adaptation_preserves_geometry_and_attributes() {
