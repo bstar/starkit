@@ -89,6 +89,8 @@
             rustfmt
             clippy
             rust-analyzer
+            # Isolated consumer checks use stdlib tomllib (Python >= 3.11).
+            python3
             # The licence and advisory gate, so it can be answered here rather
             # than only in CI.
             cargo-deny
