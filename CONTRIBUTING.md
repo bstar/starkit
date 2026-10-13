@@ -1,9 +1,9 @@
 # Contributing
 
-This is the library half of two applications, STAR/AMP and STAR/CORD. It has
-no users of its own, so the most useful thing to do before writing code is to
-say which of those two needs the change and what it looks like at the call
-site.
+STAR/KIT is becoming a public terminal application framework, exercised by
+STAR/AMP, STAR/FOLD, STAR/CORD and STAR/WIRE. Propose shared APIs with concrete
+consumer behavior, cell and graphical fallbacks, and a way to verify cost.
+Application-specific models and product rules stay in the applications.
 
 ## Getting it to build
 
@@ -14,10 +14,11 @@ nix develop
 cargo test --all-features
 ```
 
-Without Nix you need a Rust toolchain, 1.90 or newer, and nothing else. There
-is no C in this tree: no `pkg-config`, no `bindgen`, no system libraries. That
-is worth keeping — the applications have those problems already and this crate
-should not add to them.
+Without Nix, install Rust 1.90 or newer. The minimal feature set needs no native
+media libraries. `media`, `audio-output` and `terminal-graphics` require FFmpeg,
+pkg-config and the platform audio libraries; the flake supplies matching build
+dependencies. Linux CI installs FFmpeg development libraries, libclang and ALSA;
+macOS uses FFmpeg, pkg-config and LLVM from Homebrew.
 
 ## What CI will run
 
@@ -50,11 +51,17 @@ what the `--all-features` runs above are for.
 
 ## Changing a signature
 
-Two consumers, both checked out beside this repository, and no third. Read both
-before changing a shared item — `grep -rn "starkit::" ../staramp/src
-../starcord/src` — and land the consumer fix in the same window as the
-release. `AGENTS.md` has the `[patch]` recipe for trying a change from an
-application before it is tagged.
+Read the call sites in all four STAR applications before changing a shared
+item. `scripts/check-consumer.py` checks a disposable copy of a consumer against
+this checkout, leaving the application's manifest and lockfile untouched:
+
+```sh
+nix develop -c python3 scripts/check-consumer.py ../starfold --kit .
+```
+
+Run it from the consumer's devshell when its own native dependencies are needed.
+CI checks each application's latest main branch and prints both revisions. A
+consumer release still needs its own git-tag dependency and portable lockfile.
 
 ## Versioning
 

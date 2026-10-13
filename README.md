@@ -1,18 +1,19 @@
 # STAR/KIT
 
-The terminal-UI foundation shared by [STAR/AMP](https://github.com/bstar/staramp),
-a Winamp-feel music player, [STAR/CORD](https://github.com/bstar/starcord), a
-Discord client, and [STAR/FOLD](https://github.com/bstar/starfold), a file
-manager. All three are terminal applications built on ratatui, all three
-wanted the same theme engine, the same picture rendering, the same docked
-panels and the same idea of where a program's files live, and copying the
-answer between them would have meant maintaining three of everything.
+A Rust framework for beautiful, efficient terminal applications, developed in
+[STAR/AMP](https://github.com/bstar/staramp),
+[STAR/FOLD](https://github.com/bstar/starfold),
+[STAR/CORD](https://github.com/bstar/starcord) and
+[STAR/WIRE](https://github.com/bstar/starwire).
 
-**This is not a general TUI framework.** Every item in it came out of one of
-those three applications, and the API is whatever they needed rather than
-whatever a fourth might. That is a deliberate limit rather than an unfinished
-state: a library with three known call sites can be changed by reading all of
-them, and that property is worth more here than generality.
+KIT combines a Ratatui cell presentation with native pixel rendering, terminal
+capability negotiation, SSH scene transport, audio output and video streaming.
+Applications keep their domain models and commands. KIT supplies the shared
+presentation and transport foundation, with capability-based fallbacks.
+
+The public framework is in development. Versions remain 0.x; shared engines
+are exercised by the STAR apps, while unified responsive panes, a standalone
+starter and the public API stability gates are still being developed.
 
 ## What is in it
 
@@ -36,13 +37,18 @@ them, and that property is worth more here than generality.
   that draws it.
 
 `ratatui`, `crossterm`, `ratatui-image` and `image` are re-exported, so all
-three applications use exactly one copy of each.
+applications use exactly one copy of each.
 
 ## Status
 
-Early. The crate is being lifted out of STAR/AMP a module at a time, and
-`CHANGELOG.md` is the honest account of what has arrived. Versions are 0.x and
-tagged; all three applications pin a tag.
+Applications pin immutable git tags and lock the resolved revision. The current
+alignment release is `v0.6.1`; see [the changelog](CHANGELOG.md). CI checks all
+four consumers against the candidate checkout as well as KIT's full and minimal
+feature sets. This catches shared API regressions before the next tag.
+
+Responsive pane adoption and application migrations happen incrementally.
+Existing app-specific layouts remain supported until a shared replacement has
+proven its interaction, visual fidelity and performance in a real consumer.
 
 ## Licence
 
@@ -51,7 +57,7 @@ MIT.
 
 ## Experimental graphics inside Kitty
 
-The `experiment/terminal-graphics` branch adds an optional shared native Rust
+The `terminal-graphics` feature provides a shared native Rust
 renderer and persistent SSH scene relay. Neither the local renderer nor remote application needs a browser or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
 launch, verification and compatibility details. The ordinary TUI remains the
 standard build.
@@ -65,7 +71,7 @@ over the existing SSH scene transport. Codec/audio contexts stay on workers;
 the pixel renderer receives RGBA frames without serializing scenes per frame.
 Local movies decode audio on an independent worker with a bounded half-second
 ring and a 100 ms startup reserve, so video conversion cannot block audio refill.
-SSH streams use eight bounded decoded video frames of lookahead so the shared
+SSH streams use 32 bounded decoded video frames of lookahead so the shared
 demuxer can refill audio while video waits for the clock.
 Video uses a continuous clock anchored to the audio device's playback timestamp,
 including output latency, rather than jumping by a whole audio callback period.

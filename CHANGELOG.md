@@ -8,6 +8,24 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-13
+
+### Fixed
+
+- Unbridged SSH terminals use bounded video proxies and advertise audio output
+  only when the frontend can reach the presentation machine's speakers.
+- Remote preview work scales before HDR and subtitle processing, uses checked
+  hardware decoding, and resets proxy timestamps across repeated seeks.
+- Original-media seeks keep their generation stable during proxy-quality tuning;
+  bounded video lookahead allows the shared demuxer to refill audio.
+- The graphics benchmark changes rendered row colors on every frame, so its
+  incremental payload and timing measurements exercise actual visual updates.
+
+### Added
+
+- Four-application consumer compatibility CI using isolated candidate builds.
+- A public framework charter with explicit phased readiness and API boundaries.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added

@@ -1,14 +1,14 @@
-//! The terminal-UI foundation shared by staramp and starcord.
+//! A native terminal application framework for cell, graphical and SSH media presentation.
 //!
-//! Not a general TUI framework. Every item here came out of one of the two
-//! applications that use it, and the shape of the API is whatever those two
-//! needed rather than whatever a third might. That is a deliberate limit: a
-//! library with two known consumers can be changed by reading both of them.
+//! STAR/AMP, STAR/FOLD, STAR/CORD and STAR/WIRE exercise the shared foundation.
+//! The framework is being prepared for public use; APIs remain versioned 0.x.
+//! Applications retain their domain models while KIT owns presentation,
+//! terminal capabilities, shared interaction and media transport.
 //!
 //! ## One copy of ratatui
 //!
 //! `ratatui`, `crossterm` and -- with the `image` feature -- `ratatui_image`
-//! and `image` are re-exported from here, and both applications reach them
+//! and `image` are re-exported from here, and applications reach them
 //! through this crate rather than depending on them directly. A `Widget`
 //! implemented against a second copy of ratatui does not satisfy a signature
 //! expecting the first, and the compiler reports that as a mismatch between

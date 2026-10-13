@@ -107,20 +107,24 @@ fn main() -> anyhow::Result<()> {
     let mut wire = Vec::new();
     let started = std::time::Instant::now();
     let mut renderer = Renderer::spawn()?;
-    renderer.scene(&scene)?;
     for index in 0..iterations {
         scene.revision = index as u64 + 1;
-        if let Some(Component::ListRow { selected, .. }) = scene
-            .components
-            .iter_mut()
-            .find(|c| matches!(c, Component::ListRow { .. }))
-        {
-            *selected = index % 2 == 0;
+        if !args.first().is_some_and(|s| s == "--scene") {
+            if let Some(Component::ListRow {
+                selected,
+                background,
+                ..
+            }) = scene
+                .components
+                .iter_mut()
+                .find(|c| matches!(c, Component::ListRow { .. }))
+            {
+                *selected = index % 2 == 0;
+                *background = if *selected { "#45475a" } else { "#1e1e2e" }.into();
+            }
         }
         let sent = std::time::Instant::now();
-        if index > 0 {
-            renderer.scene(&scene)?;
-        }
+        renderer.scene(&scene)?;
         loop {
             match renderer.output.recv_timeout(Duration::from_secs(10))? {
                 RenderMessage::Frame {

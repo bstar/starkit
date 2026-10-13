@@ -85,15 +85,30 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check --all-targets --all-features
 
-  # A `consumers` job belongs here and is not here yet.
-  #
-  # Nothing in this repository can tell whether a signature change breaks the
-  # applications that use it, and both of them are the only callers there are.
-  # The job checks out staramp and starcord, points each at this checkout with
-  # a `[patch]` in a temporary `.cargo/config.toml`, and runs `cargo check
-  # --all-targets` in both. It is added once both are published on GitHub;
-  # until then it would fail on a repository that does not exist, which teaches
-  # everyone to ignore a red tick.
+  consumers:
+    # Rolling integration with each app's latest main. The check prints both
+    # revisions, and changes only a disposable copy of the app's manifests.
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [staramp, starfold, starcord, starwire]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: starkit
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: bstar/${{ matrix.app }}
+          ref: main
+          path: consumer
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - name: Native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: consumer -> target/kit-compat
+      - run: python3 starkit/scripts/check-consumer.py consumer --kit starkit
 
   native-graphics:
     strategy:

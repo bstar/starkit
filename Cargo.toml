@@ -1,9 +1,9 @@
 [package]
 name = "starkit"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 rust-version = "1.90"
-description = "The terminal-UI foundation shared by staramp and starcord"
+description = "A native terminal application framework with cell, graphical and SSH media presentation"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/bstar/starkit"

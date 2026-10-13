@@ -84,6 +84,15 @@ impl Capabilities {
             .is_ok_and(|size| size.width > 0 && size.height > 0);
         let remote_terminal =
             std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+        Self::for_terminal(graphics, interactive, measured, remote_terminal)
+    }
+
+    fn for_terminal(
+        graphics: &crate::graphics::Graphics,
+        interactive: bool,
+        measured: bool,
+        remote_terminal: bool,
+    ) -> Self {
         Self {
             cell_presentation: None,
             presentation_switch: false,
@@ -131,6 +140,22 @@ impl Capabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unbridged_ssh_does_not_advertise_local_decode_or_speaker_output() {
+        let graphics = crate::graphics::Graphics::disabled();
+        let remote = Capabilities::for_terminal(&graphics, true, true, true);
+        assert!(!remote.original_media);
+        assert!(!remote.audio_relay);
+        assert!(!remote.audio_pcm_v2);
+        assert!(!remote.audio_cache_v1);
+        assert!(remote.video && remote.video_player && remote.keyboard);
+        let local_bridge = Capabilities::for_terminal(&graphics, true, true, false);
+        assert!(local_bridge.original_media);
+        assert!(
+            local_bridge.audio_relay && local_bridge.audio_pcm_v2 && local_bridge.audio_cache_v1
+        );
+    }
 
     #[test]
     fn old_frontends_do_not_opt_into_skin_primitives() {

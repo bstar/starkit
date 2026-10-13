@@ -7,50 +7,33 @@ both Linux and macOS and the repository is the only thing every session sees.
 This is the only notes file of its kind here. Do not add a second one beside
 it under another name; everything that reads such a file reads `AGENTS.md`.
 
-## Released by tag, consumed by three applications
+## Public framework and four reference consumers
 
-This crate was lifted out of STAR/AMP a module at a time and the move is
-finished: the leaf modules, the directory rule, file logging, the theme
-engine, the terminal graphics, the panel chrome, the key table and help
-overlay and the HTTP defaults came from there, and the layout engine, text
-field, wrapper and virtual list were written here for STAR/CORD. STAR/FOLD, a
-file manager on the same foundation, joined as a third consumer for 0.3.
-`CHANGELOG.md` says what is here.
+STAR/KIT is being prepared as a public framework for native terminal apps.
+STAR/AMP, STAR/FOLD, STAR/CORD and STAR/WIRE are its reference consumers.
+Keep cell and graphical presentations, SSH capability negotiation, bounded
+media transport, visual fidelity and performance in shared engine code.
+Application domain models and product rules remain in their own repositories.
 
-It is not published to crates.io -- there is no fourth consumer to publish it
-for -- so all three applications depend on a **git tag**, and nothing that
-lands here reaches any of them until one is cut. Releasing is
-`CHANGELOG.md`, the version in `Cargo.toml`, a `vX.Y.Z` tag, and then a
-commit in each application that moves its `tag` and its `Cargo.lock` and
-does nothing else ("Take starkit 0.Y"). Semver 0.x: an API change is a minor
-bump, a fix is a patch.
+Public readiness is a phased program. Alignment comes first, then responsive
+panes and shared interaction, consumer migrations, examples and stability gates.
+Do not describe APIs or platform behavior as mature without evidence.
 
-## Three consumers, all of them known
+Release through `CHANGELOG.md`, the Cargo version and an immutable `vX.Y.Z`
+tag. Each application takes the tag and regenerated git-sourced Cargo.lock in
+a separate dependency commit. Never commit a path-patched lockfile. An API
+change requires a minor version on 0.x; compatible fixes use a patch version.
 
-Every public item in this crate exists because STAR/AMP, STAR/CORD or
-STAR/FOLD needed it, and most of them are called from more than one. There is
-no fourth caller and no published API to keep compatible with a stranger,
-which is the one real advantage this arrangement has: **before changing a
-signature, read all three call sites.** They are checked out beside this
-repository:
-
-```sh
-grep -rn "starkit::" ../staramp/src ../starcord/src ../starfold/src
-```
-
-A change that is awkward at one of them and impossible at another is not a
-refactor, it is a new function. Adding one is cheaper than bending a shared
-one until an application stops liking it.
-
-This is also why the crate is not documented as a general framework. Its
-README says so out loud, and a feature request with no consumer in any of the
-three applications is a fork, not an issue.
+Before changing a signature, read all four consumers. The active AMP checkout
+on the Linux workstation is `../staramp-graphical`; the other checkouts are
+`../starfold`, `../starcord` and `../starwire`. Consumer CI tests disposable
+copies against the candidate KIT checkout using `scripts/check-consumer.py`.
 
 ## Working on it from an application
 
-A change here is invisible to an application until it is tagged, which is the
+A released change reaches an application through its pinned tag, which is the
 cost of pinning tags and is worth paying. To try one before it is, in any of
-the three:
+the four:
 
 ```toml
 # ../staramp/.cargo/config.toml -- untracked, and in .gitignore
@@ -58,7 +41,7 @@ the three:
 starkit = { path = "../starkit" }
 ```
 
-`.cargo/` is ignored in all three applications rather than merely left
+`.cargo/` is ignored in all four applications rather than merely left
 untracked: a committed one points their CI at a path that does not exist on
 the runner, and the failure it produces names cargo rather than the file.
 Delete it when the change is tagged and the application has moved to the new
@@ -66,19 +49,16 @@ tag. Never commit a `Cargo.lock` written while the patch was in place --
 starfold's own `AGENTS.md` tells of the one time this happened, and says a
 `Cargo.lock` changed with no dependency-version bump to explain it is the
 tell to check for first; the same applies wherever the patch is used, so
-watch for it in all three.
+watch for it in all four.
 
-## `dock` has no consumer yet
+## Responsive layout adoption
 
-The dock layout engine (`dock`) is used by none of the three applications.
-Each keeps its own hand-rolled one-column layout instead -- STAR/CORD's and
-STAR/FOLD's each in a `ui/layout.rs` that says so in the application's own
-`AGENTS.md`, staramp's inline in `ui/app.rs` -- because none of them has more
-than one arrangement of panels to choose between, and a single column needs
-no seam to drag. It is kept rather than removed: the tests pin real,
-exercised behaviour even with nothing calling it in an application, and the
-trigger to adopt it anywhere is a consumer that actually wants draggable
-seams, not a tidying pass here.
+`dock` has tests but no application consumer yet. The apps retain their own
+layouts, including FOLD's draggable preview divider. Adopt shared responsive
+panes incrementally: one geometry must drive rendering, hit testing, capture,
+wrapping and visibility. Preserve manual sizing and distinguish user hiding
+from automatic collapse. Verify small windows and cell fallbacks alongside
+native pixels before replacing an application's layout.
 
 ## Probe before raw mode
 
@@ -95,7 +75,7 @@ warning rather than corrupting the session.
 
 ## Themes are shared assets
 
-The sixteen theme files here are read by all three applications. The core resolver
+The sixteen theme files here are read by all four applications. The core resolver
 deserialises the tables it knows -- `meta`, `base16`, `app`, `chrome`, `panel`,
 `row`, `status` -- and keeps everything else in `ThemeFile::extra`, so a file
 may carry `[vis]` for STAR/AMP's analyzer and `[chat]` for STAR/CORD's message
@@ -129,7 +109,7 @@ CI runs `cargo clippy --all-targets --all-features -- -D warnings -A
 dead_code`. `dead_code` is the one lint that is allowed, because a library
 module lands here complete and tested one work package before the application
 that will call it, and `--all-features` means the build always contains code
-that only some of the three consumers ever reaches. Denying it would mean either
+that only some of the four consumers ever reaches. Denying it would mean either
 `#[allow]` scattered through the crate or writing the caller first. Every other
 lint is an error.
 
