@@ -165,3 +165,32 @@ macOS promises, Kitty's cached `dnd-drag-*` files, and clients running on a
 machine different from Kitty retain the existing terminal file-transfer path.
 To get the local bridge, launch the graphical client locally with its SSH host
 option rather than launching the client inside an already remote shell.
+
+## Graphics-only builds and shared controls
+
+From 0.8, `terminal-graphics` no longer implies `media`. Enable both explicitly
+when using the video host/frontend. `audio-output` enables PCM frontends without
+requiring the video decoder. Graphics-only frontends advertise no media backend
+and return explicit errors for unnegotiated media opens. Wire descriptions live
+in `media_types`; existing `media::{Quality, tracks::*}` names remain compatible.
+
+`media_controls::render` builds transport buttons and track pickers directly,
+with a native `Surface` and an optional bounded cell grid. Hit actions use that
+same surface. It has no player, process, device, timer or persistence. FOLD uses
+it directly; AMP's legacy render-only stdio entry point delegates to it. Music
+metadata, artwork, queue rules, scrobbling and playback ownership stay in AMP.
+
+Native surfaces default to `TextScale::Terminal` for compatibility. Call
+`Surface::with_physical_text()` for fixed-size artwork: text uses declared physical
+pixels while terminal zoom resizes surrounding layout boxes. `at_density` scales
+those declared sizes once. The `physical_text` capability reports support;
+older frontends ignore the additive hint and preserve legacy scaling. Shared
+media controls and AMP's native rack/skin opt into physical text. Editor/cell
+text retains its existing terminal font behavior.
+
+Whole-track PCM caches use anonymous files, at most 2 GiB per track, 4 GiB across
+the process, 262,144 pending block entries per track and the existing 256 KiB
+block maximum. Reservations precede writes and release after the file closes.
+Invalid blocks, exhausted budgets and disk errors report local audio failure;
+they do not grant more credits, silently lose audio or enable server playback.
+The transport's eight-credit window and bounded playback ring remain separate.

@@ -24,13 +24,17 @@ pub mod terminal_bridge;
 pub use protocol::{Component, Input, Rect, Scene, Viewport};
 
 pub mod media;
+#[cfg(feature = "media")]
 mod original;
 
+#[cfg(feature = "audio-output")]
 pub mod audio;
 
 pub mod window;
 
 pub mod video_presenter;
 
+#[cfg(feature = "audio-output")]
 mod audio_v2;
+#[cfg(feature = "audio-output")]
 mod pcm_cache;

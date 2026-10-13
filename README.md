@@ -44,7 +44,7 @@ applications use exactly one copy of each.
 ## Status
 
 Applications pin immutable git tags and lock the resolved revision. The current
-framework release is `v0.7.0`; see [the changelog](CHANGELOG.md). CI checks all
+framework release is `v0.8.0`; see [the changelog](CHANGELOG.md). CI checks all
 four consumers against the candidate checkout as well as KIT's full and minimal
 feature sets. This catches shared API regressions before the next tag.
 
@@ -96,3 +96,87 @@ sound quality.
 Build optional media through `nix develop` (FFmpeg, clang/libclang, pkg-config;
 ALSA and matching audio plugins on Linux). `--no-default-features` continues to
 link no decoder. Physical macOS audio/Kitty verification remains outstanding.
+
+## Start an application
+
+Copy [`examples/starter`](examples/starter) into a new repository. It is an
+independent package pinned to a published KIT tag and uses only public APIs.
+Run through KIT's development shell while working here:
+
+```sh
+nix develop -c cargo run --manifest-path examples/starter/Cargo.toml -- --inspect
+nix develop -c cargo run --manifest-path examples/starter/Cargo.toml
+nix develop -c cargo run --manifest-path examples/starter/Cargo.toml --features native -- --native
+```
+
+`--ssh HOST REMOTE_EXECUTABLE` attaches the same native/cell frontend to a copy
+installed on another machine. KIT authenticates before raw mode. No media
+backend is required for these UI paths. `--features media` enables codecs and
+speaker output when an application uses KIT's media transport.
+
+The starter's `--inspect` emits capabilities, fallback reasons, pane rectangles,
+visibility and focus as JSON. `--replay` accepts a bounded JSON action array on
+stdin and emits one deterministic snapshot per action. For example:
+
+```json
+[{"action":"resize","columns":35,"rows":20},{"action":"step","forward":true}]
+```
+
+`diagnostics::Replay` supplies this behavior to any application without owning
+its domain state. Reports contain presentation metadata only. Applications
+should redact their own content before adding it to a report.
+
+## Presentation and dependency boundaries
+
+| Requirement | KIT feature/API |
+| --- | --- |
+| Themes, responsive panes, input, focus, ASCII and reduced colors | No default features; `panes`, `presentation`, `chrome`, `term::Session` |
+| Image decoding and terminal image protocols | `image`, optional `gif`, `webp`, `bmp` |
+| Native Rust renderer and local/SSH scenes | `terminal-graphics`; no FFmpeg or audio device libraries |
+| Source-format PCM and precision conversion | `pcm`; no device required |
+| Optional local/relayed speaker output | `audio-output`; FFmpeg, CPAL and a bounded ring |
+| Posters, track discovery, video decode and streaming | `media`; add `terminal-graphics` for the frontend |
+| Transport buttons, volume and track picker | `media_controls`; no optional features or subprocess |
+
+`presentation::Environment` contains sanitized environment hints;
+`Observed` contains probe/negotiation evidence. Resolving a profile never probes
+or starts a device. Unknown graphics fall back to Unicode cells or ASCII.
+Kitty, Sixel and iTerm2 image support are separate from native UI rendering,
+pixel mouse input, trusted host paths and speaker access. An ordinary SSH shell
+cannot reach the terminal computer's speakers; use the local SSH frontend for
+that route. Device-open errors remain explicit and never switch playback hosts.
+
+`STAR_KIT_ASCII=1` requests ASCII presentation; `NO_COLOR` disables cell colors.
+`Profile::adapt_buffer` converts shared chrome/content to the selected glyph and
+color limits. The graphical session's cell frontend applies it automatically.
+Ordinary ratatui applications apply it once after painting their buffer, as the
+starter does. Use non-color modifiers for selection in monochrome themes.
+
+## Readiness and release gates
+
+KIT remains a versioned 0.x public preview. Published tags and portable locks,
+four consumer checks, full/minimal/graphics-only/audio feature tests, deterministic
+layout/replay tests, native rendering tests and an independent starter protect
+its public boundaries. Packaging is checked with `cargo package`; release tags
+do not imply a crates.io publication or a 1.0 compatibility guarantee.
+
+Linux Kitty graphics and FOLD/AMP integration have private terminal capture
+fixtures. Linux audio conversion and movie decoding have automated fixtures;
+listening quality still requires a person. macOS builds have CI coverage, but
+physical Mac rendering, audio devices and sustained SSH listening remain release
+acceptance work. Sixel/iTerm2 implementations have fallback tests and still need
+physical terminal acceptance. Do not infer tested behavior from a feature flag.
+
+Use `scripts/check-starter.py --candidate` for an external-package check before
+releasing, and omit `--candidate` to verify the published pin afterwards.
+`examples/responsive-panes --bench` measures changing viewports; the native
+`terminal-graphics` example changes rendered pixels on every iteration. Local
+results and explicit limits belong with release evidence; throughput varies by
+font, terminal, frame size and hardware.
+
+`check-performance.py` enforces broad regression limits in release mode:
+10 microseconds per changing pane layout and 100 ms native scene-to-frame p95
+for the fixed 120-frame fixture. These deliberately generous CI limits detect
+major regressions; they are not latency targets or proof of 60 Hz rendering.
+Use lower explicit budgets when testing target hardware. The benchmark must
+send a nonzero changed-pixel payload after the initial frame.

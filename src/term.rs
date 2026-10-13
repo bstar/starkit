@@ -73,12 +73,49 @@ pub fn init() -> Result<Tui> {
     install_panic_hook();
     enable_raw_mode()?;
     ENTERED.store(true, Ordering::SeqCst);
-    let mut out = io::stdout();
-    enter(&mut out)?;
-    // Built after the clear, so that its blank back buffer and the blank
-    // screen agree without anybody having to ask where the cursor is.
-    let term = Terminal::new(CrosstermBackend::new(out))?;
-    Ok(term)
+    let result = (|| {
+        let mut out = io::stdout();
+        enter(&mut out)?;
+        // Construct after clearing; never query the cursor position.
+        Ok(Terminal::new(CrosstermBackend::new(out))?)
+    })();
+    if result.is_err() {
+        let _ = restore();
+    }
+    result
+}
+
+/// A terminal owner that restores modes on ordinary early returns as well as
+/// panics. Probe capabilities first. Dereferences to the standard ratatui Tui.
+/// Use one owner per process; external viewers should explicitly restore/reinit.
+pub struct Session {
+    terminal: Tui,
+}
+impl Session {
+    pub fn new() -> Result<Self> {
+        Ok(Self { terminal: init()? })
+    }
+    pub fn finish(self) -> Result<()> {
+        restore()
+    }
+}
+impl std::ops::Deref for Session {
+    type Target = Tui;
+    fn deref(&self) -> &Tui {
+        &self.terminal
+    }
+}
+impl std::ops::DerefMut for Session {
+    fn deref_mut(&mut self) -> &mut Tui {
+        &mut self.terminal
+    }
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        if entered() {
+            let _ = restore();
+        }
+    }
 }
 
 pub fn restore() -> Result<()> {
@@ -88,9 +125,14 @@ pub fn restore() -> Result<()> {
     // is still owned.
     ENTERED.store(false, Ordering::SeqCst);
     let mut out = io::stdout();
-    leave(&mut out)?;
-    disable_raw_mode()?;
+    restore_inner(&mut out, disable_raw_mode)?;
     Ok(())
+}
+
+fn restore_inner(out: &mut impl Write, raw: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    let screen = leave(out);
+    let keyboard = raw();
+    screen.and(keyboard)
 }
 
 /// Everything [`init`] writes to the terminal, and nothing it reads.
@@ -144,6 +186,25 @@ fn install_panic_hook() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn failed_screen_restoration_still_releases_raw_keyboard_mode() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut released = false;
+        assert!(restore_inner(&mut Broken, || {
+            released = true;
+            Ok(())
+        })
+        .is_err());
+        assert!(released);
+    }
     fn written(f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> String {
         let mut out = Vec::new();
         f(&mut out).expect("a vector cannot fail to be written to");

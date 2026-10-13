@@ -108,12 +108,30 @@ pub struct HoverFill {
     pub node: u16,
     pub color: String,
 }
+/// Legacy surfaces follow terminal font scaling. Physical surfaces keep glyphs
+/// at the declared pixel size while hosts resize their containing layout boxes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextScale {
+    #[default]
+    Terminal,
+    Physical,
+}
+impl TextScale {
+    fn is_terminal(&self) -> bool {
+        *self == Self::Terminal
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Surface {
     pub width: u16,
     pub height: u16,
     /// Opaque RGB, or `"transparent"` to preserve the canvas beneath this surface.
     pub background: String,
+    /// Additive hint. Older frontends ignore it and keep legacy font scaling.
+    #[serde(default, skip_serializing_if = "TextScale::is_terminal")]
+    pub text_scale: TextScale,
     /// Fixed editor grid, in source pixels. Ordinary surfaces use shaped text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_size: Option<[u16; 2]>,
@@ -134,6 +152,7 @@ impl Surface {
             width,
             height,
             background,
+            text_scale: TextScale::Terminal,
             cell_size: None,
             assets: Default::default(),
             nodes: vec![],
@@ -141,6 +160,10 @@ impl Surface {
             hover_fills: vec![],
             text_rules: vec![],
         }
+    }
+    pub fn with_physical_text(mut self) -> Self {
+        self.text_scale = TextScale::Physical;
+        self
     }
     /// Lay out logical design units at an explicit density. Text is reshaped at
     /// the resulting physical size; source atlas pixels are already selected by

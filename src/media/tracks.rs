@@ -1,45 +1,9 @@
 //! Source track discovery and explicit selection, shared by local and SSH players.
 use super::*;
 use av::{format, media};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum Selection {
-    #[default]
-    Auto,
-    Off,
-    Stream(usize),
-    External(PathBuf),
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackOptions {
-    pub audio: Selection,
-    pub subtitle: Selection,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Track {
-    pub selection: Selection,
-    pub label: String,
-    pub default: bool,
-    pub forced: bool,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Tracks {
-    pub audio: Vec<Track>,
-    pub subtitles: Vec<Track>,
-}
-impl Tracks {
-    pub fn contains_audio(&self, selection: &Selection) -> bool {
-        matches!(selection, Selection::Auto | Selection::Off)
-            || self.audio.iter().any(|t| &t.selection == selection)
-    }
-    pub fn contains_subtitle(&self, selection: &Selection) -> bool {
-        matches!(selection, Selection::Auto | Selection::Off)
-            || self.subtitles.iter().any(|t| &t.selection == selection)
-    }
-}
+pub use crate::media_types::{PlaybackOptions, Selection, Track, Tracks};
 pub fn audio_index(input: &format::context::Input, selection: &Selection) -> Option<usize> {
     match selection {
         Selection::Off | Selection::External(_) => None,

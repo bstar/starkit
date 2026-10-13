@@ -399,7 +399,12 @@ impl Painter {
                     ..
                 } => {
                     let style = TextStyle {
-                        size: f32::from(*size),
+                        size: f32::from(*size)
+                            / if surface.text_scale == crate::native_surface::TextScale::Physical {
+                                self.font_factor
+                            } else {
+                                1.
+                            },
                         color,
                         bold: *bold,
                         mono: *mono,
@@ -2342,6 +2347,34 @@ mod tests {
         );
         assert_eq!(resolve_font(&db, Some("Missing Font")), "Liberation Mono");
         assert_eq!(resolve_font(&db, None), "Liberation Mono");
+    }
+
+    #[test]
+    fn physical_surface_text_does_not_inflate_with_terminal_font_zoom() {
+        use crate::native_surface::{PixelRect, Surface};
+        for font_pixels in [12., 24., 48.] {
+            let mut painter = Painter::with_font(super::super::font::Font {
+                name: Some("Liberation Mono".into()),
+                pixels: Some(font_pixels),
+                cell: Some((9, 20)),
+            });
+            let mut surface = Surface::new(200, 40, "#000000".into()).with_physical_text();
+            surface.text(
+                PixelRect::new(0, 0, 200, 40),
+                "Physical label",
+                "#ffffff",
+                12,
+                false,
+            );
+            let mut canvas = Pixmap::new(200, 40).unwrap();
+            painter
+                .surface_nodes(&mut canvas, &surface, [0., 0., 200., 40.])
+                .unwrap();
+            assert!(painter
+                .text
+                .keys()
+                .all(|key| (f32::from_bits(key.size) - 12.).abs() < 0.001));
+        }
     }
 
     #[test]

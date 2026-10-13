@@ -18,15 +18,17 @@ use std::{
 };
 
 pub(crate) struct CellVideo {
+    profile: crate::presentation::Profile,
     graphics: Graphics,
     last: Instant,
     signature: Option<(u64, Rect, Arc<RgbaImage>)>,
     asset: Option<(String, String, Arc<RgbaImage>)>,
 }
 impl CellVideo {
-    pub fn new(mut graphics: Graphics) -> Self {
+    pub fn new(mut graphics: Graphics, profile: crate::presentation::Profile) -> Self {
         graphics.set_capacity(1);
         Self {
+            profile,
             graphics,
             last: Instant::now() - Duration::from_secs(1),
             signature: None,
@@ -44,6 +46,9 @@ impl CellVideo {
         live: Option<&str>,
         out: &mut impl Write,
     ) -> anyhow::Result<()> {
+        if self.profile.images == crate::presentation::Images::None {
+            return Ok(());
+        }
         for component in &scene.components {
             let Component::Image {
                 id, png: Some(png), ..
@@ -78,6 +83,9 @@ impl CellVideo {
         force: bool,
         out: &mut impl Write,
     ) -> anyhow::Result<()> {
+        if self.profile.images == crate::presentation::Images::None {
+            return Ok(());
+        }
         let old_poster = self.asset.as_ref().is_some_and(|(key, _, _)| key == id);
         if !force && !old_poster {
             return Ok(());
@@ -111,7 +119,8 @@ impl CellVideo {
         }
         // Redraw authoritative cells, including fullscreen controls and
         // timeline. Clearing to blanks would erase text above the live image.
-        let frame = super::cells::buffer(scene);
+        let mut frame = super::cells::buffer(scene);
+        self.profile.adapt_buffer(&mut frame);
         let mut backend = CrosstermBackend::new(&mut *out);
         backend.draw((rect.y..rect.bottom()).flat_map(|y| {
             let frame = &frame;
@@ -128,6 +137,9 @@ impl CellVideo {
         force: bool,
         out: &mut impl Write,
     ) -> anyhow::Result<()> {
+        if self.profile.images == crate::presentation::Images::None {
+            return Ok(());
+        }
         let Some(rect) = scene.components.iter().find_map(|c| match c {
             Component::Image { rect, id: key, .. } if key == id => {
                 Some(Rect::new(rect.x, rect.y, rect.width, rect.height))
@@ -184,6 +196,7 @@ impl CellVideo {
                 &mut frame,
             );
         }
+        self.profile.adapt_buffer(&mut frame);
         let mut backend = CrosstermBackend::new(&mut *out);
         backend.draw(
             frame
@@ -214,7 +227,19 @@ mod tests {
     #[test]
     fn latest_frames_are_bounded_and_do_not_cover_dialogs() {
         crate::crossterm::style::force_color_output(true);
-        let mut video = CellVideo::new(Graphics::disabled());
+        let mut video = CellVideo::new(
+            Graphics::disabled(),
+            crate::presentation::Profile::resolve(
+                &crate::presentation::Environment {
+                    interactive: true,
+                    term: "xterm-256color".into(),
+                    colorterm: "truecolor".into(),
+                    utf8: true,
+                    ..Default::default()
+                },
+                Default::default(),
+            ),
+        );
         let mut scene = Scene::from_buffer(
             &Buffer::empty(Rect::new(0, 0, 20, 10)),
             Viewport {
@@ -247,6 +272,15 @@ mod tests {
             .unwrap();
         assert!(!out.is_empty());
         out.clear();
+        video.profile.images = crate::presentation::Images::None;
+        video
+            .present(&scene, "video-test", &image, true, &mut out)
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "ASCII mode must not emit image protocols or half blocks"
+        );
+        video.profile.images = crate::presentation::Images::HalfBlocks;
         video
             .present(&scene, "video-test", &image, false, &mut out)
             .unwrap();

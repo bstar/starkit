@@ -17,6 +17,7 @@
 
 pub mod chrome;
 pub mod config;
+pub mod diagnostics;
 pub mod digits;
 pub mod fs;
 #[cfg(feature = "image")]
@@ -24,6 +25,8 @@ pub mod graphics;
 pub mod keymap;
 pub mod list;
 pub mod logging;
+pub mod media_controls;
+pub mod media_types;
 pub mod mouse;
 // An HTTP client is not something a UI library should force on a caller who
 // only wanted a theme engine.
@@ -31,6 +34,7 @@ pub mod mouse;
 pub mod net;
 pub mod panes;
 pub mod paths;
+pub mod presentation;
 pub mod term;
 pub mod text;
 pub mod theme;

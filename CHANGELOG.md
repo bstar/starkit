@@ -8,6 +8,29 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-13
+
+### Added
+
+- Shared render-only transport controls, native movie track pickers and bounded
+  cell grids, extracted from AMP without audio/player dependencies.
+- Explicit ASCII/cell/native capability profiles, reduced-color adaptation,
+  independent graphics/input/media evidence and inspectable fallback reasons.
+- Deterministic presentation replay, bounded agent diagnostics and an independent
+  public-API starter with local/SSH native presentation and headless inspection.
+- Scoped terminal ownership that restores modes on early returns; restoration
+  attempts to release raw keyboard mode even if terminal writes fail.
+- Physical text sizing for fixed native artwork, retaining legacy scaling by default.
+
+### Changed
+
+- `terminal-graphics` no longer implies `media`. Enable `media` explicitly for
+  video and `audio-output` for PCM frontends. Media descriptions remain codec-free.
+- Anonymous PCM caches now enforce per-track/process disk and metadata budgets,
+  releasing reservations on close and reporting exhaustion without host fallback.
+- CI verifies graphics-only builds without native codec/audio development packages
+  and compiles the starter outside the KIT workspace.
+
 ## [0.7.0] - 2026-10-13
 
 ### Added

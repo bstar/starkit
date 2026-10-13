@@ -188,9 +188,13 @@ impl Connection {
         let old = frames.clone();
         let terminal = socket.is_some();
         // PCM reception and refill must not wait for terminal writes or rendering.
+        #[cfg(feature = "audio-output")]
         let (pcm_tx, pcm_rx) = bounded(8);
+        #[cfg(feature = "audio-output")]
         let pcm_out = input.clone();
+        #[cfg(feature = "audio-output")]
         let pcm_errors = control.clone();
+        #[cfg(feature = "audio-output")]
         std::thread::spawn(move || {
             let mut pcm = super::audio_v2::Frontend::default();
             loop {
@@ -229,6 +233,7 @@ impl Connection {
                             let _ = scene_tx.try_send(scene);
                         }
                     }
+                    #[cfg(feature = "audio-output")]
                     Ok(Some(ServerMessage::Media { message }))
                         if matches!(
                             message,
@@ -663,13 +668,24 @@ fn run_impl(
     let mut font = super::font::probe().configured();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let mut capabilities = super::capabilities::Capabilities::detected(&graphics);
-    capabilities.local_media = launch.host.is_none()
+    capabilities.local_media = cfg!(feature = "media")
+        && launch.host.is_none()
         && terminal_socket.is_none()
         && std::env::var_os("SSH_CONNECTION").is_none();
-    capabilities.video = true;
+    capabilities.video = cfg!(feature = "media");
     capabilities.presentation_switch = preference.is_some();
-    let graphical_available =
-        capabilities.image_transport == super::capabilities::ImageTransport::Kitty;
+    let environment = crate::presentation::Environment::detect();
+    let profile = capabilities.profile(
+        &environment,
+        graphics.name(),
+        terminal_socket.is_some() || launch.host.is_some(),
+    );
+    let graphical_available = profile.native;
+    if profile.images == crate::presentation::Images::None {
+        capabilities.video = false;
+        capabilities.video_player = false;
+        capabilities.original_media = false;
+    }
     let mut pixels = graphical_available && !preference.as_ref().is_some_and(|p| p.cells);
     capabilities.cell_presentation = Some(!pixels);
     // SGR 1016 uses the same event encoding as 1006, with pixel coordinates.
@@ -710,7 +726,7 @@ fn run_impl(
     let mut switch_supported = false;
     let mut persist_generation = None;
     let mut media = super::media::Frontend::new(capabilities.local_media);
-    let mut cell_video = super::cell_video::CellVideo::new(graphics);
+    let mut cell_video = super::cell_video::CellVideo::new(graphics, profile.clone());
     let mut video_layer =
         super::video_presenter::VideoPresenter::with_corner_radius(options.video_corner_radius)?;
     let window = super::window::Window::new()?;
@@ -996,7 +1012,10 @@ fn run_impl(
             }
         }
         if let Some(c) = &connection {
-            if let Some((id, decoded)) = media.tick(&c.input) {
+            if let Some((id, decoded)) = media
+                .tick(&c.input)
+                .filter(|_| profile.images != crate::presentation::Images::None)
+            {
                 video_layer.frame = Some((id, decoded));
                 if let Some(scene) = &last_scene {
                     present_video(
@@ -1573,6 +1592,7 @@ mod tests {
     /// Connection.messages or frames: terminal processing is suspended.
     #[test]
     #[ignore]
+    #[cfg(feature = "audio-output")]
     fn pcm_cache_refills_without_polling_the_ui() {
         use super::super::media::{ToClient, ToHost};
         use super::*;

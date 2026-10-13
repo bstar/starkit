@@ -18,33 +18,7 @@ pub mod tracks;
 
 pub const CHUNK: usize = 32 * 1024;
 pub const WINDOW: usize = 256 * 1024;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Quality {
-    Low,
-    Balanced,
-    High,
-}
-impl Quality {
-    pub fn parameters(self) -> (u32, u32, u32) {
-        match self {
-            Self::Low => (360, 15, 750_000),
-            Self::Balanced => (480, 24, 1_500_000),
-            Self::High => (720, 30, 3_000_000),
-        }
-    }
-    pub fn down(self) -> Self {
-        match self {
-            Self::High => Self::Balanced,
-            _ => Self::Low,
-        }
-    }
-    pub fn up(self) -> Self {
-        match self {
-            Self::Low => Self::Balanced,
-            _ => Self::High,
-        }
-    }
-}
+pub use crate::media_types::Quality;
 #[derive(Clone, Debug)]
 pub struct Poster {
     pub pixels: Arc<crate::image::RgbaImage>,

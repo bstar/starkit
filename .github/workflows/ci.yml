@@ -48,6 +48,27 @@ jobs:
       # no image decoder at all, which nothing else would ever exercise.
       - run: cargo test --all-features
       - run: cargo test --no-default-features
+      - run: cargo test --no-default-features --features terminal-graphics,audio-output
+      - run: python3 scripts/check-starter.py --candidate
+
+  graphics-only:
+    # Deliberately no FFmpeg, ALSA, CPAL or system codec development packages.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: cargo test --no-default-features --features terminal-graphics
+      - run: cargo clippy --all-targets --no-default-features --features terminal-graphics -- -D warnings -A dead_code
+      - name: Verify native media libraries stay optional
+        run: |
+          cargo tree --no-default-features --features terminal-graphics --edges normal --prefix none > graphics-tree.txt
+          if grep -E '^(ffmpeg|cpal|rtrb)' graphics-tree.txt; then exit 1; fi
+      - run: python3 scripts/check-starter.py --candidate
+        # The standalone starter's media feature needs codec packages; test
+        # its renderer-free and native paths in this job instead.
+        env:
+          STAR_KIT_STARTER_NO_MEDIA: "1"
 
   # What the dependency tree is carrying, which nobody notices by reading it.
   # Two questions: is anything under a known advisory, and is anything under a
@@ -130,6 +151,7 @@ jobs:
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
+      - run: python3 scripts/check-performance.py
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb xdotool libgl1-mesa-dri libegl1 libxcb-xkb1 libxkbcommon-x11-0 libxcb-cursor0
       - name: Install private Kitty pixel capture runtime

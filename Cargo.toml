@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"
@@ -37,8 +37,9 @@ webp = ["image", "image/webp"]
 net = ["dep:ureq"]
 # Verified GitHub release updates for standalone fleet installations.
 update = ["net", "dep:sha2", "dep:serde_json", "dep:semver", "dep:tar", "dep:flate2", "dep:tempfile", "dep:rustix"]
-# Optional native Rust pixel renderer and SSH scene relay.
-terminal-graphics = ["dep:tempfile", "media", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
+# Optional native Rust pixel renderer and SSH scene relay. No codec/device deps.
+# Enable `media` explicitly for video and its audio frontend.
+terminal-graphics = ["dep:tempfile", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
 
 audio-output = ["dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 

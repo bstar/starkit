@@ -36,12 +36,12 @@ uncommitted application work and keep release pins portable throughout.
 
 - [x] Align four apps on a published baseline; restore FOLD graphics and cell dragging.
 - [x] Four-consumer compatibility CI and a benchmark that changes rendered pixels.
-- [ ] Responsive panes, focus, visibility, wrapping and stable capture; migrate FOLD.
-- [ ] Migrate AMP, CORD and WIRE presentation geometry without moving domain models.
-- [ ] Shared media widgets and remove FOLD's AMP dependency for generic video controls.
-- [ ] Capability profiles for ASCII/cell/native presentation and explicit fallbacks.
-- [ ] Separate optional graphics/media dependencies and bound media cache resources.
-- [ ] Agent diagnostics/replay, external starter, feature/visual/performance gates,
+- [x] Responsive panes, focus, visibility, wrapping and stable capture; migrate FOLD.
+- [x] Migrate AMP, CORD and WIRE presentation geometry without moving domain models.
+- [x] Shared media widgets and remove FOLD's AMP dependency for generic video controls.
+- [x] Capability profiles for ASCII/cell/native presentation and explicit fallbacks.
+- [x] Separate optional graphics/media dependencies and bound media cache resources.
+- [x] Agent diagnostics/replay, external starter, feature/visual/performance gates,
       packaging and public preview documentation. Claim maturity only for proven paths.
 
 ## Working on it from an application
@@ -209,3 +209,17 @@ worker. CPAL's callback only drains a ring. Eight block credits bound transport;
 credits return after conversion enters the bounded playback ring. New epochs,
 route close and disconnect cancel and join the worker. A failed local device
 reports an error to the host; it must not silently switch to host playback.
+
+## Public preview acceptance
+
+The 0.8 feature split is intentional: graphics-only consumers must not link
+FFmpeg/CPAL. Run all/minimal/graphics-only/graphics+audio suites and the external
+starter check. Native physical text is opt-in; preserve legacy/default text
+scaling and editor grid behavior. Cache exhaustion is an explicit frontend error,
+never permission to switch to host audio. Ordinary apps must apply cell profile
+adaptation; the session cell frontend does so automatically.
+
+The independent starter lives under examples/starter and must compile outside
+this workspace using only public APIs. Before a tag, use check-starter.py
+--candidate; afterwards test its published git pin. Physical Mac, Sixel/iTerm2
+and sustained real-device listening remain acceptance gates for a maturity claim.

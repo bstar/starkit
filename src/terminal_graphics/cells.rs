@@ -212,6 +212,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
 }
 
 pub struct Cells {
+    profile: crate::presentation::Profile,
     previous: Option<Buffer>,
     generation: Option<u64>,
     output: Receiver<RenderMessage>,
@@ -221,6 +222,10 @@ impl Default for Cells {
     fn default() -> Self {
         let (frames, output) = bounded(1);
         Self {
+            profile: crate::presentation::Profile::resolve(
+                &crate::presentation::Environment::detect(),
+                Default::default(),
+            ),
             previous: None,
             generation: None,
             output,
@@ -233,7 +238,8 @@ impl Cells {
         &self.output
     }
     pub fn scene(&mut self, scene: &Scene) -> Result<()> {
-        let next = buffer(scene);
+        let mut next = buffer(scene);
+        self.profile.adapt_buffer(&mut next);
         let mut out = io::stdout().lock();
         out.write_all(b"\x1b[?2026h")?;
         if self.generation != Some(scene.viewport.generation)

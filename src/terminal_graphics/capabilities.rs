@@ -64,6 +64,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub native_surfaces: bool,
     #[serde(default)]
+    pub physical_text: bool,
+    #[serde(default)]
     pub native_skins: bool,
     #[serde(default)]
     pub native_paths: bool,
@@ -78,6 +80,36 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Convert a negotiated report to policy without reading environment or IO.
+    /// `bridge` means presentation runs on the terminal computer, even when the
+    /// application session is remote. `images` comes from the image probe.
+    pub fn profile(
+        &self,
+        env: &crate::presentation::Environment,
+        images: &str,
+        bridge: bool,
+    ) -> crate::presentation::Profile {
+        use crate::presentation::{Images, Observed, Profile};
+        Profile::resolve(
+            env,
+            Observed {
+                images: match images {
+                    "kitty" => Images::Kitty,
+                    "sixel" => Images::Sixel,
+                    "iterm2" => Images::Iterm2,
+                    "halfblocks" => Images::HalfBlocks,
+                    _ => Images::None,
+                },
+                native_renderer: self.native_surfaces,
+                measured_pixels: self.pixel_geometry == PixelGeometry::Measured,
+                pixel_mouse: self.pixel_mouse,
+                audio_frontend: self.audio_relay || self.audio_pcm_v2,
+                video_decoder: self.video,
+                trusted_paths: self.local_media,
+                bridge,
+            },
+        )
+    }
     pub fn detected(graphics: &crate::graphics::Graphics) -> Self {
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let measured = crate::crossterm::terminal::window_size()
@@ -100,13 +132,13 @@ impl Capabilities {
             // unbridged SSH shell would instead decode on the server and send
             // full-resolution RGBA frames over its TTY. Keep that path on the
             // bounded proxy; local --ssh and Kitty bridge frontends retain it.
-            original_media: !remote_terminal,
-            video_player: true,
+            original_media: cfg!(feature = "media") && !remote_terminal,
+            video_player: cfg!(feature = "media"),
             // An unbridged remote TTY cannot reach the terminal computer's speakers.
-            audio_relay: !remote_terminal,
-            audio_pcm_v2: !remote_terminal,
-            audio_cache_v1: !remote_terminal,
-            video: true,
+            audio_relay: cfg!(feature = "audio-output") && !remote_terminal,
+            audio_pcm_v2: cfg!(feature = "audio-output") && !remote_terminal,
+            audio_cache_v1: cfg!(feature = "audio-output") && !remote_terminal,
+            video: cfg!(feature = "media"),
             local_media: false,
             image_transport: if graphics.name() == "kitty" {
                 ImageTransport::Kitty
@@ -128,6 +160,7 @@ impl Capabilities {
             paste: interactive,
             presentation_ack: interactive,
             native_surfaces: true,
+            physical_text: true,
             native_skins: true,
             native_paths: true,
             surface_hover: true,
@@ -149,12 +182,14 @@ mod tests {
         assert!(!remote.audio_relay);
         assert!(!remote.audio_pcm_v2);
         assert!(!remote.audio_cache_v1);
-        assert!(remote.video && remote.video_player && remote.keyboard);
+        assert!(remote.keyboard);
+        assert_eq!(remote.video, cfg!(feature = "media"));
+        assert_eq!(remote.video_player, cfg!(feature = "media"));
         let local_bridge = Capabilities::for_terminal(&graphics, true, true, false);
-        assert!(local_bridge.original_media);
-        assert!(
-            local_bridge.audio_relay && local_bridge.audio_pcm_v2 && local_bridge.audio_cache_v1
-        );
+        assert_eq!(local_bridge.original_media, cfg!(feature = "media"));
+        assert_eq!(local_bridge.audio_relay, cfg!(feature = "audio-output"));
+        assert_eq!(local_bridge.audio_pcm_v2, cfg!(feature = "audio-output"));
+        assert_eq!(local_bridge.audio_cache_v1, cfg!(feature = "audio-output"));
     }
 
     #[test]
@@ -177,11 +212,11 @@ mod tests {
             cell_presentation: None,
             presentation_switch: false,
             original_media: true,
-            video_player: true,
+            video_player: cfg!(feature = "media"),
             audio_relay: true,
             audio_pcm_v2: true,
             audio_cache_v1: true,
-            video: true,
+            video: cfg!(feature = "media"),
             local_media: false,
             image_transport: ImageTransport::Kitty,
             pixel_geometry: PixelGeometry::Measured,
@@ -191,6 +226,7 @@ mod tests {
             paste: true,
             presentation_ack: true,
             native_surfaces: true,
+            physical_text: true,
             native_skins: true,
             native_paths: true,
             surface_hover: true,
