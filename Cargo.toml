@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"
@@ -118,6 +118,7 @@ base64 = { version = "0.22", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 
 [dev-dependencies]
+serde_json = "1"
 # Temporary directories for the code that writes files, so the tests never
 # touch a real config.
 tempfile = "3"

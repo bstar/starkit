@@ -1,3 +1,73 @@
+# Responsive panes
+
+New applications use `starkit::panes`. `dock`, documented below, remains available
+for existing split-tree callers. Pane layout works with the minimal feature set;
+geometry and interaction do not require graphics, FFmpeg or an audio device.
+
+```rust
+use starkit::panes::{Node, Size, Overflow, Wrap};
+use starkit::ratatui::layout::Rect;
+
+let tree = Node::column(vec![
+    Node::pane("browser").height(Size::fill(8)).priority(100),
+    Node::row(vec![
+        Node::pane("preview").width(Size::fill(30))
+            .height(Size::bounded(4, 8, 16).grow(1)),
+        Node::pane("activity").width(Size::fill(30))
+            .height(Size::bounded(4, 8, 16).grow(1))
+            .overflow(Overflow::CollapseThenHide)
+            .compact(Size::fill(12), Size::fixed(2)),
+    ]).gap(1).wrap(Wrap::AtMinimum),
+]);
+let frame = tree.layout(Rect::new(0, 0, 100, 40))?;
+let preview = frame.rect_of("preview");
+let clicked = frame.hit(10, 12);
+# Ok::<(), starkit::panes::LayoutError>(())
+```
+
+Use the **same solved frame** for painting, pointer hit tests and focus. Rectangles
+never overlap or extend outside the supplied area. Maximum sizes may leave unused
+background; clear the root background when painting. Every pane remains in
+`frame.panes`, including hidden panes with no rectangle, so agents can inspect
+geometry and the reason for each fallback through serde without a renderer.
+
+Lengths are cells for a cell presentation or physical pixels for a native one.
+Use a consistent unit throughout a tree. Glyph shaping and media placement remain
+with their existing backends; changing a pane allocation does not resize glyphs.
+
+`Size::bounded(min, preferred, max)` supplies a preference without growth;
+`.grow(weight)` shares space left after preferences. Higher-priority siblings
+receive preferred sizes first. On overflow, lower-priority siblings yield first;
+equal priorities yield from the end. Only fallback actions that relieve the
+shortage are applied. `Keep` content can be clipped when even its minimum cannot
+fit: `frame.fits` is false and affected panes explicitly report `clipped`.
+
+Rows and columns can wrap at their children's minimum extents before collapsing
+or hiding them. Container floors are explicit; containers adapt their descendants
+inside the allocation. A compact header belongs to a pane with an ID: groups can
+hide but cannot collapse into an anonymous header. Duplicate IDs, trees deeper
+than 64 levels and trees larger than 4096 nodes return `LayoutError`.
+
+User hiding, user collapse, viewport rules and insufficient space have distinct
+reasons. Solving never mutates the tree, so growing a window restores automatic
+fallbacks without reopening a pane the user closed or overwriting a manual size.
+
+`Focus` remembers the requested pane across responsive hiding. A user focus step
+replaces that intent; `FocusPolicy::Direct` allows explicit focus without a Tab
+stop, and `Never` excludes a subtree. Modal scopes trap traversal and background
+focus requests until popped, then restore the previous scope or visible pane.
+`ResizeCapture` retains the press origin, bounds and unit scale across repaints;
+the application cancels it on viewport, modal or presentation changes.
+
+The runnable example supports interactive resize/hide/focus, headless JSON
+inspection, and a solver benchmark:
+
+```sh
+nix develop -c cargo run --example responsive-panes --no-default-features
+nix develop -c cargo run --example responsive-panes --no-default-features -- --inspect 50x18
+nix develop -c cargo run --release --example responsive-panes --no-default-features -- --bench
+```
+
 # The dock
 
 `starkit::dock` lays panels out. It is a tree of splits and leaves, solved

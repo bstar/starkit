@@ -29,6 +29,21 @@ on the Linux workstation is `../staramp-graphical`; the other checkouts are
 `../starfold`, `../starcord` and `../starwire`. Consumer CI tests disposable
 copies against the candidate KIT checkout using `scripts/check-consumer.py`.
 
+## Framework work program
+
+The user authorized completing the framework plan autonomously. Preserve
+uncommitted application work and keep release pins portable throughout.
+
+- [x] Align four apps on a published baseline; restore FOLD graphics and cell dragging.
+- [x] Four-consumer compatibility CI and a benchmark that changes rendered pixels.
+- [ ] Responsive panes, focus, visibility, wrapping and stable capture; migrate FOLD.
+- [ ] Migrate AMP, CORD and WIRE presentation geometry without moving domain models.
+- [ ] Shared media widgets and remove FOLD's AMP dependency for generic video controls.
+- [ ] Capability profiles for ASCII/cell/native presentation and explicit fallbacks.
+- [ ] Separate optional graphics/media dependencies and bound media cache resources.
+- [ ] Agent diagnostics/replay, external starter, feature/visual/performance gates,
+      packaging and public preview documentation. Claim maturity only for proven paths.
+
 ## Working on it from an application
 
 A released change reaches an application through its pinned tag, which is the
@@ -53,9 +68,8 @@ watch for it in all four.
 
 ## Responsive layout adoption
 
-`dock` has tests but no application consumer yet. The apps retain their own
-layouts, including FOLD's draggable preview divider. Adopt shared responsive
-panes incrementally: one geometry must drive rendering, hit testing, capture,
+`panes` is the new responsive API; `dock` remains compatible. FOLD is the first
+pane consumer; the remaining app layouts are being migrated incrementally: one geometry must drive rendering, hit testing, capture,
 wrapping and visibility. Preserve manual sizing and distinguish user hiding
 from automatic collapse. Verify small windows and cell fallbacks alongside
 native pixels before replacing an application's layout.

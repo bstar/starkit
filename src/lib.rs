@@ -29,6 +29,7 @@ pub mod mouse;
 // only wanted a theme engine.
 #[cfg(feature = "net")]
 pub mod net;
+pub mod panes;
 pub mod paths;
 pub mod term;
 pub mod text;

@@ -8,6 +8,18 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
+### Added
+
+- Backend-independent responsive panes with nested rows/columns, wrapping,
+  minimum/preferred/maximum sizes, capped weighted growth, priority collapse
+  and hiding, explicit fallback reasons and immutable solved hit geometry.
+- Shared focus traversal, viewport restoration, exclusive modal scopes and
+  origin-based divider capture with cell/pixel unit scaling.
+- Renderer-free JSON layout inspection, interactive pane example, property
+  tests and a release-mode solver benchmark. The legacy dock API remains available.
+
 ## [0.6.1] - 2026-10-13
 
 ### Fixed
