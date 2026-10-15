@@ -89,6 +89,13 @@ pub struct Span {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Component {
+    /// A live engine-owned image. Later surfaces in the scene are foreground overlays.
+    LiveCanvas {
+        rect: Rect,
+        id: String,
+        view: crate::content_view::ContentView,
+        interactive: bool,
+    },
     Surface {
         rect: Rect,
         surface: super::surface::Surface,
@@ -174,7 +181,8 @@ pub enum ImageScale {
 impl Component {
     pub fn rect(&self) -> Rect {
         match self {
-            Self::Surface { rect, .. }
+            Self::LiveCanvas { rect, .. }
+            | Self::Surface { rect, .. }
             | Self::Menu { rect }
             | Self::Dialog { rect, .. }
             | Self::TextField { rect, .. }
@@ -327,6 +335,11 @@ impl Scene {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Input {
+    /// Negotiated raw input, scoped to an explicitly interactive canvas.
+    Embedded {
+        canvas: String,
+        event: super::embedded_input::EmbeddedEvent,
+    },
     Play {
         path: String,
     },
@@ -364,6 +377,11 @@ pub enum Input {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    CanvasAck {
+        stream: String,
+        generation: u64,
+        sequence: u64,
+    },
     /// Negotiated live presentation change. Never attaches a new controller.
     Presentation {
         viewport: Viewport,
@@ -399,6 +417,13 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    CanvasFrame {
+        frame: super::live_canvas::Descriptor,
+    },
+    CanvasClose {
+        stream: String,
+        generation: u64,
+    },
     TogglePresentation,
     LaunchMovie {
         path: String,
@@ -498,6 +523,7 @@ pub struct Admission {
     last: u64,
     presented: Option<(u64, u64, u64)>,
     press: Option<u64>,
+    embedded_press: Option<(String, u64)>,
     scroll: Option<(u64, u64, u64)>,
 }
 impl Admission {
@@ -536,6 +562,67 @@ impl Admission {
         }
         self.last = id;
         match input {
+            Input::Embedded { canvas, event } => {
+                use super::embedded_input::{EmbeddedKind, KeyPhase};
+                if matches!(
+                    &event.kind,
+                    EmbeddedKind::ReleaseAll
+                        | EmbeddedKind::Key {
+                            phase: KeyPhase::Release,
+                            ..
+                        }
+                ) {
+                    self.embedded_press = None;
+                    return true;
+                }
+                if matches!(&event.kind,EmbeddedKind::Pointer{action,..} if action=="up")
+                    && self
+                        .embedded_press
+                        .as_ref()
+                        .is_some_and(|(id, _)| id == canvas)
+                {
+                    self.embedded_press = None;
+                    return true;
+                }
+                let Some(view) = current.components.iter().find_map(|c| match c {
+                    Component::LiveCanvas {
+                        id,
+                        view,
+                        interactive: true,
+                        ..
+                    } if id == canvas => Some(view),
+                    _ => None,
+                }) else {
+                    return false;
+                };
+                if generation != current.viewport.generation {
+                    return false;
+                }
+                if let EmbeddedKind::Pointer {
+                    action, position, ..
+                } = &event.kind
+                {
+                    if position.iter().any(|n| !n.is_finite())
+                        || position[0] < 0.
+                        || position[1] < 0.
+                        || position[0] >= f64::from(view.source[0])
+                        || position[1] >= f64::from(view.source[1])
+                    {
+                        return false;
+                    }
+                    let captured = self
+                        .embedded_press
+                        .as_ref()
+                        .is_some_and(|(id, g)| id == canvas && *g == generation);
+                    if !captured && !self.matches(revision, generation, current) {
+                        return false;
+                    }
+                    if action == "down" {
+                        self.embedded_press = Some((canvas.clone(), generation));
+                    }
+                }
+                true
+            }
             Input::Pointer { action, .. } => {
                 // Always balance a captured release, even after invalidation.
                 if action == "up" && self.press.take().is_some() {

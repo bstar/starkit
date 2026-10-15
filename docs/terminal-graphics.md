@@ -99,6 +99,13 @@ fractional cell boundaries. Native tests cover asset reuse, resize, eviction,
 clipped Unicode file labels, password masking and invalid data. Presentation
 tests reconstruct skipped frames, resize and complete-frame transitions.
 
+Rendered frames carry their exact layout snapshot so overlays and live layers
+never use a newer scene's geometry. KIT restores graphics on focus return and
+refreshes quiet cached regions in bounded batches; terminal placement loss does
+not require an application state change to repair. Ctrl+L restores all graphical
+layers without restarting the renderer. See [display lifetime and recovery](native-style.md#display-lifetime-and-recovery)
+for retained-framebuffer behavior, bounds and fault-injection tests.
+
 ## Compatibility
 
 | Environment | Presentation |

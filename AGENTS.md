@@ -20,7 +20,9 @@ panes and shared interaction, consumer migrations, examples and stability gates.
 Do not describe APIs or platform behavior as mature without evidence.
 
 Release through `CHANGELOG.md`, the Cargo version and an immutable `vX.Y.Z`
-tag. Each application takes the tag and regenerated git-sourced Cargo.lock in
+tag. Development main branches may pin an immutable candidate commit without
+creating a release tag; their locks must retain the Git source. Each application
+takes a release tag and regenerated git-sourced Cargo.lock in
 a separate dependency commit. Never commit a path-patched lockfile. An API
 change requires a minor version on 0.x; compatible fixes use a patch version.
 
@@ -223,3 +225,20 @@ The independent starter lives under examples/starter and must compile outside
 this workspace using only public APIs. Before a tag, use check-starter.py
 --candidate; afterwards test its published git pin. Physical Mac, Sixel/iTerm2
 and sustained real-device listening remain acceptance gates for a maturity claim.
+
+## REEL integration candidate (0.9)
+
+Local live canvases are graphics-only. Keep frame coalescing, immutable leases,
+acknowledgements, generations and byte/stream bounds in KIT; GStreamer/GES and
+Smithay belong to REEL. Source pixels never enter scene JSON. `ContentView`
+must drive both placement and embedded pointer coordinates. Relative pointer
+capture remains false until it is implemented and physically verified.
+
+Run `scripts/check-live-canvas.py` through the flake, alongside the starter and
+feature matrix. The independent example exercises two producer workers using
+public APIs. `scripts/test-live-canvas.py` checks real private Kitty pixels and
+controller reattachment; use `--display-server wayland` on this workstation.
+The four consumers expose `scripts/check-kit.sh`; candidate checks modify only
+disposable manifests/locks. Development main pins an immutable 0.9 candidate
+revision so fresh checkouts build without a sibling repository. This is not a
+release; release source pins still move only after tagging.

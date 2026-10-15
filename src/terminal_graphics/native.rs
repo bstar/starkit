@@ -25,6 +25,7 @@ struct TextKey {
     size: u32,
     bold: bool,
     mono: bool,
+    ui_font: bool,
 }
 #[derive(Clone, Copy)]
 struct TextStyle<'a> {
@@ -33,7 +34,7 @@ struct TextStyle<'a> {
     bold: bool,
     mono: bool,
     ellipsis: bool,
-    grid: bool,
+    centered: bool,
 }
 
 struct Asset {
@@ -45,6 +46,7 @@ struct Asset {
     scaled: Option<((u32, u32, ImageScale), Pixmap)>,
 }
 pub(super) struct Painter {
+    ui_font: bool,
     pane_corner_radius: u16,
     fonts: FontSystem,
     font_factor: f32,
@@ -340,7 +342,10 @@ impl Painter {
         area: [f32; 4],
     ) -> Result<()> {
         fill(canvas, area, &surface.background);
-        self.surface_nodes(canvas, surface, area)
+        let previous = std::mem::replace(&mut self.ui_font, surface.ui_font);
+        let result = self.surface_nodes(canvas, surface, area);
+        self.ui_font = previous;
+        result
     }
 
     fn surface_nodes(
@@ -409,7 +414,8 @@ impl Painter {
                         bold: *bold,
                         mono: *mono,
                         ellipsis: surface.cell_size.is_none(),
-                        grid: surface.cell_size.is_some(),
+                        centered: surface.cell_size.is_some()
+                            || surface.centered_text.contains(&(node_index as u16)),
                     };
                     if let Some([cw, _]) = surface.cell_size {
                         self.grid_text(
@@ -628,6 +634,7 @@ impl Painter {
             .unwrap_or(1.);
         tracing::info!(requested = ?font.name, %family, pixels = ?font.pixels, font_factor, "Native terminal font selected");
         Self {
+            ui_font: false,
             pane_corner_radius: radius,
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
             font_factor,
@@ -680,7 +687,7 @@ impl Painter {
             bold,
             mono,
             ellipsis,
-            grid,
+            centered,
         } = style;
         let [x, y, w, h] = rect;
         if value.trim().is_empty() || w <= 0. || h <= 0. {
@@ -706,6 +713,7 @@ impl Painter {
             size: size.to_bits(),
             bold,
             mono,
+            ui_font: self.ui_font,
         };
         let fonts = &mut self.fonts;
         let cache_bytes = &mut self.text_bytes;
@@ -717,7 +725,13 @@ impl Painter {
                 fonts,
                 &key.text,
                 &Attrs::new()
-                    .family(if mono {
+                    .family(if key.ui_font {
+                        Family::Name(if mono {
+                            "Liberation Mono"
+                        } else {
+                            "Liberation Sans"
+                        })
+                    } else if mono {
                         Family::Monospace
                     } else {
                         Family::SansSerif
@@ -735,7 +749,7 @@ impl Painter {
         let clipped = ellipsis && value.chars().count() > 1 && w >= size && text_width > w + 0.5;
         let clip_w = if clipped { (w - size).max(0.) } else { w };
         let offset_y = (h - size * 1.2) / 2.;
-        let offset_x = if grid {
+        let offset_x = if centered {
             ((w - text_width) / 2.).max(0.)
         } else {
             0.
@@ -806,7 +820,7 @@ impl Painter {
                     bold,
                     mono,
                     ellipsis: false,
-                    grid: false,
+                    centered: false,
                 },
             );
             if let Some(edge) = ellipsis_end {
@@ -879,7 +893,7 @@ impl Painter {
                                     bold: span.bold,
                                     mono: true,
                                     ellipsis: false,
-                                    grid: false,
+                                    centered: false,
                                 },
                             );
                         }
@@ -1057,7 +1071,8 @@ impl Painter {
         let row_edge = |row: u16| placement.map_or(f32::from(row) * ch, |p| p.row_edge(row));
         for component in &scene.components {
             let rect = match component {
-                Component::Surface { rect, .. }
+                Component::LiveCanvas { rect, .. }
+                | Component::Surface { rect, .. }
                 | Component::Panel { rect, .. }
                 | Component::Menu { rect }
                 | Component::Dialog { rect, .. }
@@ -1162,7 +1177,7 @@ impl Painter {
                             bold: false,
                             mono: false,
                             ellipsis: true,
-                            grid: false,
+                            centered: false,
                         },
                     );
                 }
@@ -1216,7 +1231,7 @@ impl Painter {
                                 bold: true,
                                 mono: true,
                                 ellipsis: false,
-                                grid: false,
+                                centered: false,
                             },
                         );
                     }
@@ -1235,7 +1250,7 @@ impl Painter {
                             bold: *active,
                             mono: false,
                             ellipsis: true,
-                            grid: false,
+                            centered: false,
                         },
                     );
                     if let Some(r) = close {
@@ -1315,7 +1330,7 @@ impl Painter {
                             bold: false,
                             mono: false,
                             ellipsis: false,
-                            grid: false,
+                            centered: false,
                         },
                     );
                     let caret = (x + *caret as f32 * cw).min(x + w - 1.);
@@ -1432,7 +1447,7 @@ impl Painter {
                         )?;
                     }
                 }
-                Component::Terminal { .. } => {}
+                Component::LiveCanvas { .. } | Component::Terminal { .. } => {}
             }
         }
         if manage_assets {
@@ -2072,7 +2087,7 @@ mod tests {
             bold: false,
             mono: true,
             ellipsis: false,
-            grid: true,
+            centered: true,
         };
         painter.grid_text(&mut actual, "a\u{301}    z", [0., 0., 96., 18.], 8., style);
         painter.text(&mut expected, "a\u{301}", [0., 0., 8., 18.], style);
@@ -2236,7 +2251,7 @@ mod tests {
                 bold: false,
                 mono: true,
                 ellipsis: true,
-                grid: false,
+                centered: false,
             },
         );
         assert!(!painter.text.keys().any(|k| k.text == "…"));
@@ -2269,7 +2284,7 @@ mod tests {
                     bold: false,
                     mono: true,
                     ellipsis: false,
-                    grid: false,
+                    centered: false,
                 },
             );
             let size = painter
@@ -2294,7 +2309,7 @@ mod tests {
                     bold: false,
                     mono: true,
                     ellipsis: false,
-                    grid: false,
+                    centered: false,
                 },
             );
             let ink = |p: &Pixmap| {
@@ -2327,7 +2342,7 @@ mod tests {
                 bold: false,
                 mono: true,
                 ellipsis: true,
-                grid: false,
+                centered: false,
             },
         );
         let ellipsis = painter.text.keys().find(|k| k.text == "…").unwrap();
@@ -2349,6 +2364,39 @@ mod tests {
         assert_eq!(resolve_font(&db, None), "Liberation Mono");
     }
 
+    #[test]
+    fn ui_typography_is_opt_in_cached_separately_and_independent_of_terminal_face() {
+        use crate::native_surface::{PixelRect, Surface};
+        let mut rendered = vec![];
+        for (family, size) in [("Liberation Mono", 12.), ("Liberation Sans", 48.)] {
+            let mut painter = Painter::with_font(super::super::font::Font {
+                name: Some(family.into()),
+                pixels: Some(size),
+                cell: Some((9, 20)),
+            });
+            let mut surface = Surface::new(240, 40, "#000000".into()).with_ui_text();
+            surface.text(
+                PixelRect::new(8, 0, 224, 40),
+                "Inspector · 1080p",
+                "#ffffff",
+                13,
+                false,
+            );
+            let mut canvas = Pixmap::new(240, 40).unwrap();
+            painter
+                .surface(&mut canvas, &surface, [0., 0., 240., 40.])
+                .unwrap();
+            rendered.push(canvas.data().to_vec());
+            assert!(painter.text.keys().all(|k| k.ui_font));
+            assert!(!painter.ui_font);
+            surface.ui_font = false;
+            painter
+                .surface(&mut canvas, &surface, [0., 0., 240., 40.])
+                .unwrap();
+            assert!(painter.text.keys().any(|k| !k.ui_font));
+        }
+        assert_eq!(rendered[0], rendered[1]);
+    }
     #[test]
     fn physical_surface_text_does_not_inflate_with_terminal_font_zoom() {
         use crate::native_surface::{PixelRect, Surface};
@@ -2397,7 +2445,7 @@ mod tests {
                     bold: false,
                     mono,
                     ellipsis: false,
-                    grid: false,
+                    centered: false,
                 },
             );
         }

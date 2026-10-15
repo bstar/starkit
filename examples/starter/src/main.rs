@@ -49,6 +49,14 @@ struct App {
     quit: bool,
     area: Rect,
     theme: starkit::theme::Theme,
+    theme_id: String,
+    picker: Option<starkit::theme::picker::Picker>,
+    #[cfg(all(feature = "native", unix))]
+    native_skins: bool,
+    #[cfg(all(feature = "native", unix))]
+    theme_hits: Vec<(starkit::native_surface::PixelRect, String)>,
+    #[cfg(all(feature = "native", unix))]
+    visual: starkit::native_surface::style::Style,
 }
 impl Default for App {
     fn default() -> Self {
@@ -56,13 +64,51 @@ impl Default for App {
             focus: Focus::new(Some(Pane::Workspace)),
             quit: false,
             area: Rect::new(0, 0, 80, 24),
-            theme: starkit::theme::Theme::resolve(
-                &starkit::theme::ThemeFile::parse(starkit::theme::BUILTINS[2].toml).unwrap(),
-            ),
+            #[cfg(all(feature = "native", unix))]
+            visual: starkit::native_surface::style::Style::default(),
+            theme: registry().default_theme(),
+            theme_id: starkit::theme::DEFAULT_ID.into(),
+            picker: None,
+            #[cfg(all(feature = "native", unix))]
+            native_skins: true,
+            #[cfg(all(feature = "native", unix))]
+            theme_hits: vec![],
         }
     }
 }
+fn registry() -> starkit::theme::Registry<starkit::theme::Theme> {
+    starkit::theme::Registry::new(starkit::paths::Paths::new(
+        "starkit-starter",
+        "STAR_KIT_STARTER_DIR",
+        "STAR_KIT_STARTER_CONFIG_DIR",
+    ))
+}
 impl App {
+    fn open_themes(&mut self) {
+        self.picker = Some(starkit::theme::picker::Picker::new(
+            &registry(),
+            &self.theme_id,
+        ));
+    }
+    fn theme_outcome(&mut self, outcome: starkit::theme::picker::Outcome) {
+        use starkit::theme::picker::Outcome;
+        match outcome {
+            Outcome::Select(id) => {
+                self.theme = registry().resolve_named(&id).0;
+                #[cfg(all(feature = "native", unix))]
+                {
+                    self.visual =
+                        starkit::native_surface::style::Style::from_named(&registry(), &id)
+                            .0
+                            .with_native_skins(self.native_skins);
+                }
+                self.theme_id = id;
+                self.picker = None;
+            }
+            Outcome::Cancel => self.picker = None,
+            _ => {}
+        }
+    }
     fn key(&mut self, code: &str) {
         match code {
             "q" | "escape" => self.quit = true,
@@ -98,10 +144,20 @@ impl App {
                         words: NO_WORDS,
                     },
                 );
-                Paragraph::new("Tab changes focus. Resize to wrap panels. q exits.")
+                Paragraph::new("Tab changes focus. Alt+T themes. Resize to wrap panels. q exits.")
                     .style(Style::default())
                     .render(body, &mut buffer);
             }
+        }
+        if let Some(picker) = &self.picker {
+            let box_area = starkit::chrome::overlay::rect(
+                area,
+                (60, 20),
+                20,
+                3,
+                starkit::chrome::overlay::Anchor::Centre,
+            );
+            picker.render_cell(box_area, &mut buffer, &self.theme);
         }
         buffer
     }
@@ -153,14 +209,29 @@ fn main() -> Result<()> {
             profile.adapt_buffer(&mut buffer);
             *frame.buffer_mut() = buffer;
         })?;
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Release {
-                match key.code {
-                    KeyCode::Tab => app.key("tab"),
-                    KeyCode::Char('q') | KeyCode::Esc => app.key("q"),
-                    _ => {}
+        match event::read()? {
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                if key.code == KeyCode::Char('t') && key.modifiers == event::KeyModifiers::ALT {
+                    if app.picker.is_none() {
+                        app.open_themes();
+                    }
+                } else if let Some(picker) = &mut app.picker {
+                    let outcome = picker.handle(key);
+                    app.theme_outcome(outcome);
+                } else {
+                    match key.code {
+                        KeyCode::Tab => app.key("tab"),
+                        KeyCode::Char('q') | KeyCode::Esc => app.key("q"),
+                        _ => {}
+                    }
                 }
             }
+            Event::Paste(text) => {
+                if let Some(picker) = &mut app.picker {
+                    picker.paste(&text);
+                }
+            }
+            _ => {}
         }
     }
     terminal.finish()?;

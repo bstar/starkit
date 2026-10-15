@@ -149,18 +149,8 @@ pub fn button(
         colors.raised.clone()
     };
     frame(s, rect, &raised, 0, false);
-    let text_width = (text.chars().count() as u16)
-        .saturating_mul(size)
-        .saturating_mul(3)
-        / 5;
-    let pad = rect
-        .width
-        .saturating_sub(text_width)
-        .saturating_div(2)
-        .max(3)
-        .min(rect.width / 4);
-    label(
-        s,
+    let pad = 6.min(rect.width / 4);
+    s.text_centered(
         R::new(
             rect.x + pad,
             rect.y,

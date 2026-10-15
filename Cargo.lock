@@ -2458,7 +2458,7 @@ checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 
 [[package]]
 name = "starkit"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2469,6 +2469,7 @@ dependencies = [
  "ffmpeg-next",
  "flate2",
  "image",
+ "memmap2",
  "png 0.18.1",
  "proptest",
  "ratatui",

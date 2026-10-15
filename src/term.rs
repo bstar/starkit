@@ -125,7 +125,26 @@ pub fn restore() -> Result<()> {
     // is still owned.
     ENTERED.store(false, Ordering::SeqCst);
     let mut out = io::stdout();
-    restore_inner(&mut out, disable_raw_mode)?;
+    restore_inner(&mut out, || {
+        // Disable reporting before draining bytes already in flight. Keep raw
+        // mode until the queue is empty so mouse reports cannot reach the shell.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
+        while std::time::Instant::now() < deadline {
+            match crate::crossterm::event::poll(std::time::Duration::from_millis(2)) {
+                Ok(true) => {
+                    if crate::crossterm::event::read().is_err() {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        // Polling drains crossterm's parser; also discard a partial SGR report
+        // still in the kernel before switching back to the shell's line mode.
+        #[cfg(all(unix, feature = "terminal-graphics"))]
+        let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+        disable_raw_mode()
+    })?;
     Ok(())
 }
 

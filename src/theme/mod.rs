@@ -12,6 +12,7 @@
 pub mod base16;
 pub mod builtin;
 pub mod color;
+pub mod picker;
 pub mod resolve;
 pub mod schema;
 pub mod system;

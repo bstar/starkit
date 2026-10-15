@@ -1,0 +1,370 @@
+//! Quiet workspace chrome for viewers, property inspectors and timelines.
+//! Palette roles and typography are shared; apps own layout and actions.
+use super::*;
+
+pub const HEADER_HEIGHT: u16 = 32;
+/// Recording is a semantic state, independent of the selected theme accent.
+pub const RECORDING_RED: &str = "#ff3b30";
+pub const RECORDING_BACKGROUND: &str = "#991b1b";
+#[derive(Clone, Debug)]
+pub struct WorkspaceColors {
+    pub panel: String,
+    pub header: String,
+    pub well: String,
+    pub line: String,
+    pub control: String,
+    pub hover: String,
+}
+impl WorkspaceColors {
+    pub fn new(p: &Palette) -> Self {
+        let bg = Rgb::new(p.bg[0], p.bg[1], p.bg[2]);
+        let fg = Rgb::new(p.fg[0], p.fg[1], p.fg[2]);
+        Self {
+            panel: bg.mix(fg, 0.025).to_hex(),
+            header: bg.mix(fg, 0.065).to_hex(),
+            well: bg.mix(fg, 0.008).to_hex(),
+            line: bg.mix(fg, 0.14).to_hex(),
+            control: bg.mix(fg, 0.09).to_hex(),
+            hover: bg.mix(fg, 0.16).to_hex(),
+        }
+    }
+}
+impl Style {
+    /// Noninteractive tutorial keycaps, sized in source pixels. The compact
+    /// surface can be mounted over a live canvas without covering its viewport.
+    pub fn keycaps(&self, chord: &str, scale: f64, max_width: u16) -> Surface {
+        let keys: Vec<String> = chord
+            .split(" + ")
+            .take(5)
+            .map(|key| key.chars().take(16).collect())
+            .collect();
+        let widths: Vec<f64> = keys
+            .iter()
+            .map(|key| (key.chars().count() as f64 * 12. + 24.).max(46.))
+            .collect();
+        let total = widths.iter().sum::<f64>() + 16. * keys.len().saturating_sub(1) as f64 + 20.;
+        let scale = if scale.is_finite() {
+            scale.clamp(0.1, 4.)
+        } else {
+            1.
+        }
+        .min(f64::from(max_width.max(1)) / total);
+        let px = |n: f64| (n * scale).round() as u16;
+        let mut s = Surface::new(
+            px(total).max(1),
+            px(62.).max(1),
+            self.workspace.well.clone(),
+        )
+        .with_ui_text();
+        let mut x = 10.;
+        for (index, (key, width)) in keys.iter().zip(widths).enumerate() {
+            let rect = R::new(
+                px(x),
+                px(8.),
+                px(width).min(s.width.saturating_sub(px(x))),
+                px(42.),
+            );
+            s.fill(
+                R::new(rect.x, px(11.), rect.width, rect.height),
+                &self.colors.shadow,
+                px(5.),
+            );
+            s.fill(rect, &self.workspace.control, px(5.));
+            s.text_centered(rect, key, &self.colors.ink, px(20.).max(1), true);
+            if index + 1 == keys.len() && rect.width > 4 && rect.height > 4 {
+                s.fill(
+                    R::new(rect.x + 2, rect.y + rect.height - 2, rect.width - 4, 1),
+                    &self.colors.accent,
+                    0,
+                );
+            }
+            x += width;
+            if index + 1 < keys.len() {
+                s.text_centered(
+                    R::new(px(x), px(8.), px(16.), px(42.)),
+                    "+",
+                    &self.colors.dim,
+                    px(15.).max(1),
+                    false,
+                );
+                x += 16.;
+            }
+        }
+        s
+    }
+    /// Persistent capture state; no hover or pointer target.
+    pub fn recording_badge(&self, s: &mut Surface, rect: R, label: &str) {
+        s.fill(rect, RECORDING_BACKGROUND, 2);
+        s.text_centered(rect, label, "#ffffff", 12, true);
+    }
+    /// Focused dialog chrome, with a continuous two-pixel theme-accent border.
+    pub fn modal_panel(&self, width: u16, height: u16, title: &str) -> Surface {
+        let mut s = self.workspace_panel(width, height, title);
+        if width >= 8 && height >= 8 {
+            for inset in 0..2 {
+                s.nodes.push(Primitive::Border {
+                    rect: R::new(inset, inset, width - inset * 2, height - inset * 2),
+                    color: self.colors.accent.clone(),
+                    radius: 4 - inset,
+                });
+            }
+        }
+        s
+    }
+    pub fn workspace_panel(&self, width: u16, height: u16, title: &str) -> Surface {
+        let mut s = Surface::new(width, height, self.workspace.panel.clone()).with_ui_text();
+        if width > 0 && height > 0 {
+            s.fill(R::new(0, 0, width, 1), &self.workspace.line, 0);
+        }
+        if !title.is_empty() && height >= HEADER_HEIGHT && width >= 24 {
+            s.fill(
+                R::new(0, 1, width, HEADER_HEIGHT - 1),
+                &self.workspace.header,
+                0,
+            );
+            s.text(
+                R::new(12, 4, width - 24, 24),
+                title,
+                &self.colors.ink,
+                11,
+                true,
+            );
+            s.fill(
+                R::new(0, HEADER_HEIGHT - 1, width, 1),
+                &self.workspace.line,
+                0,
+            );
+        }
+        s
+    }
+    /// A full-size compact control; one rectangle governs face, hover and hit.
+    pub fn tool(&self, s: &mut Surface, rect: R, text: &str, action: &str, active: bool) {
+        if rect.width < 4 || rect.height < 4 {
+            return;
+        }
+        let bg = if active {
+            hex(self.palette.selected)
+        } else {
+            self.workspace.control.clone()
+        };
+        let node = s.nodes.len() as u16;
+        s.fill(rect, &bg, 3);
+        s.hover_fills.push(HoverFill {
+            node,
+            color: self.workspace.hover.clone(),
+        });
+        if active {
+            s.fill(
+                R::new(rect.x + 2, rect.y + rect.height - 2, rect.width - 4, 2),
+                &self.colors.accent,
+                0,
+            );
+        }
+        s.text_centered(
+            R::new(
+                rect.x + 3,
+                rect.y,
+                rect.width - 6.min(rect.width),
+                rect.height,
+            ),
+            text,
+            &self.colors.ink,
+            12,
+            false,
+        );
+        s.hits.push(HitRegion {
+            rect,
+            action: action.into(),
+        });
+    }
+    /// A aligned label and inset value. An empty action makes it read-only.
+    pub fn property(&self, s: &mut Surface, rect: R, label: &str, value: &str, action: &str) {
+        if rect.width < 40 || rect.height < 16 {
+            return;
+        }
+        let label_width = (rect.width * 9 / 20).min(104);
+        s.text(
+            R::new(rect.x, rect.y, label_width.saturating_sub(6), rect.height),
+            label,
+            &self.colors.dim,
+            12,
+            false,
+        );
+        let value_rect = R::new(
+            rect.x + label_width,
+            rect.y,
+            rect.width - label_width,
+            rect.height,
+        );
+        if !action.is_empty() {
+            let node = s.nodes.len() as u16;
+            s.fill(value_rect, &self.workspace.control, 2);
+            s.hover_fills.push(HoverFill {
+                node,
+                color: self.workspace.hover.clone(),
+            });
+            s.hits.push(HitRegion {
+                rect,
+                action: action.into(),
+            });
+        }
+        s.text(
+            R::new(
+                value_rect.x + 6,
+                value_rect.y,
+                value_rect.width - 8,
+                value_rect.height,
+            ),
+            value,
+            &self.colors.ink,
+            12,
+            false,
+        );
+    }
+    pub fn section(&self, s: &mut Surface, rect: R, title: &str) {
+        if rect.width < 24 || rect.height < 20 {
+            return;
+        }
+        s.text(
+            R::new(rect.x, rect.y, rect.width, 18),
+            title,
+            &self.colors.dim,
+            10,
+            true,
+        );
+        s.fill(
+            R::new(rect.x, rect.y + rect.height - 1, rect.width, 1),
+            &self.workspace.line,
+            0,
+        );
+    }
+    pub fn numeric(&self, s: &mut Surface, rect: R, text: impl Into<String>, accent: bool) {
+        s.nodes.push(Primitive::Text {
+            rect,
+            text: text.into(),
+            color: if accent {
+                self.colors.accent.clone()
+            } else {
+                self.colors.ink.clone()
+            },
+            size: 12,
+            bold: false,
+            mono: true,
+        });
+    }
+    /// Draw a time ruler against the same transform used by seeking and clips.
+    pub fn time_ruler(&self, s: &mut Surface, view: crate::editor_controls::TimeView, fps: u32) {
+        let r = view.rect;
+        if r.width == 0 || r.height < 16 || fps == 0 {
+            return;
+        }
+        s.fill(r, &self.workspace.header, 0);
+        let target = view.frames_per_pixel * 100.;
+        let base = [1., 2., 5., 10., 15., 30.];
+        let mut steps: Vec<f64> = base.into_iter().collect();
+        for seconds in [
+            1., 2., 5., 10., 15., 30., 60., 120., 300., 600., 1800., 3600., 7200., 18000.,
+        ] {
+            steps.push(seconds * f64::from(fps));
+        }
+        let step = steps
+            .into_iter()
+            .find(|n| *n >= target)
+            .unwrap_or_else(|| (target / f64::from(fps)).ceil() * f64::from(fps))
+            .max(1.) as i64;
+        let first = view.first_frame.div_euclid(step) * step;
+        let last = view.frame_at(f64::from(r.x + r.width));
+        for frame in (first..=last).step_by(step as usize).take(256) {
+            let x = view.x_at(frame);
+            if frame >= 0 && x >= f64::from(r.x) && x < f64::from(r.x + r.width) {
+                let x = x.round().min(f64::from(r.x + r.width - 1)) as u16;
+                s.fill(R::new(x, r.y + r.height - 6, 1, 6), &self.workspace.line, 0);
+                let width = 98.min(r.x + r.width - x);
+                if width > 30 {
+                    self.numeric(
+                        s,
+                        R::new(x + 4, r.y, width.saturating_sub(4), r.height - 5),
+                        crate::editor_controls::timecode(frame as f64 / f64::from(fps), fps),
+                        false,
+                    );
+                }
+            }
+            for minor in 1..5 {
+                let x = view.x_at(frame + step * minor / 5);
+                if x >= f64::from(r.x) && x < f64::from(r.x + r.width) {
+                    s.fill(
+                        R::new(
+                            x.round().min(f64::from(r.x + r.width - 1)) as u16,
+                            r.y + r.height - 3,
+                            1,
+                            3,
+                        ),
+                        &self.workspace.line,
+                        0,
+                    );
+                }
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn keycaps_stay_bounded_without_intercepting_input() {
+        for width in [1, 64, 320, 1920] {
+            for scale in [0.2, 1., 2.] {
+                let surface =
+                    Style::default().keycaps("Ctrl + Alt + Shift + Backspace", scale, width);
+                surface.validate().unwrap();
+                assert!(surface.width <= width && surface.hits.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn modals_have_a_bounded_accent_outline() {
+        let style = Style::default();
+        for (w, h) in [(1, 1), (8, 8), (360, 144), (760, 540)] {
+            let surface = style.modal_panel(w, h, "DIALOG");
+            surface.validate().unwrap();
+            if w >= 8 {
+                let borders = surface.nodes.iter().filter(|node| matches!(node,Primitive::Border {color,..} if color == &style.colors.accent)).count();
+                assert_eq!(borders, 2);
+            }
+        }
+    }
+    #[test]
+    fn workspace_fields_share_bounds_hover_and_typography() {
+        for palette in [
+            REFERENCE_PALETTE,
+            Palette {
+                bg: [245, 240, 230],
+                fg: [40, 35, 30],
+                ..REFERENCE_PALETTE
+            },
+        ] {
+            let style = Style::new(palette);
+            for (w, h) in [(1, 1), (100, 100), (360, 240)] {
+                let mut s = style.workspace_panel(w, h, "INSPECTOR");
+                assert!(s.ui_font);
+                if w == 360 {
+                    style.tool(&mut s, R::new(12, 40, 110, 28), "Fit", "fit", true);
+                    style.property(
+                        &mut s,
+                        R::new(12, 80, 336, 28),
+                        "Resolution",
+                        "1920 × 1080",
+                        "resolution",
+                    );
+                    let view =
+                        crate::editor_controls::TimeView::new(0, 2., R::new(12, 130, 336, 24))
+                            .unwrap();
+                    style.time_ruler(&mut s, view, 60);
+                    assert_eq!(s.hits[0].rect, R::new(12, 40, 110, 28));
+                    assert_eq!(s.hover_fills.len(), 2);
+                }
+                s.validate().unwrap();
+            }
+        }
+    }
+}

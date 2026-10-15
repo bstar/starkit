@@ -17,8 +17,10 @@
 
 pub mod chrome;
 pub mod config;
+pub mod content_view;
 pub mod diagnostics;
 pub mod digits;
+pub mod editor_controls;
 pub mod fs;
 #[cfg(feature = "image")]
 pub mod graphics;
@@ -61,6 +63,7 @@ pub mod animation;
 pub mod dock;
 pub mod input;
 pub mod vlist;
+pub mod worker;
 pub mod wrap;
 
 #[cfg(feature = "terminal-graphics")]

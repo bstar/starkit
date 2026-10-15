@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -20,7 +21,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("consumer", type=Path)
     parser.add_argument("--kit", type=Path, default=Path(__file__).resolve().parents[1])
-    args = parser.parse_args()
+    parser.add_argument("--cargo", nargs=argparse.REMAINDER,
+                        help="Run another Cargo command in the disposable candidate tree, e.g. build --release --offline")
+    # Preserve Cargo's own `--` separator (e.g. strict Clippy flags). argparse
+    # otherwise treats it as its global option terminator, even for REMAINDER.
+    argv = sys.argv[1:]
+    cargo = None
+    if "--cargo" in argv:
+        index = argv.index("--cargo")
+        cargo, argv = argv[index + 1:], argv[:index]
+    args = parser.parse_args(argv)
+    if cargo is not None:
+        args.cargo = cargo
     consumer, kit = args.consumer.resolve(), args.kit.resolve()
     version = tomllib.loads((kit / "Cargo.toml").read_text())["package"]["version"]
     for label, repo in (("consumer", consumer), ("KIT", kit)):
@@ -60,7 +72,8 @@ def main():
         patch = f'patch."https://github.com/bstar/starkit".starkit.path={json.dumps(str(kit))}'
         environment = dict(os.environ)
         environment.setdefault("CARGO_TARGET_DIR", str(consumer / "target" / "kit-compat"))
-        subprocess.run(["cargo", "check", "--workspace", "--all-targets", "--all-features", "--config", patch],
+        command = args.cargo or ["check", "--workspace", "--all-targets", "--all-features"]
+        subprocess.run(["cargo", command[0], "--config", patch, *command[1:]],
                        cwd=tree, env=environment, check=True)
 
 

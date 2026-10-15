@@ -49,6 +49,7 @@ jobs:
       - run: cargo test --all-features
       - run: cargo test --no-default-features
       - run: cargo test --no-default-features --features terminal-graphics,audio-output
+      - run: python3 scripts/check-live-canvas.py
       - run: python3 scripts/check-starter.py --candidate
 
   graphics-only:
@@ -64,6 +65,7 @@ jobs:
         run: |
           cargo tree --no-default-features --features terminal-graphics --edges normal --prefix none > graphics-tree.txt
           if grep -E '^(ffmpeg|cpal|rtrb)' graphics-tree.txt; then exit 1; fi
+      - run: python3 scripts/check-live-canvas.py
       - run: python3 scripts/check-starter.py --candidate
         # The standalone starter's media feature needs codec packages; test
         # its renderer-free and native paths in this job instead.
@@ -160,10 +162,15 @@ jobs:
           bash scripts/install-test-kitty.sh "$RUNNER_TEMP/kitty-proof"
           python3 -m venv "$RUNNER_TEMP/kitty-proof/python"
           "$RUNNER_TEMP/kitty-proof/python/bin/pip" install Pillow==11.3.0
+      - run: python3 scripts/check-live-canvas.py
       - name: Interactive Kitty pixels on Linux
         if: runner.os == 'Linux'
         run: |
           export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a python3 scripts/test-live-canvas.py \
+            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
+            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
+            --example "$PWD/target/external-starter/debug/starkit-live-canvas" --output live-canvas-proof
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-fractional-background.py \
             --example "$PWD/target/debug/examples/terminal-graphics" --output fractional-background
           xvfb-run -a "$RUNNER_TEMP/kitty-proof/python/bin/python" scripts/test-kitty-interactive.py \
@@ -183,3 +190,4 @@ jobs:
             kitty-interactive/
             kitty-frontend-loss/
             fractional-background/
+            live-canvas-proof/

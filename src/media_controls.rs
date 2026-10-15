@@ -5,18 +5,7 @@ use crate::native_surface::{HitRegion, Metrics, PixelRect as R, Primitive, Surfa
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Palette {
-    pub bg: [u8; 3],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inset_bg: Option<[u8; 3]>,
-    pub fg: [u8; 3],
-    pub muted: [u8; 3],
-    pub accent: [u8; 3],
-    pub selected: [u8; 3],
-    pub border: [u8; 3],
-    pub error: [u8; 3],
-}
+pub use crate::native_surface::style::Palette;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Cell {
     pub symbol: String,
@@ -315,7 +304,7 @@ pub fn paint_transport(
     let button = control.min(44).min(inner / 6).max(1);
     let toggle = if playing && !paused { "pause" } else { "play" };
     let movie_actions = ["previous", toggle, "next", "stop"];
-    let audio_actions = ["previous", "play", "pause", "stop", "next"];
+    let audio_actions = ["previous", toggle, "stop", "next"];
     let actions: &[&str] = if movie {
         &movie_actions
     } else {
@@ -327,11 +316,7 @@ pub fn paint_transport(
             break;
         }
         let rect = R::new(x, controls_y, button, control);
-        let active = if movie {
-            i == 1
-        } else {
-            (*name == "play" && playing) || (*name == "pause" && paused)
-        };
+        let active = i == 1 && (movie || playing || paused);
         s.fill(
             rect,
             if active { &accent } else { &selected },
@@ -642,7 +627,32 @@ mod tests {
                 Some(hit.action.as_str())
             );
         }
-        assert_eq!(surface.hits.len(), 6);
+        assert_eq!(surface.hits.len(), 5);
+    }
+    #[test]
+    fn audio_transport_has_one_play_pause_button_in_a_stable_slot() {
+        let mut previous_rect = None;
+        for (playing, paused, action) in [
+            (false, false, "play"),
+            (true, false, "pause"),
+            (true, true, "play"),
+        ] {
+            let mut r = request();
+            r.playing = playing;
+            r.paused = paused;
+            let surface = render_owned(r).unwrap().surface.unwrap();
+            let toggles = surface
+                .hits
+                .iter()
+                .filter(|hit| matches!(hit.action.as_str(), "play" | "pause"))
+                .collect::<Vec<_>>();
+            assert_eq!(toggles.len(), 1);
+            assert_eq!(toggles[0].action, action);
+            if let Some(rect) = previous_rect {
+                assert_eq!(toggles[0].rect, rect);
+            }
+            previous_rect = Some(toggles[0].rect);
+        }
     }
     #[test]
     fn movie_buttons_and_track_rows_accept_mouse_selection() {

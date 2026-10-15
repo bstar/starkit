@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"
@@ -39,20 +39,21 @@ net = ["dep:ureq"]
 update = ["net", "dep:sha2", "dep:serde_json", "dep:semver", "dep:tar", "dep:flate2", "dep:tempfile", "dep:rustix"]
 # Optional native Rust pixel renderer and SSH scene relay. No codec/device deps.
 # Enable `media` explicitly for video and its audio frontend.
-terminal-graphics = ["dep:tempfile", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
+terminal-graphics = ["dep:tempfile", "dep:memmap2", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2"]
 
 audio-output = ["dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 
 media = ["audio-output","image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"], optional = true }
+rustix = { version = "1", features = ["fs", "process", "time", "termios"], optional = true }
 
 [dependencies]
 semver = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 tempfile = { version = "3", optional = true }
+memmap2 = { version = "0.9", optional = true }
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling", "filter"], optional = true }
 cpal = { version = "0.16", optional = true }
 rtrb = { version = "0.3", optional = true }

@@ -8,6 +8,79 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.9 candidate)
+
+- Active local live-canvas sessions sample producers every 8 ms, independently
+  of UI scene painting. Quiet apps and detached sessions keep the 33 ms timer.
+
+- Retained-framebuffer display recovery: exact frame/layout snapshots, automatic
+  focus restoration, bounded cached-tile repairs, and restoration of idle live
+  canvases and paused video. Ctrl+L refreshes all layers without restarting the
+  rasterizer. Real Kitty tests fault-inject missing terminal placements.
+
+- Audio transport uses one state-dependent Play/Pause button in a stable slot,
+  matching the existing movie transport behavior.
+
+- Shared tutorial keycap surfaces and node filtering that remaps text rules,
+  centered labels and hover references when a panel is collapsed.
+
+- Shared workspace panels, full-target toolbar controls, aligned property fields,
+  section rules and numeric/time-ruler presentation. Palette-derived neutral
+  surfaces support dense video editors without private chrome. Additive `ui_font`
+  native surfaces use bundled UI faces; legacy terminal typography stays intact,
+  and cache identities distinguish the font choice.
+
+- Shared `theme::picker::Picker`: Alt+T opener, search, navigation, cancellation,
+  current-theme checks, native palette swatches and cell fallback over any theme
+  registry. `Style::from_named` prepares selected chrome without app-side palette
+  tables. REEL persists the selection separately from the recorded background.
+
+- Default `native_surface::style::Style`: AMP's Classic Rack palette, original
+  1x/2x panel artwork, title strips, centered compact buttons, local hover,
+  selection rows, meters and quiet ledger/timeline treatments. `scene` and
+  `mount` share physical presentation and pointer placement. AMP, REEL and
+  the external starter consume it; primitive-only clients retain a fallback.
+  Generic `style::Palette` keeps the compatible `media_controls::Palette` alias.
+  Consumer checks can build/test a candidate in a disposable tree with `--cargo`.
+- Native surface text can opt into measured horizontal centering. Editor buttons
+  use centered labels and even horizontal padding, retaining their full hit area
+  and existing vertical alignment. Legacy surface text stays left aligned.
+- Frontend OSC 11 background detection reported as optional
+  `Capabilities::terminal_background`; legacy capability reports remain valid.
+  Live canvas masking respects physical placements of overlaid UI surfaces.
+- `Application::close_matching` sends application-defined quit inputs and waits
+  for orderly resource cleanup, allowing explicit restarts after local updates
+  without killing retained recording or media workers on a timeout.
+- Resizing hides live placements and discards obsolete hit targets until a scene
+  for the new viewport arrives. Retained pixels are then placed again; stale
+  scene geometry cannot trigger a fatal canvas bounds check during the wait.
+- Live frame leases remain valid until acknowledgement rather than expiring
+  while a frontend is paused. Frontends skip already-retired descriptors from
+  older controllers and generation changes while retaining usable pixels.
+- Applications can opt into resource-based controller reattachment. Launch
+  directories are retained for relative argument matching, including legacy
+  sessions. Controller startup failures reach the frontend with their underlying
+  error instead of disappearing behind a generic handshake failure.
+- Drag input coalesces both at terminal ingress and before a blocked session
+  writer, preserving button/key/control ordering within the original 64-entry
+  control bound. Terminal restoration drains parsed and partial kernel mouse
+  reports before giving cooked input back to the shell.
+
+- Graphics-only local live canvases with bounded latest-frame queues, private
+  immutable mapped-frame leases, generation/sequence acknowledgements and
+  independent Kitty layers. Raw pixels stay out of the JSON protocol and codecs.
+- `ContentView` for shared aspect-fit display/input geometry; timestamped embedded
+  key phases, pointer capture, paste and explicit input release. Ordinary `Key`
+  and `Pointer` fields retain their existing shape. Relative pointer capture
+  remains an explicitly unsupported capability.
+- Local `application::Application` lifecycle, opaque domain arguments and
+  frontend reattachment; cancellable `Worker` jobs with coalesced progress.
+- Render-only timeline transforms/snapping, sliders, buttons and waveform peaks.
+- Independent `examples/live-canvas` consumer and real Kitty live-layer proof.
+
+The Cargo version is 0.9.0 for local candidate testing. No 0.9 tag is published
+by this change; the starter and four application release pins remain v0.8.1.
+
 ## [0.8.1] - 2026-10-13
 
 ### Fixed

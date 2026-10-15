@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub mod classic;
 #[cfg(feature = "image")]
 pub mod skin;
+pub mod style;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PixelRect {
@@ -132,6 +133,10 @@ pub struct Surface {
     /// Additive hint. Older frontends ignore it and keep legacy font scaling.
     #[serde(default, skip_serializing_if = "TextScale::is_terminal")]
     pub text_scale: TextScale,
+    /// Opt into bundled UI sans/mono faces instead of the terminal font.
+    /// Older peers ignore this additive presentation hint.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ui_font: bool,
     /// Fixed editor grid, in source pixels. Ordinary surfaces use shaped text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_size: Option<[u16; 2]>,
@@ -145,24 +150,76 @@ pub struct Surface {
     pub hover_fills: Vec<HoverFill>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_rules: Vec<TextRule>,
+    /// Text nodes centered within their rectangles using frontend-shaped widths.
+    /// Older frontends ignore this optional presentation hint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub centered_text: Vec<u16>,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 impl Surface {
+    /// Filter drawing nodes while retaining and remapping their presentation metadata.
+    /// Hit regions have their own geometry and remain the caller's responsibility.
+    pub fn retain_nodes(&mut self, mut keep: impl FnMut(&Primitive) -> bool) {
+        let mut mapping = vec![None; self.nodes.len()];
+        let mut old = 0;
+        let mut next = 0u16;
+        self.nodes.retain(|node| {
+            let retained = keep(node);
+            if retained {
+                mapping[old] = Some(next);
+                next += 1;
+            }
+            old += 1;
+            retained
+        });
+        self.hover_fills.retain_mut(|hover| {
+            if let Some(Some(node)) = mapping.get(usize::from(hover.node)) {
+                hover.node = *node;
+                true
+            } else {
+                false
+            }
+        });
+        self.text_rules.retain_mut(|rule| {
+            if let Some(Some(node)) = mapping.get(usize::from(rule.node)) {
+                rule.node = *node;
+                true
+            } else {
+                false
+            }
+        });
+        self.centered_text = self
+            .centered_text
+            .iter()
+            .filter_map(|node| mapping.get(usize::from(*node)).copied().flatten())
+            .collect();
+    }
     pub fn new(width: u16, height: u16, background: String) -> Self {
         Self {
             width,
             height,
             background,
             text_scale: TextScale::Terminal,
+            ui_font: false,
             cell_size: None,
             assets: Default::default(),
             nodes: vec![],
             hits: vec![],
             hover_fills: vec![],
             text_rules: vec![],
+            centered_text: vec![],
         }
     }
     pub fn with_physical_text(mut self) -> Self {
         self.text_scale = TextScale::Physical;
+        self
+    }
+    /// Stable UI typography in physical pixels, independent of terminal font.
+    pub fn with_ui_text(mut self) -> Self {
+        self.text_scale = TextScale::Physical;
+        self.ui_font = true;
         self
     }
     /// Lay out logical design units at an explicit density. Text is reshaped at
@@ -245,7 +302,8 @@ impl Surface {
             self.nodes.len() <= 4096
                 && self.hits.len() <= 256
                 && self.hover_fills.len() <= 256
-                && self.text_rules.len() <= 256,
+                && self.text_rules.len() <= 256
+                && self.centered_text.len() <= 256,
             "surface exceeds limits"
         );
         if let Some([width, height]) = self.cell_size {
@@ -261,6 +319,13 @@ impl Surface {
         let color = |s: &str| {
             s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|c| c.is_ascii_hexdigit())
         };
+        anyhow::ensure!(
+            self.centered_text.iter().all(|node| matches!(
+                self.nodes.get(usize::from(*node)),
+                Some(Primitive::Text { .. })
+            )),
+            "invalid centered text node"
+        );
         anyhow::ensure!(
             self.background == "transparent" || color(&self.background),
             "invalid surface background"
@@ -400,6 +465,18 @@ impl Surface {
             mono: false,
         });
     }
+    pub fn text_centered(
+        &mut self,
+        rect: PixelRect,
+        text: impl Into<String>,
+        color: &str,
+        size: u16,
+        bold: bool,
+    ) {
+        let node = self.nodes.len() as u16;
+        self.text(rect, text, color, size, bold);
+        self.centered_text.push(node);
+    }
 }
 
 /// One spacing vocabulary for native applications and embedded content.
@@ -431,6 +508,45 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retaining_nodes_remaps_decorations_and_drops_removed_targets() {
+        let mut s = Surface::new(200, 120, "#000000".into());
+        s.fill(PixelRect::new(0, 0, 200, 120), "#101010", 0);
+        s.text_centered(
+            PixelRect::new(10, 7, 100, 24),
+            "Header",
+            "#ffffff",
+            12,
+            true,
+        );
+        s.text_centered(
+            PixelRect::new(10, 70, 100, 24),
+            "Album",
+            "#ffffff",
+            12,
+            true,
+        );
+        for node in [1, 2] {
+            s.text_rules.push(TextRule {
+                node,
+                end: 190,
+                gap: 8,
+                width: 1,
+                color: "#ffffff".into(),
+            });
+        }
+        s.hover_fills.push(HoverFill {
+            node: 0,
+            color: "#333333".into(),
+        });
+        s.retain_nodes(|node| node.rect().y < 32 && node.rect().height <= 32);
+        s.height = 38;
+        assert_eq!(s.centered_text, [0]);
+        assert_eq!(s.text_rules.len(), 1);
+        assert_eq!(s.text_rules[0].node, 0);
+        assert!(s.hover_fills.is_empty());
+        s.validate().unwrap();
+    }
     #[test]
     fn text_rules_validate_targets_and_scale_with_density() {
         let mut s = Surface::new(200, 30, "#000000".into());
@@ -500,6 +616,7 @@ mod tests {
     fn legacy_surfaces_default_to_no_assets_and_sprite_metadata_is_explicit() {
         let legacy = r##"{"width":20,"height":20,"background":"#000000","nodes":[],"hits":[]}"##;
         let mut surface: Surface = serde_json::from_str(legacy).unwrap();
+        assert!(!surface.ui_font);
         assert!(surface.assets.is_empty());
         let id = format!("skin/{}", "a".repeat(64));
         surface.assets.insert(id.clone(), None);

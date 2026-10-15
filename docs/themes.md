@@ -132,3 +132,35 @@ second return value is a sentence to show rather than an error to propagate.
 
 Both write a file rather than a struct, so an imported theme is something the
 user can open and edit.
+
+## Shared picker
+
+`theme::picker::Picker` owns search, scrolling, keyboard navigation and native
+row actions. It works with `Registry<T>` for both core and application-specific
+resolvers; built-ins, `system` and user-imported themes use the existing lookup.
+Construct it when opening the dialog, so newly imported files appear.
+
+```rust
+use starkit::{paths::Paths, theme::{Registry, Theme, picker::{Picker, Outcome}}};
+let registry = Registry::<Theme>::new(Paths::new("my-app", "MY_APP_DIR", "MY_APP_CONFIG_DIR"));
+let mut picker = Picker::new(&registry, "kanagawa");
+picker.paste("nord");
+assert_eq!(picker.handle_named("enter", 0), Outcome::Select("nord".into()));
+```
+
+Reserve `Picker::is_shortcut(code, modifiers)` (Alt+T) before ordinary app or
+embedded-demo input. Only the press opens the dialog; repeat/release should not
+reopen it. During the modal, pass keys to `handle` (Crossterm) or `handle_named`
+(session protocol), paste to `paste`, wheel motion to `navigate`, and native hit
+actions to `action`. `Outcome::Select(id)` is the caller's apply/save boundary;
+Escape or Cancel returns `Outcome::Cancel`. Highlighting never commits a theme.
+
+Native apps mount `picker.native(&style, width, height)` after a `Menu` marker.
+The surface contains bounded rows, palette swatches and an explicit Cancel button.
+Cell apps call `render_cell(area, buffer, core_theme)` using the same state.
+The widget and its cell fallback are available with no optional features.
+
+`Style::from_named(&registry, id)` prepares default native chrome; preserve the
+negotiated `native_skins` capability with `with_native_skins`. Classic keeps its
+calibrated default; imported palettes override built-ins. Applications own theme
+persistence and any separate media/recording background.

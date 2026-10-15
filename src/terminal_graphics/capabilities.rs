@@ -28,6 +28,15 @@ pub enum PointerPrecision {
 /// `pixel_mouse` separately reports an enabled SGR pixel mouse mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
+    /// Actual default background reported by the presenting terminal (OSC 11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_background: Option<[u8; 3]>,
+    #[serde(default)]
+    pub local_frames: bool,
+    #[serde(default)]
+    pub key_event_types: bool,
+    #[serde(default)]
+    pub relative_pointer: bool,
     /// Explicit mode; absent for legacy peers that inferred it from images.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_presentation: Option<bool>,
@@ -126,6 +135,10 @@ impl Capabilities {
         remote_terminal: bool,
     ) -> Self {
         Self {
+            terminal_background: None,
+            local_frames: false,
+            key_event_types: false,
+            relative_pointer: false,
             cell_presentation: None,
             presentation_switch: false,
             // Original playback decodes on the presentation machine. An
@@ -209,6 +222,10 @@ mod tests {
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
+            terminal_background: None,
+            local_frames: false,
+            key_event_types: false,
+            relative_pointer: false,
             cell_presentation: None,
             presentation_switch: false,
             original_media: true,

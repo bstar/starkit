@@ -11,6 +11,7 @@ pub struct VideoPresenter {
     local_files: bool,
     stalled_since: Option<std::time::Instant>,
     signature: Option<(Rect, Viewport, Arc<RgbaImage>)>,
+    presented_at: Option<std::time::Instant>,
     previous: Option<u32>,
     background: Option<(Rect, [u8; 3], u32)>,
     files: std::collections::VecDeque<PathBuf>,
@@ -153,6 +154,7 @@ impl VideoPresenter {
                 && std::env::var_os("STAR_VIDEO_DIRECT").is_none(),
             stalled_since: None,
             signature: None,
+            presented_at: None,
             previous: None,
             background: None,
             files: Default::default(),
@@ -341,10 +343,14 @@ impl VideoPresenter {
         };
         let pixels = pixels.clone();
         let background = image_background(scene, id);
-        let same_background = self
-            .background
-            .as_ref()
-            .is_some_and(|(old, color, _)| *old == rect && *color == background);
+        let fresh = self
+            .presented_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2));
+        let same_background = fresh
+            && self
+                .background
+                .as_ref()
+                .is_some_and(|(old, color, _)| *old == rect && *color == background);
         if same_background
             && self
                 .signature
@@ -438,6 +444,7 @@ impl VideoPresenter {
         out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
         self.signature = Some((rect, viewport, pixels.clone()));
+        self.presented_at = Some(std::time::Instant::now());
         tracing::trace!(
             present_us = start.elapsed().as_micros(),
             width = pixels.width(),
@@ -447,6 +454,7 @@ impl VideoPresenter {
         Ok(())
     }
     pub fn clear(&mut self, out: &mut impl Write) -> anyhow::Result<()> {
+        self.invalidate();
         self.signature = None;
         if let Some(id) = self.previous.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?
@@ -456,6 +464,10 @@ impl VideoPresenter {
         }
         out.flush()?;
         Ok(())
+    }
+    /// Keep decoded video and old placements until their replacements are ready.
+    pub fn invalidate(&mut self) {
+        self.presented_at = None;
     }
 }
 impl Drop for VideoPresenter {
@@ -517,6 +529,23 @@ mod tests {
         assert!(text.contains("a=d,d=I"));
         assert!(text.contains("z=0,q=2"));
         assert!(text.contains("z=1,q=2"));
+        wire.clear();
+        presenter.present(&scene, viewport, &mut wire).unwrap();
+        assert!(wire.is_empty());
+        presenter.presented_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        presenter.present(&scene, viewport, &mut wire).unwrap();
+        assert!(
+            String::from_utf8_lossy(&wire).contains("a=T"),
+            "Paused video must recover without a decoder frame"
+        );
+        wire.clear();
+        presenter.invalidate();
+        presenter.present(&scene, viewport, &mut wire).unwrap();
+        assert!(
+            String::from_utf8_lossy(&wire).contains("a=T"),
+            "Focus return must restore paused video immediately"
+        );
     }
 
     #[test]

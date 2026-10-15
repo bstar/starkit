@@ -57,7 +57,8 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
     buffer.set_style(area, base);
     for component in &scene.components {
         let rect = match component {
-            Component::Surface { rect, .. }
+            Component::LiveCanvas { rect, .. }
+            | Component::Surface { rect, .. }
             | Component::Panel { rect, .. }
             | Component::ListRow { rect, .. }
             | Component::Tab { rect, .. }
@@ -156,7 +157,8 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
                     ));
                 }
             }
-            Component::Surface { .. }
+            Component::LiveCanvas { .. }
+            | Component::Surface { .. }
             | Component::Scrollbar { .. }
             | Component::Image { .. }
             | Component::Terminal { .. } => {}
@@ -268,6 +270,7 @@ impl Cells {
             width: scene.viewport.width,
             height: scene.viewport.height,
             pixels: None,
+            scene: std::sync::Arc::new(scene.clone()),
         })?;
         Ok(())
     }

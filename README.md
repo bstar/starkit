@@ -17,11 +17,17 @@ adoption, a standalone starter and public API stability gates are in progress.
 
 ## What is in it
 
+- **Default native style** — AMP's Classic Rack palette, original panel artwork,
+  compact title strips, centered buttons, rows and meters through
+  `native_surface::style::Style`. New apps use the same defaults with no private
+  skin loader. Quiet workspace panels, aligned property fields and time rulers
+  share those palette roles for larger editors. See [the native style API](docs/native-style.md).
 - **Themes** — a `[meta]`/`[base16]`/role-table file format, sixteen built-in
   schemes, a derivation chain that fills in every role a file omits, Stylix and
   COSMIC detection, and Winamp `.wsz` skin import. An application extends the
   core palette with tables of its own; a theme file may carry several
-  applications' tables at once.
+  applications' tables at once. The shared Alt+T [theme picker](docs/themes.md#shared-picker)
+  provides search, keyboard navigation, palette previews and native/cell rendering.
 - **Pictures** — terminal graphics through `ratatui-image` (kitty, iTerm2,
   sixel, half-blocks) with capability probing, a cache keyed by image identity
   and rectangle, and a raster path for drawing vector shapes into cells.
@@ -43,8 +49,10 @@ applications use exactly one copy of each.
 
 ## Status
 
-Applications pin immutable git tags and lock the resolved revision. The current
-framework release is `v0.8.1`; see [the changelog](CHANGELOG.md). CI checks all
+Applications pin immutable git tags for releases and commit revisions for
+development candidates, with git-sourced lockfiles. The current framework
+release is `v0.8.1`; development main uses the unreleased 0.9 candidate.
+See [the changelog](CHANGELOG.md). CI checks all
 four consumers against the candidate checkout as well as KIT's full and minimal
 feature sets. This catches shared API regressions before the next tag.
 
@@ -100,7 +108,8 @@ link no decoder. Physical macOS audio/Kitty verification remains outstanding.
 ## Start an application
 
 Copy [`examples/starter`](examples/starter) into a new repository. It is an
-independent package pinned to a published KIT tag and uses only public APIs.
+independent package pinned to an immutable KIT candidate revision and uses only
+public APIs. No sibling checkout is required.
 Run through KIT's development shell while working here:
 
 ```sh
@@ -127,6 +136,54 @@ its domain state. Reports contain presentation metadata only. Applications
 should redact their own content before adding it to a report.
 
 ## Presentation and dependency boundaries
+
+The **unreleased 0.9 candidate** also supports engine-owned live content.
+`terminal_graphics::live_canvas::LiveFrames` accepts RGBA/BGRA frames from an
+application worker or compositor. A controller drains its updates through
+`Controller::live_frames`; `Component::LiveCanvas` places each stream with a
+`content_view::ContentView`. The same fractional transform maps pointer input
+back to content coordinates. Scene artwork after the canvas appears above it.
+Domain capture, playback, editing and export stay in the application.
+
+The local frontend imports private immutable mapped files and acknowledges each
+generation/sequence. Each stream coalesces to its newest pending frame and keeps
+one mapped frame in flight; eight stream identities and 256 MiB per transport
+bound resources. A pause does not expire an unacknowledged frame. Frontends skip
+already-retired descriptors from older controllers while keeping usable pixels.
+A frame is at most 8192 pixels per dimension, 32 million pixels
+and 128 MiB. A close retires its generation; reopening requires a higher one.
+This path currently requires local Kitty graphics. Remote sessions never import
+these host paths, and a graphics-only consumer does not acquire FFmpeg or CPAL.
+
+Clicking an interactive canvas captures embedded keys. Ctrl+Esc, focus loss,
+resize, a toolbar click and detach release capture. `Input::Embedded` includes
+monotonic timestamps, sequence numbers, key press/repeat/release, source-space
+pointer events and bounded paste text. Reliable held keys require the terminal's
+extended keyboard support. Relative mouse/pointer lock is not implemented.
+
+`application::Application::new("app")?.run(factory)` owns local controller/relay
+startup and original domain arguments. `--attach SESSION` reattaches after a
+frontend exits. Controllers and their workers survive frontend loss. Existing
+local/SSH launcher APIs remain available. `run_or_attach(factory, matcher)` lets
+an application reopen a matching resource automatically; the matcher receives
+the retained arguments and original launch directory. Legacy argument files
+remain readable. Startup failures are logged and sent through the protocol to
+the frontend, which restores the terminal before displaying their cause.
+The frontend reports its OSC 11 default color in the optional
+`Capabilities::terminal_background` field. The bounded startup query reads the
+presenting terminal, including SSH frontends; missing support leaves it `None`.
+Applications choose their own fallback and background policy.
+`worker::Worker` provides cooperative
+cancellation and bounded progress/completion; dropping it cancels without
+blocking the UI. Applications must make jobs honor cancellation. Reusable
+`editor_controls` draw controls and map time; they do not own timeline models.
+
+[`examples/live-canvas`](examples/live-canvas) is an independent two-engine
+consumer pinned to an immutable 0.9 candidate revision. Use
+`nix develop -c python3 scripts/check-live-canvas.py` to build an external copy
+against current local changes before publishing another candidate. `scripts/test-live-canvas.py` exercises actual
+Kitty animation, resize, frontend loss, reattachment and cleanup. Tiled Wayland
+uses terminal font zoom for the viewport resize check.
 
 | Requirement | KIT feature/API |
 | --- | --- |

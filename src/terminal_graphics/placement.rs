@@ -221,7 +221,8 @@ pub(crate) fn encloses(outer: Rect, inner: Rect) -> bool {
 }
 fn component_rect_mut(c: &mut Component) -> &mut Rect {
     match c {
-        Component::Surface { rect, .. }
+        Component::LiveCanvas { rect, .. }
+        | Component::Surface { rect, .. }
         | Component::Menu { rect }
         | Component::Dialog { rect, .. }
         | Component::TextField { rect, .. }

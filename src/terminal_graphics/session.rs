@@ -34,6 +34,9 @@ pub trait Controller {
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
+    fn live_frames(&mut self) -> Vec<super::live_canvas::Update> {
+        vec![]
+    }
     fn effects(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
@@ -331,6 +334,8 @@ fn serve_with_policy(
     let mut in_flight = HashSet::new();
     let mut effect_id = 0u64;
     let mut painted = Instant::now();
+    let mut live = super::live_canvas::Transport::new()?;
+    let mut local_frames = false;
     let mut history = VecDeque::from([(
         scene.revision,
         scene.viewport.generation,
@@ -467,8 +472,11 @@ fn serve_with_policy(
                     clients.entry(client.clone()).or_default();
                     p.client = Some(client);
                     viewport = v;
+                    live = super::live_canvas::Transport::new()?;
+                    local_frames = false;
                     controller.attached();
                     if let Some(capabilities) = capabilities {
+                        local_frames = capabilities.local_frames;
                         p.presentation.enabled = capabilities.presentation_ack;
                         p.presentation_switch = capabilities.presentation_switch;
                         controller.capabilities(capabilities);
@@ -544,10 +552,36 @@ fn serve_with_policy(
                 ClientMessage::Ping => {
                     p.control(ServerMessage::Pong);
                 }
+                ClientMessage::CanvasAck {
+                    stream,
+                    generation,
+                    sequence,
+                } => {
+                    live.acknowledge(&stream, generation, sequence);
+                }
             }
         }
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
+        for update in controller.live_frames() {
+            if local_frames && peer.is_some() {
+                if let Some((stream, generation)) = live.submit(update)? {
+                    if let Some(p) = &peer {
+                        p.control(ServerMessage::CanvasClose { stream, generation });
+                    }
+                }
+            }
+        }
+        if local_frames {
+            if let Some(p) = &peer {
+                for frame in live.flush()? {
+                    p.control(ServerMessage::CanvasFrame { frame });
+                }
+            } else {
+                live = super::live_canvas::Transport::new()?;
+                local_frames = false;
+            }
+        }
         if let Some(p) = &peer {
             // Drain short bursts at network speed; controls still get a turn.
             for _ in 0..16 {
@@ -633,7 +667,16 @@ fn serve_with_policy(
             }
             return Ok(());
         }
-        let remaining = Duration::from_millis(33).saturating_sub(start.elapsed());
+        // Live producers run independently of scene painting. Sample them fast
+        // enough for 60 Hz interaction instead of imposing a second 30 Hz clock
+        // between compositor input and terminal presentation. Ordinary apps and
+        // detached sessions retain the quiet polling interval.
+        let interval = if local_frames && peer.is_some() && live.active() {
+            Duration::from_millis(8)
+        } else {
+            Duration::from_millis(33)
+        };
+        let remaining = interval.saturating_sub(start.elapsed());
         // Input and presentation acknowledgements wake the controller immediately.
         // Keep the timer for worker updates and accepting new attachments.
         if let Some(p) = &peer {

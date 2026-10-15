@@ -144,6 +144,7 @@ struct Connection {
     child: Option<Child>,
     socket: Option<std::os::unix::net::UnixStream>,
     input: Sender<ClientMessage>,
+    outbox: std::sync::Arc<super::input_queue::Outbox>,
     messages: Receiver<ServerMessage>,
     frames: Receiver<Scene>,
 }
@@ -176,14 +177,47 @@ impl Connection {
         socket: Option<std::os::unix::net::UnixStream>,
     ) -> Result<Self> {
         let (input, rx) = bounded(64);
+        let (control, messages) = bounded(64);
+        let (outbox, wake) = super::input_queue::Outbox::new();
+        let outbox = std::sync::Arc::new(outbox);
+        let writer = outbox.clone();
+        let errors = control.clone();
         std::thread::spawn(move || {
-            for message in rx {
-                if write_message(&message, &mut stdin).is_err() {
-                    return;
+            let result = (|| -> io::Result<()> {
+                loop {
+                    if writer.closed() {
+                        return Ok(());
+                    }
+                    // UI positions coalesce independently of pipe/socket backpressure.
+                    // Audio/media traffic retains its existing bounded channel.
+                    for message in rx.try_iter().take(8) {
+                        write_message(&message, &mut stdin)?;
+                    }
+                    for _ in 0..16 {
+                        let Some(message) = writer.pop() else {
+                            break;
+                        };
+                        write_message(&message, &mut stdin)?;
+                    }
+                    if writer.closed() {
+                        return Ok(());
+                    }
+                    if writer.pending() {
+                        continue;
+                    }
+                    crossbeam_channel::select! {
+                        recv(rx)->message=>match message{Ok(message)=>write_message(&message,&mut stdin)?,Err(_)=>return Ok(())},
+                        recv(wake)->_=>{},
+                    }
                 }
+            })();
+            writer.close();
+            if let Err(error) = result {
+                let _ = errors.try_send(ServerMessage::Error {
+                    message: format!("Session input connection closed: {error}"),
+                });
             }
         });
-        let (control, messages) = bounded(64);
         let (scene_tx, frames) = bounded(1);
         let old = frames.clone();
         let terminal = socket.is_some();
@@ -273,18 +307,18 @@ impl Connection {
             child,
             socket,
             input,
+            outbox,
             messages,
             frames,
         })
     }
     fn send(&self, message: ClientMessage) -> Result<()> {
-        self.input.try_send(message).map_err(|_| {
-            anyhow::anyhow!("Session input queue is unavailable; reconnect before continuing")
-        })
+        self.outbox.push(message)
     }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
+        self.outbox.close();
         if let Some(socket) = &self.socket {
             let _ = socket.shutdown(std::net::Shutdown::Both);
         }
@@ -513,6 +547,22 @@ pub fn key(code: KeyCode) -> String {
         KeyCode::End => "end",
         KeyCode::PageUp => "pageup",
         KeyCode::PageDown => "pagedown",
+        KeyCode::CapsLock => "caps_lock",
+        KeyCode::NumLock => "num_lock",
+        KeyCode::Modifier(modifier) => {
+            use crate::crossterm::event::ModifierKeyCode::*;
+            match modifier {
+                LeftShift => "shift_left",
+                RightShift => "shift_right",
+                LeftControl => "control_left",
+                RightControl => "control_right",
+                LeftAlt => "alt_left",
+                RightAlt => "alt_right",
+                LeftSuper => "super_left",
+                RightSuper => "super_right",
+                _ => "unknown",
+            }
+        }
         _ => "unknown",
     }
     .to_string()
@@ -666,8 +716,10 @@ fn run_impl(
         (launch.host.is_some() || terminal_socket.is_some()) && terminal_extensions,
     );
     let mut font = super::font::probe().configured();
+    let terminal_background = super::terminal_theme::background();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let mut capabilities = super::capabilities::Capabilities::detected(&graphics);
+    capabilities.terminal_background = terminal_background.map(|c| [c.r, c.g, c.b]);
     capabilities.local_media = cfg!(feature = "media")
         && launch.host.is_none()
         && terminal_socket.is_none()
@@ -681,6 +733,12 @@ fn run_impl(
         terminal_socket.is_some() || launch.host.is_some(),
     );
     let graphical_available = profile.native;
+    capabilities.local_frames = graphical_available
+        && launch.host.is_none()
+        && terminal_socket.is_none()
+        && !environment.ssh;
+    capabilities.key_event_types = graphical_available
+        && crate::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if profile.images == crate::presentation::Images::None {
         capabilities.video = false;
         capabilities.video_player = false;
@@ -773,6 +831,7 @@ fn run_impl(
     io::stdout().flush()?;
     let mut last_scene: Option<Scene> = None;
     let mut shown: Option<(u64, u64)> = None;
+    let mut shown_scene: Option<std::sync::Arc<Scene>> = None;
     let mut id = 0u64;
     let mut connected = false;
     let mut last_reply = Instant::now();
@@ -781,6 +840,9 @@ fn run_impl(
     let mut geometry_probe = Instant::now();
     let mut reconnect = Instant::now() + Duration::from_secs(5);
     let mut fatal = None;
+    let mut canvases = super::canvas_frontend::Frontend::new()?;
+    let mut embedded = super::embedded_input::Router::default();
+    let mut capture_keyboard = false;
     let mut frames = 0u64;
     let mut bytes = 0u64;
     loop {
@@ -805,6 +867,28 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                ServerMessage::CanvasFrame { frame } => {
+                    let first = canvases.receive(&frame, capabilities.local_frames)?;
+                    if let Some(c) = &connection {
+                        c.send(ClientMessage::CanvasAck {
+                            stream: frame.stream,
+                            generation: frame.generation,
+                            sequence: frame.sequence,
+                        })?;
+                    }
+                    // Redraw the transparent live region once when the first frame arrives.
+                    if first {
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(scene)?;
+                        }
+                    }
+                }
+                ServerMessage::CanvasClose { stream, generation } => {
+                    canvases.close(&stream, generation, &mut io::stdout().lock())?;
+                    if let Some(scene) = &last_scene {
+                        renderer.scene(scene)?;
+                    }
+                }
                 ServerMessage::TogglePresentation => {
                     if !switch_supported || preference.is_none() {
                         continue;
@@ -839,6 +923,7 @@ fn run_impl(
                     video_layer.clear(&mut io::stdout().lock())?;
                     io::stdout().write_all(b"\x1b[2J\x1b[H")?;
                     shown = None;
+                    shown_scene = None;
                     last_scene = None;
                     pointer.reset(&mut io::stdout().lock())?;
                     pointer_placements.clear();
@@ -905,6 +990,7 @@ fn run_impl(
                         io::stdout().flush()?;
                     }
                     shown = None;
+                    shown_scene = None;
                 }
                 ServerMessage::LaunchMovie { path } => direct_play = Some(path),
                 ServerMessage::Clipboard { text } => renderer.clipboard(&text)?,
@@ -1017,7 +1103,7 @@ fn run_impl(
                 .filter(|_| profile.images != crate::presentation::Images::None)
             {
                 video_layer.frame = Some((id, decoded));
-                if let Some(scene) = &last_scene {
+                if let Some(scene) = &shown_scene {
                     present_video(
                         &mut video_layer,
                         &mut cell_video,
@@ -1043,30 +1129,28 @@ fn run_impl(
                     width,
                     height,
                     pixels: frame_pixels,
+                    scene: frame_scene,
                 } if generation == size.generation && width > 0 && height > 0 => {
                     let presentation_started = Instant::now();
                     if pixels {
                         if shown.is_none() {
                             let mut out = io::stdout().lock();
                             video_layer.clear(&mut out)?;
+                            canvases.invalidate();
                             out.write_all(b"\x1b[2J\x1b[H")?;
                         }
                         bytes += presenter.present_pixels(
                             {
                                 let frame = frame_pixels.context("Native frame has no pixels")?;
-                                if let Some(scene) = &last_scene {
-                                    video_layer.mask(
-                                        scene,
-                                        frame,
-                                        Viewport {
-                                            columns: terminal_grid.0,
-                                            rows: terminal_grid.1,
-                                            ..size
-                                        },
-                                    )
-                                } else {
-                                    frame
-                                }
+                                video_layer.mask(
+                                    &frame_scene,
+                                    canvases.mask(&frame_scene, frame),
+                                    Viewport {
+                                        columns: terminal_grid.0,
+                                        rows: terminal_grid.1,
+                                        ..size
+                                    },
+                                )
                             },
                             Viewport {
                                 columns: terminal_grid.0,
@@ -1078,7 +1162,8 @@ fn run_impl(
                             &mut io::stdout().lock(),
                         )? as u64;
                     }
-                    if let Some(scene) = &last_scene {
+                    {
+                        let scene = &frame_scene;
                         if !pixels {
                             cell_video.assets(
                                 scene,
@@ -1131,14 +1216,13 @@ fn run_impl(
                     }
                     frames += 1;
                     shown = Some((revision, generation));
-                    if let Some(scene) = last_scene
-                        .as_ref()
-                        .filter(|s| connected && s.revision == revision)
-                    {
+                    if connected {
+                        let scene = &frame_scene;
                         resize_handles.clone_from(&scene.resize_handles);
                         pointer_regions = super::pointer::clickable_regions(scene);
                         pointer_placements.clone_from(&scene.placements);
                     }
+                    shown_scene = Some(frame_scene);
                     tracing::debug!(
                         revision,
                         generation,
@@ -1187,6 +1271,12 @@ fn run_impl(
                     .flatten()
                     .is_some());
         if dead {
+            embedded.release();
+            canvases.clear(&mut io::stdout().lock())?;
+            if capture_keyboard {
+                io::stdout().write_all(b"\x1b[=5u")?;
+                capture_keyboard = false;
+            }
             media.reset();
             window.set(false);
             video_layer.frame = None;
@@ -1212,6 +1302,7 @@ fn run_impl(
             pointer_regions.clear();
             pointer_placements.clear();
             shown = None;
+            shown_scene = None;
             reconnect = Instant::now() + Duration::from_secs(5);
             if let Some(mut scene) = last_scene.clone() {
                 scene.resize_handles.clear();
@@ -1302,7 +1393,39 @@ fn run_impl(
                 && media.video_playing()
                 && last_input.elapsed() >= Duration::from_secs(3),
         );
-        let poll_ms = if media.video_playing()
+        if let Some(scene) = &shown_scene {
+            if pixels {
+                if shown.is_some() {
+                    bytes += presenter.maintain(&mut io::stdout().lock())? as u64;
+                }
+                canvases.present(
+                    scene,
+                    Viewport {
+                        columns: terminal_grid.0,
+                        rows: terminal_grid.1,
+                        ..size
+                    },
+                    &mut io::stdout().lock(),
+                )?;
+                // Paused video also owns disposable terminal placements.
+                present_video(
+                    &mut video_layer,
+                    &mut cell_video,
+                    pixels,
+                    capabilities.image_transport,
+                    false,
+                    scene,
+                    Viewport {
+                        columns: terminal_grid.0,
+                        rows: terminal_grid.1,
+                        ..size
+                    },
+                    &mut io::stdout().lock(),
+                )?;
+            }
+        }
+        let poll_ms = if canvases.active()
+            || media.video_playing()
             || rendering
             || last_input.elapsed() < Duration::from_millis(100)
         {
@@ -1339,155 +1462,203 @@ fn run_impl(
             })?;
             pending_event = boundary;
             let mut input = custom(&event);
-            match event {
-                Event::Key(k) if k.kind == crate::crossterm::event::KeyEventKind::Press => {
-                    pointer.reset(&mut io::stdout().lock())?;
-                    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('l') {
-                        renderer = Frontend::spawn(pixels, font.clone(), options)?;
-                        presenter.clear(&mut io::stdout().lock())?;
-                        cell_video.reset();
-                        io::stdout().write_all(b"\x1b[2J\x1b[H")?;
-                        if let Some(scene) = &last_scene {
-                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+            let routed = last_scene
+                .as_ref()
+                .filter(|_| pixels && capabilities.local_frames)
+                .map(|scene| embedded.route(&event, scene, capabilities.pixel_mouse));
+            if let Some(release) = routed.as_ref().and_then(|r| r.release.clone()) {
+                if let Some(c) = &connection {
+                    let (revision, generation) = shown.unwrap_or((0, size.generation));
+                    id += 1;
+                    c.send(ClientMessage::Input {
+                        id,
+                        revision,
+                        generation,
+                        input: release,
+                    })?;
+                }
+            }
+            if let Some(change) = routed.as_ref().and_then(|r| r.keyboard) {
+                if capabilities.key_event_types && change != capture_keyboard {
+                    io::stdout().write_all(if change { b"\x1b[=15u" } else { b"\x1b[=5u" })?;
+                    io::stdout().flush()?;
+                    capture_keyboard = change;
+                }
+            }
+            if routed.as_ref().is_some_and(|r| r.consumed) {
+                input = routed.and_then(|r| r.input);
+            } else {
+                match event {
+                    Event::Key(k) if k.kind == crate::crossterm::event::KeyEventKind::Press => {
+                        pointer.reset(&mut io::stdout().lock())?;
+                        if k.modifiers.contains(KeyModifiers::CONTROL)
+                            && k.code == KeyCode::Char('l')
+                        {
+                            if pixels {
+                                bytes += presenter.repaint(&mut io::stdout().lock())? as u64;
+                            } else {
+                                renderer = Frontend::spawn(false, font.clone(), options)?;
+                                io::stdout().write_all(b"\x1b[2J\x1b[H")?;
+                            }
+                            canvases.invalidate();
+                            video_layer.invalidate();
+                            cell_video.reset();
+                            if let Some(scene) = &last_scene {
+                                renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                            }
+                            continue;
+                        }
+                        if !connected
+                            && k.modifiers.contains(KeyModifiers::CONTROL)
+                            && k.code == KeyCode::Char('q')
+                        {
+                            break;
+                        }
+                        if !connected
+                            && k.modifiers.contains(KeyModifiers::CONTROL)
+                            && k.code == KeyCode::Char('r')
+                        {
+                            reconnect = Instant::now();
+                        } else {
+                            input = Some(Input::Key {
+                                code: key(k.code),
+                                modifiers: k.modifiers.bits(),
+                            });
                         }
                     }
-                    if !connected
-                        && k.modifiers.contains(KeyModifiers::CONTROL)
-                        && k.code == KeyCode::Char('q')
-                    {
-                        break;
-                    }
-                    if !connected
-                        && k.modifiers.contains(KeyModifiers::CONTROL)
-                        && k.code == KeyCode::Char('r')
-                    {
-                        reconnect = Instant::now();
-                    } else {
-                        input = Some(Input::Key {
-                            code: key(k.code),
-                            modifiers: k.modifiers.bits(),
+                    Event::Mouse(m) => {
+                        match m.kind {
+                            MouseEventKind::Down(_) => mouse_down = true,
+                            MouseEventKind::Up(_) => mouse_down = false,
+                            _ => {}
+                        }
+                        let (action, button) = match m.kind {
+                            MouseEventKind::Down(b) => ("down", Some(b)),
+                            MouseEventKind::Up(b) => ("up", Some(b)),
+                            MouseEventKind::Drag(b) => ("drag", Some(b)),
+                            MouseEventKind::Moved => ("move", None),
+                            MouseEventKind::ScrollUp => ("scroll_up", None),
+                            MouseEventKind::ScrollDown => ("scroll_down", None),
+                            MouseEventKind::ScrollLeft => ("scroll_left", None),
+                            MouseEventKind::ScrollRight => ("scroll_right", None),
+                        };
+                        let button = match button {
+                            Some(MouseButton::Right) => 1,
+                            Some(MouseButton::Middle) => 2,
+                            _ => 0,
+                        };
+                        let pixel = if capabilities.pixel_mouse {
+                            [u32::from(m.column), u32::from(m.row)]
+                        } else {
+                            [
+                                terminal_pixel(m.column, terminal_grid.0, size.width),
+                                terminal_pixel(m.row, terminal_grid.1, size.height),
+                            ]
+                        };
+                        let logical_point = if capabilities.pixel_mouse {
+                            super::mouse::logical(pixel, size)
+                        } else {
+                            [
+                                logical_coordinate(m.column, terminal_grid.0, size.columns),
+                                logical_coordinate(m.row, terminal_grid.1, size.rows),
+                            ]
+                        };
+                        let logical = if pointer_placements.is_empty() {
+                            Some((logical_point[0], logical_point[1]))
+                        } else {
+                            pointer_placements
+                                .iter()
+                                .rev()
+                                .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
+                        };
+                        hover_point = if mouse_down { None } else { logical };
+                        hover_pixel = (!mouse_down).then_some(pixel);
+                        let previous_hover = hovered_row;
+                        if pixels {
+                            if let Some(scene) = &last_scene {
+                                let next = super::pointer::hovered(scene, hover_point, hover_pixel);
+                                if next != hovered_row {
+                                    hovered_row = next;
+                                    renderer
+                                        .scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                                }
+                            }
+                        }
+                        let clickable = logical
+                            .is_some_and(|(x, y)| pointer_regions.iter().any(|r| r.contains(x, y)));
+                        pointer.update(
+                            action,
+                            button == 0,
+                            pixel,
+                            &resize_handles,
+                            clickable,
+                            &mut io::stdout().lock(),
+                        )?;
+                        input = Some(Input::Pointer {
+                            pixel: Some(pixel),
+                            action: action.into(),
+                            button,
+                            x: logical_point[0],
+                            y: logical_point[1],
+                            modifiers: m.modifiers.bits(),
                         });
+                        if action == "move"
+                            && previous_hover.is_some_and(super::pointer::HoverTarget::is_surface)
+                            && hovered_row.is_some_and(super::pointer::HoverTarget::is_surface)
+                        {
+                            input = None;
+                        }
                     }
-                }
-                Event::Mouse(m) => {
-                    match m.kind {
-                        MouseEventKind::Down(_) => mouse_down = true,
-                        MouseEventKind::Up(_) => mouse_down = false,
-                        _ => {}
-                    }
-                    let (action, button) = match m.kind {
-                        MouseEventKind::Down(b) => ("down", Some(b)),
-                        MouseEventKind::Up(b) => ("up", Some(b)),
-                        MouseEventKind::Drag(b) => ("drag", Some(b)),
-                        MouseEventKind::Moved => ("move", None),
-                        MouseEventKind::ScrollUp => ("scroll_up", None),
-                        MouseEventKind::ScrollDown => ("scroll_down", None),
-                        MouseEventKind::ScrollLeft => ("scroll_left", None),
-                        MouseEventKind::ScrollRight => ("scroll_right", None),
-                    };
-                    let button = match button {
-                        Some(MouseButton::Right) => 1,
-                        Some(MouseButton::Middle) => 2,
-                        _ => 0,
-                    };
-                    let pixel = if capabilities.pixel_mouse {
-                        [u32::from(m.column), u32::from(m.row)]
-                    } else {
-                        [
-                            terminal_pixel(m.column, terminal_grid.0, size.width),
-                            terminal_pixel(m.row, terminal_grid.1, size.height),
-                        ]
-                    };
-                    let logical_point = if capabilities.pixel_mouse {
-                        super::mouse::logical(pixel, size)
-                    } else {
-                        [
-                            logical_coordinate(m.column, terminal_grid.0, size.columns),
-                            logical_coordinate(m.row, terminal_grid.1, size.rows),
-                        ]
-                    };
-                    let logical = if pointer_placements.is_empty() {
-                        Some((logical_point[0], logical_point[1]))
-                    } else {
-                        pointer_placements
-                            .iter()
-                            .rev()
-                            .find_map(|p| p.pointer_pixels(pixel[0], pixel[1], false))
-                    };
-                    hover_point = if mouse_down { None } else { logical };
-                    hover_pixel = (!mouse_down).then_some(pixel);
-                    let previous_hover = hovered_row;
-                    if pixels {
-                        if let Some(scene) = &last_scene {
-                            let next = super::pointer::hovered(scene, hover_point, hover_pixel);
-                            if next != hovered_row {
-                                hovered_row = next;
+                    Event::Paste(text) => input = Some(Input::Paste { text }),
+                    Event::FocusLost => {
+                        focused = false;
+                        mouse_down = false;
+                        hover_point = None;
+                        hover_pixel = None;
+                        hovered_row = None;
+                        if pixels {
+                            if let Some(scene) = &last_scene {
                                 renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
                             }
                         }
+                        pointer.reset(&mut io::stdout().lock())?;
+                        input = Some(Input::CancelPointer);
                     }
-                    let clickable = logical
-                        .is_some_and(|(x, y)| pointer_regions.iter().any(|r| r.contains(x, y)));
-                    pointer.update(
-                        action,
-                        button == 0,
-                        pixel,
-                        &resize_handles,
-                        clickable,
-                        &mut io::stdout().lock(),
-                    )?;
-                    input = Some(Input::Pointer {
-                        pixel: Some(pixel),
-                        action: action.into(),
-                        button,
-                        x: logical_point[0],
-                        y: logical_point[1],
-                        modifiers: m.modifiers.bits(),
-                    });
-                    if action == "move"
-                        && previous_hover.is_some_and(super::pointer::HoverTarget::is_surface)
-                        && hovered_row.is_some_and(super::pointer::HoverTarget::is_surface)
-                    {
-                        input = None;
+                    Event::Resize(..) => {
+                        hover_point = None;
+                        hover_pixel = None;
+                        hovered_row = None;
+                        pointer.reset(&mut io::stdout().lock())?;
+                        resize_handles.clear();
+                        pointer_regions.clear();
+                        pointer_placements.clear();
+                        geometry_probe = Instant::now();
+                        // The terminal may have clipped or moved an existing Kitty
+                        // placement. Its cached pixels no longer prove it is visible.
+                        presenter.clear(&mut io::stdout().lock())?;
+                        video_layer.clear(&mut io::stdout().lock())?;
+                        canvases.hide(&mut io::stdout().lock())?;
+                        cell_video.reset();
+                        size = viewport(size.generation + 1, cell)?;
+                        terminal_grid = (size.columns, size.rows);
+                        size = scaled_viewport(size, if pixels { pixel_scale } else { 100 });
+                        // Geometry and embedded hit targets belong to the old
+                        // generation until the controller supplies a new scene.
+                        last_scene = None;
+                        shown = None;
+                        shown_scene = None;
+                        input = Some(Input::Resize { viewport: size });
                     }
-                }
-                Event::Paste(text) => input = Some(Input::Paste { text }),
-                Event::FocusLost => {
-                    focused = false;
-                    mouse_down = false;
-                    hover_point = None;
-                    hover_pixel = None;
-                    hovered_row = None;
-                    if pixels {
-                        if let Some(scene) = &last_scene {
-                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                    Event::FocusGained => {
+                        focused = true;
+                        if pixels {
+                            bytes += presenter.repaint(&mut io::stdout().lock())? as u64;
                         }
+                        canvases.invalidate();
+                        video_layer.invalidate();
                     }
-                    pointer.reset(&mut io::stdout().lock())?;
-                    input = Some(Input::CancelPointer);
+                    _ => {}
                 }
-                Event::Resize(..) => {
-                    hover_point = None;
-                    hover_pixel = None;
-                    hovered_row = None;
-                    pointer.reset(&mut io::stdout().lock())?;
-                    resize_handles.clear();
-                    pointer_regions.clear();
-                    pointer_placements.clear();
-                    geometry_probe = Instant::now();
-                    // The terminal may have clipped or moved an existing Kitty
-                    // placement. Its cached pixels no longer prove it is visible.
-                    presenter.clear(&mut io::stdout().lock())?;
-                    video_layer.clear(&mut io::stdout().lock())?;
-                    cell_video.reset();
-                    size = viewport(size.generation + 1, cell)?;
-                    terminal_grid = (size.columns, size.rows);
-                    size = scaled_viewport(size, if pixels { pixel_scale } else { 100 });
-                    shown = None;
-                    input = Some(Input::Resize { viewport: size });
-                }
-                Event::FocusGained => focused = true,
-                _ => {}
             }
             if let Some(Input::Osc72 { text }) = input.as_mut() {
                 match drop_bridge.terminal(text) {
@@ -1535,6 +1706,10 @@ fn run_impl(
             input: Input::Detach,
         });
     }
+    if capture_keyboard {
+        io::stdout().write_all(b"\x1b[=5u")?;
+    }
+    canvases.clear(&mut io::stdout().lock())?;
     drop_bridge.reset();
     io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
     io::stdout().flush()?;
@@ -1568,16 +1743,25 @@ fn control_input(input: &Input) -> bool {
 
 // A terminal can queue hundreds of hover positions while a frame is being
 // presented. Only the latest contiguous position matters. Preserve every
-// button, wheel, drag, key and geometry event, including its ordering.
+// button, wheel, key and geometry event. Adjacent drags may coalesce only
+// while their button and modifier state are unchanged.
 fn coalesce_motion(
     mut event: Event,
     mut next: impl FnMut() -> io::Result<Option<Event>>,
 ) -> io::Result<(Event, Option<Event>)> {
-    if matches!(&event, Event::Mouse(m) if m.kind == MouseEventKind::Moved) {
+    let motion = match &event {
+        Event::Mouse(m) if matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) => {
+            Some((m.kind, m.modifiers))
+        }
+        _ => None,
+    };
+    if let Some((kind, modifiers)) = motion {
         // Bound the drain so continuous motion cannot starve frame delivery.
         for _ in 0..255 {
             match next()? {
-                Some(Event::Mouse(m)) if m.kind == MouseEventKind::Moved => event = Event::Mouse(m),
+                Some(Event::Mouse(m)) if m.kind == kind && m.modifiers == modifiers => {
+                    event = Event::Mouse(m)
+                }
                 Some(boundary) => return Ok((event, Some(boundary))),
                 None => break,
             }
@@ -1588,6 +1772,94 @@ fn coalesce_motion(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stalled_pipe_coalesces_drag_and_delivers_every_release_and_control() {
+        use std::sync::{Arc, Mutex};
+        struct GatedWriter {
+            started: Option<crossbeam_channel::Sender<()>>,
+            gate: crossbeam_channel::Receiver<()>,
+            bytes: Arc<Mutex<Vec<u8>>>,
+        }
+        impl std::io::Write for GatedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if let Some(started) = self.started.take() {
+                    started.send(()).unwrap();
+                    self.gate.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                self.bytes.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (started, ready) = bounded(1);
+        let (release, gate) = bounded(1);
+        let bytes = Arc::new(Mutex::new(vec![]));
+        let connection = Connection::streams(
+            GatedWriter {
+                started: Some(started),
+                gate,
+                bytes: bytes.clone(),
+            },
+            std::io::empty(),
+            None,
+            None,
+        )
+        .unwrap();
+        let pointer = |id, action: &str| ClientMessage::Input {
+            id,
+            revision: 1,
+            generation: 1,
+            input: Input::Pointer {
+                action: action.into(),
+                button: 0,
+                modifiers: 0,
+                pixel: None,
+                x: 1,
+                y: 1,
+            },
+        };
+        connection.send(pointer(1, "down")).unwrap();
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        for id in 2..10002 {
+            connection.send(pointer(id, "drag")).unwrap();
+        }
+        connection.send(pointer(10002, "up")).unwrap();
+        for _ in 0..40 {
+            connection.send(ClientMessage::Ping).unwrap();
+        }
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let count = bytes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count();
+            if count == 43 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Controls stranded after writer wakeup"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let mut data = std::io::Cursor::new(bytes.lock().unwrap().clone());
+        let mut messages = vec![];
+        while let Some(message) = read_message::<ClientMessage>(&mut data).unwrap() {
+            messages.push(message);
+        }
+        assert!(matches!(
+            &messages[1],
+            ClientMessage::Input { id: 10001, .. }
+        ));
+        assert!(
+            matches!(&messages[2],ClientMessage::Input{id:10002,input:Input::Pointer{action,..},..}if action=="up")
+        );
+    }
     /// Run only against an isolated ALSA null device. Deliberately never poll
     /// Connection.messages or frames: terminal processing is suspended.
     #[test]
@@ -1743,6 +2015,29 @@ mod tests {
             Some(&moved(256)),
             "continuous motion must yield to rendering"
         );
+    }
+
+    #[test]
+    fn drag_bursts_coalesce_without_crossing_buttons_modifiers_or_release() {
+        use crate::crossterm::event::MouseEvent;
+        let drag = |button, modifiers, x| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(button),
+                modifiers,
+                column: x,
+                row: 1,
+            })
+        };
+        let first = drag(MouseButton::Left, KeyModifiers::NONE, 1);
+        let boundary = drag(MouseButton::Left, KeyModifiers::SHIFT, 100);
+        let mut pending = std::collections::VecDeque::from([
+            drag(MouseButton::Left, KeyModifiers::NONE, 2),
+            drag(MouseButton::Left, KeyModifiers::NONE, 3),
+            boundary.clone(),
+        ]);
+        let (latest, held) = coalesce_motion(first, || Ok(pending.pop_front())).unwrap();
+        assert_eq!(latest, drag(MouseButton::Left, KeyModifiers::NONE, 3));
+        assert_eq!(held, Some(boundary));
     }
 
     #[test]

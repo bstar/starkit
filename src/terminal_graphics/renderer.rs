@@ -19,6 +19,9 @@ pub enum RenderMessage {
         width: u32,
         height: u32,
         pixels: Option<Arc<RgbaImage>>,
+        /// Exact layout rasterized into these pixels, including local hover.
+        /// Never compose a queued frame against a newer controller scene.
+        scene: Arc<Scene>,
     },
     Error {
         message: String,
@@ -85,6 +88,17 @@ impl Renderer {
                     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         painter.render(&scene)
                     }));
+                    // Decoded assets belong to the painter. Presentation only
+                    // needs layout, so frame snapshots do not duplicate artwork.
+                    for component in &mut scene.components {
+                        match component {
+                            super::protocol::Component::Image { png, .. } => *png = None,
+                            super::protocol::Component::Surface { surface, .. } => {
+                                for png in surface.assets.values_mut() { *png = None; }
+                            }
+                            _ => {}
+                        }
+                    }
                     let message = match rendered {
                         Ok(Ok(pixels)) => RenderMessage::Frame {
                             revision: scene.revision,
@@ -92,6 +106,7 @@ impl Renderer {
                             width: pixels.width(),
                             height: pixels.height(),
                             pixels: Some(Arc::new(pixels)),
+                            scene: Arc::new(scene.clone()),
                         },
                         Ok(Err(error)) => RenderMessage::Error {
                             message: format!("Native renderer: {error:#}"),
@@ -105,13 +120,6 @@ impl Renderer {
                         render_us = started.elapsed().as_micros(),
                         "Native scene rasterized"
                     );
-                    // The painter owns decoded assets now. Timer frames must not
-                    // clone or recompare a potentially large encoded animation.
-                    for component in &mut scene.components {
-                        if let super::protocol::Component::Image { png, .. } = component {
-                            *png = None;
-                        }
-                    }
                     let failed = matches!(message, RenderMessage::Error { .. });
                     if let RenderMessage::Error { message } = &message {
                         tracing::error!(revision = scene.revision, generation = scene.viewport.generation, %message, "Native renderer failed");
@@ -190,6 +198,9 @@ pub struct KittyPresenter {
     previous: Option<u32>,
     cached: Option<(String, u16, u16)>,
     regions: Option<RegionCache>,
+    invalidated: bool,
+    repair_cursor: usize,
+    repaired_at: std::time::Instant,
 }
 struct RegionCache {
     pixels: Arc<RgbaImage>,
@@ -197,6 +208,7 @@ struct RegionCache {
     rows: u16,
     generation: u64,
     placements: Vec<(super::protocol::Rect, u32)>,
+    encoded: Vec<String>,
 }
 impl Default for KittyPresenter {
     fn default() -> Self {
@@ -205,6 +217,9 @@ impl Default for KittyPresenter {
             previous: None,
             cached: None,
             regions: None,
+            invalidated: false,
+            repair_cursor: 0,
+            repaired_at: std::time::Instant::now(),
         }
     }
 }
@@ -226,10 +241,11 @@ impl KittyPresenter {
                 "invalid PNG payload",
             ));
         }
-        if self
-            .cached
-            .as_ref()
-            .is_some_and(|(old, cols, lines)| old == png && *cols == columns && *lines == rows)
+        if !self.invalidated
+            && self
+                .cached
+                .as_ref()
+                .is_some_and(|(old, cols, lines)| old == png && *cols == columns && *lines == rows)
         {
             // Still acknowledge this scene revision: its input targets may
             // change even when its pixels do not.
@@ -264,10 +280,12 @@ impl KittyPresenter {
         out.flush()?;
         self.previous = Some(id);
         self.cached = Some((png.to_owned(), columns, rows));
+        self.invalidated = false;
         Ok(png.len())
     }
     pub fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
         self.cached = None;
+        self.invalidated = false;
         if let Some(id) = self.previous.take() {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
         }
@@ -277,6 +295,85 @@ impl KittyPresenter {
             }
         }
         out.flush()
+    }
+
+    /// Terminal placements are disposable. Restore from the retained framebuffer
+    /// without asking the application to rebuild state or restarting its renderer.
+    pub fn repaint(&mut self, out: &mut impl Write) -> anyhow::Result<usize> {
+        self.invalidated = true;
+        if let Some(old) = &self.regions {
+            let pixels = old.pixels.clone();
+            let viewport = super::protocol::Viewport {
+                columns: old.columns,
+                rows: old.rows,
+                width: pixels.width(),
+                height: pixels.height(),
+                generation: old.generation,
+            };
+            self.present_pixels(pixels, viewport, out)
+        } else if let Some((png, columns, rows)) = self.cached.clone() {
+            Ok(self.present(&png, columns, rows, out)?)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Refresh a bounded portion of the terminal's backing store, including
+    /// unchanged regions. Quiet panels must recover even while another animates.
+    /// Reuse encoded pixels rather than rerasterizing or reencoding the desktop.
+    pub fn maintain(&mut self, out: &mut impl Write) -> anyhow::Result<usize> {
+        self.maintain_at(std::time::Instant::now(), out)
+    }
+
+    fn maintain_at(
+        &mut self,
+        now: std::time::Instant,
+        out: &mut impl Write,
+    ) -> anyhow::Result<usize> {
+        let count = self
+            .regions
+            .as_ref()
+            .map_or(1, |r| r.placements.len())
+            .max(1);
+        let interval = std::time::Duration::from_secs(2) / count as u32;
+        if now.saturating_duration_since(self.repaired_at) < interval {
+            return Ok(0);
+        }
+        let Some(regions) = &mut self.regions else {
+            self.repaired_at = now;
+            return self.repaint(out);
+        };
+        // Catch up after expensive raster/live-frame work without an unbounded
+        // upload burst. A slow event loop must not starve quiet regions forever.
+        let due = (now.saturating_duration_since(self.repaired_at).as_nanos() / interval.as_nanos())
+            .min(count as u128)
+            .min(8) as usize;
+        let mut payload = 0;
+        let mut repaired = 0;
+        let mut retired = Vec::new();
+        out.write_all(b"\x1b[?2026h")?;
+        for _ in 0..due {
+            let index = self.repair_cursor % regions.placements.len();
+            self.repair_cursor = self.repair_cursor.wrapping_add(1);
+            let (rect, old) = regions.placements[index];
+            self.next = self.next.wrapping_add(1);
+            let image = self.next;
+            write_region(out, image, rect, &regions.encoded[index])?;
+            retired.push(old);
+            regions.placements[index].1 = image;
+            payload += regions.encoded[index].len();
+            repaired += 1;
+            if payload >= 256_000 {
+                break;
+            }
+        }
+        for old in retired {
+            write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
+        }
+        out.write_all(b"\x1b[?2026l")?;
+        out.flush()?;
+        self.repaired_at += interval * repaired;
+        Ok(payload)
     }
 
     /// Compare a self-contained renderer frame with the pixels actually sent
@@ -289,12 +386,13 @@ impl KittyPresenter {
     ) -> anyhow::Result<usize> {
         viewport.validate()?;
         anyhow::ensure!(png.len() <= 15_000_000, "Frame exceeds encoded limit");
-        let same_geometry = self.regions.as_ref().is_some_and(|old| {
-            old.generation == viewport.generation
-                && old.columns == viewport.columns
-                && old.rows == viewport.rows
-                && old.pixels.dimensions() == (viewport.width, viewport.height)
-        });
+        let same_geometry = !self.invalidated
+            && self.regions.as_ref().is_some_and(|old| {
+                old.generation == viewport.generation
+                    && old.columns == viewport.columns
+                    && old.rows == viewport.rows
+                    && old.pixels.dimensions() == (viewport.width, viewport.height)
+            });
         if same_geometry && self.cached.as_ref().is_some_and(|(old, _, _)| old == png) {
             return Ok(0);
         }
@@ -342,12 +440,13 @@ impl KittyPresenter {
                 out,
             )?);
         }
-        let same_geometry = self.regions.as_ref().is_some_and(|old| {
-            old.generation == viewport.generation
-                && old.columns == viewport.columns
-                && old.rows == viewport.rows
-                && old.pixels.dimensions() == pixels.dimensions()
-        });
+        let same_geometry = !self.invalidated
+            && self.regions.as_ref().is_some_and(|old| {
+                old.generation == viewport.generation
+                    && old.columns == viewport.columns
+                    && old.rows == viewport.rows
+                    && old.pixels.dimensions() == pixels.dimensions()
+            });
         let grid = region_grid(viewport.columns, viewport.rows);
         let mut changes = Vec::new();
         let mut payload_bytes = 0;
@@ -392,10 +491,40 @@ impl KittyPresenter {
             }
             changes.push((index, rect, encoded));
         }
+        let mut retained = if same_geometry {
+            self.regions
+                .as_ref()
+                .unwrap()
+                .encoded
+                .iter()
+                .map(String::len)
+                .sum::<usize>()
+        } else {
+            0
+        };
+        for (index, _, encoded) in &changes {
+            if same_geometry {
+                retained -= self.regions.as_ref().unwrap().encoded[*index].len();
+            }
+            retained += encoded.len();
+        }
+        if retained > 15_000_000 {
+            return Ok(self.present(
+                &encode_pixels(&pixels)?,
+                viewport.columns,
+                viewport.rows,
+                out,
+            )?);
+        }
         let mut placements = if same_geometry {
             self.regions.as_ref().unwrap().placements.clone()
         } else {
             grid.into_iter().map(|rect| (rect, 0)).collect()
+        };
+        let mut encoded_regions = if same_geometry {
+            std::mem::take(&mut self.regions.as_mut().unwrap().encoded)
+        } else {
+            vec![String::new(); placements.len()]
         };
         let mut retired = Vec::new();
         if !same_geometry {
@@ -415,23 +544,8 @@ impl KittyPresenter {
                     retired.push(placements[index].1);
                 }
                 placements[index] = (rect, id);
-                write!(out, "\x1b[{};{}H", rect.y + 1, rect.x + 1)?;
-                let chunks = encoded.as_bytes().chunks(4096);
-                let count = chunks.len();
-                for (part, chunk) in chunks.enumerate() {
-                    let more = usize::from(part + 1 < count);
-                    if part == 0 {
-                        write!(
-                            out,
-                            "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={},r={},m={more};",
-                            rect.width, rect.height
-                        )?;
-                    } else {
-                        write!(out, "\x1b_Gm={more};")?;
-                    }
-                    out.write_all(chunk)?;
-                    out.write_all(b"\x1b\\")?;
-                }
+                write_region(out, id, rect, &encoded)?;
+                encoded_regions[index] = encoded;
             }
             // All replacement regions are placed before retiring any old
             // region, including after resize or a complete-frame fallback.
@@ -443,15 +557,43 @@ impl KittyPresenter {
         }
         self.previous = None;
         self.cached = None;
+        self.invalidated = false;
         self.regions = Some(RegionCache {
             pixels,
             columns: viewport.columns,
             rows: viewport.rows,
             generation: viewport.generation,
             placements,
+            encoded: encoded_regions,
         });
         Ok(payload_bytes)
     }
+}
+
+fn write_region(
+    out: &mut impl Write,
+    id: u32,
+    rect: super::protocol::Rect,
+    encoded: &str,
+) -> io::Result<()> {
+    write!(out, "\x1b[{};{}H", rect.y + 1, rect.x + 1)?;
+    let chunks = encoded.as_bytes().chunks(4096);
+    let count = chunks.len();
+    for (part, chunk) in chunks.enumerate() {
+        let more = usize::from(part + 1 < count);
+        if part == 0 {
+            write!(
+                out,
+                "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={},r={},m={more};",
+                rect.width, rect.height
+            )?;
+        } else {
+            write!(out, "\x1b_Gm={more};")?;
+        }
+        out.write_all(chunk)?;
+        out.write_all(b"\x1b\\")?;
+    }
+    Ok(())
 }
 
 pub fn encode_pixels(pixels: &RgbaImage) -> anyhow::Result<String> {
@@ -710,6 +852,132 @@ mod tests {
         presenter.clear(&mut wire).unwrap();
         apply_wire(&wire, &mut images);
         assert!(images.is_empty());
+    }
+
+    #[test]
+    fn queued_frames_retain_their_own_layout_even_at_the_same_scene_revision() {
+        use super::super::protocol::{Component, Rect, Viewport};
+        let viewport = Viewport {
+            columns: 20,
+            rows: 10,
+            width: 80,
+            height: 80,
+            generation: 1,
+        };
+        let mut renderer = Renderer::spawn().unwrap();
+        let mut outputs = Vec::new();
+        for (x, color) in [(0, "#ff0000"), (10, "#0000ff")] {
+            let mut scene = Scene::from_buffer(
+                &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                    0, 0, 20, 10,
+                )),
+                viewport,
+                1,
+            );
+            scene.components.push(Component::Surface {
+                rect: Rect {
+                    x,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
+                surface: crate::native_surface::Surface::new(40, 80, color.into()),
+            });
+            renderer.scene(&scene).unwrap();
+            let output = renderer
+                .output
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let RenderMessage::Frame {
+                pixels: Some(pixels),
+                scene: rendered,
+                ..
+            } = output
+            else {
+                panic!("{output:?}")
+            };
+            assert_eq!(rendered.as_ref(), &scene);
+            outputs.push((pixels, rendered));
+        }
+        // Local hover paints can share a controller revision. Frame/layout
+        // identity must survive that case as well as asynchronous scene changes.
+        let (old_pixels, old_scene) = &outputs[0];
+        assert_eq!(old_scene.components[0].rect().x, 0);
+        assert_eq!(old_pixels.get_pixel(20, 40).0, [255, 0, 0, 255]);
+        assert_eq!(outputs[1].1.components[0].rect().x, 10);
+        assert_eq!(outputs[1].0.get_pixel(60, 40).0, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn lost_terminal_regions_recover_while_an_unrelated_panel_keeps_animating() {
+        let viewport = super::super::protocol::Viewport {
+            columns: 80,
+            rows: 20,
+            width: 320,
+            height: 160,
+            generation: 1,
+        };
+        let mut pixels = RgbaImage::from_pixel(320, 160, crate::image::Rgba([20, 30, 40, 255]));
+        let mut presenter = KittyPresenter::default();
+        let mut images = BTreeMap::new();
+        let mut wire = Vec::new();
+        presenter
+            .present_pixels(Arc::new(pixels.clone()), viewport, &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        let count = images.len();
+        // Model a terminal discarding quiet placements, without changing the
+        // application's scene or asking it to resend any assets.
+        images.clear();
+        let mut now = std::time::Instant::now();
+        for step in 0..count {
+            pixels.put_pixel(0, 0, crate::image::Rgba([step as u8, 200, 0, 255]));
+            wire.clear();
+            presenter
+                .present_pixels(Arc::new(pixels.clone()), viewport, &mut wire)
+                .unwrap();
+            apply_wire(&wire, &mut images);
+            wire.clear();
+            now += std::time::Duration::from_secs(2);
+            assert!(presenter.maintain_at(now, &mut wire).unwrap() > 0);
+            let commands = String::from_utf8_lossy(&wire);
+            assert!(
+                (1..=8).contains(&commands.matches("a=T").count()),
+                "Repair must stay bounded"
+            );
+            assert!(commands.find("a=T").unwrap() < commands.find("a=d").unwrap());
+            apply_wire(&wire, &mut images);
+            assert!(images.len() <= count);
+        }
+        let mut composed = RgbaImage::new(320, 160);
+        for (x, y, image) in images.values() {
+            crate::image::imageops::replace(&mut composed, image, i64::from(*x), i64::from(*y));
+        }
+        assert_eq!(composed, pixels);
+        images.clear();
+        wire.clear();
+        presenter.repaint(&mut wire).unwrap();
+        apply_wire(&wire, &mut images);
+        assert_eq!(
+            images.len(),
+            count,
+            "Focus return must restore the entire framebuffer"
+        );
+        wire.clear();
+        presenter.clear(&mut wire).unwrap();
+        apply_wire(&wire, &mut images);
+        assert!(images.is_empty());
+        wire.clear();
+        assert_eq!(
+            presenter
+                .maintain_at(now + std::time::Duration::from_secs(10), &mut wire)
+                .unwrap(),
+            0
+        );
+        assert!(
+            wire.is_empty(),
+            "Retired desktops must never be resurrected"
+        );
     }
 
     #[test]
