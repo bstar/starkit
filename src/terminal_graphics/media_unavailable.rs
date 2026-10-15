@@ -21,6 +21,12 @@ impl Frontend {
     pub fn video_playing(&self) -> bool {
         false
     }
+    pub(crate) fn canvas_tick(
+        &mut self,
+        _out: &Sender<ClientMessage>,
+    ) -> Option<(String, u64, std::sync::Arc<crate::image::RgbaImage>)> {
+        None
+    }
     pub fn tick(
         &mut self,
         _out: &Sender<ClientMessage>,
@@ -39,6 +45,15 @@ impl Frontend {
             return Ok(());
         }
         let reply = match message {
+            ToClient::CanvasVideoOpen {
+                session,
+                generation,
+                ..
+            } => Some(ToHost::CanvasVideoError {
+                session,
+                generation,
+                message: "This frontend was built without live video decoding".into(),
+            }),
             ToClient::Open {
                 session,
                 generation,

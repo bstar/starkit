@@ -336,6 +336,9 @@ fn serve_with_policy(
     let mut painted = Instant::now();
     let mut live = super::live_canvas::Transport::new()?;
     let mut local_frames = false;
+    let mut streamed_frames = false;
+    let mut canvas_video_active = false;
+    let mut streamed_at = Instant::now() - Duration::from_secs(1);
     let mut history = VecDeque::from([(
         scene.revision,
         scene.viewport.generation,
@@ -474,9 +477,12 @@ fn serve_with_policy(
                     viewport = v;
                     live = super::live_canvas::Transport::new()?;
                     local_frames = false;
+                    streamed_frames = false;
+                    canvas_video_active = false;
                     controller.attached();
                     if let Some(capabilities) = capabilities {
                         local_frames = capabilities.local_frames;
+                        streamed_frames = capabilities.streamed_frames && !local_frames;
                         p.presentation.enabled = capabilities.presentation_ack;
                         p.presentation_switch = capabilities.presentation_switch;
                         controller.capabilities(capabilities);
@@ -564,7 +570,7 @@ fn serve_with_policy(
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
         for update in controller.live_frames() {
-            if local_frames && peer.is_some() {
+            if (local_frames || streamed_frames) && peer.is_some() {
                 if let Some((stream, generation)) = live.submit(update)? {
                     if let Some(p) = &peer {
                         p.control(ServerMessage::CanvasClose { stream, generation });
@@ -572,14 +578,25 @@ fn serve_with_policy(
                 }
             }
         }
-        if local_frames {
+        if local_frames || streamed_frames {
             if let Some(p) = &peer {
-                for frame in live.flush()? {
-                    p.control(ServerMessage::CanvasFrame { frame });
+                if streamed_frames {
+                    if streamed_at.elapsed() >= Duration::from_millis(100) {
+                        let began = Instant::now();
+                        for frame in live.flush_streamed()? {
+                            p.control(ServerMessage::CanvasStream { frame });
+                        }
+                        streamed_at = began;
+                    }
+                } else {
+                    for frame in live.flush()? {
+                        p.control(ServerMessage::CanvasFrame { frame });
+                    }
                 }
             } else {
                 live = super::live_canvas::Transport::new()?;
                 local_frames = false;
+                streamed_frames = false;
             }
         }
         if let Some(p) = &peer {
@@ -593,6 +610,15 @@ fn serve_with_policy(
                     break;
                 }
                 for message in chunks {
+                    match &message {
+                        ServerMessage::Media {
+                            message: super::media::ToClient::CanvasVideoOpen { .. },
+                        } => canvas_video_active = true,
+                        ServerMessage::Media {
+                            message: super::media::ToClient::CanvasVideoClose { .. },
+                        } => canvas_video_active = false,
+                        _ => {}
+                    }
                     let _ = p.media.try_send(message);
                 }
             }
@@ -671,7 +697,11 @@ fn serve_with_policy(
         // enough for 60 Hz interaction instead of imposing a second 30 Hz clock
         // between compositor input and terminal presentation. Ordinary apps and
         // detached sessions retain the quiet polling interval.
-        let interval = if local_frames && peer.is_some() && live.active() {
+        let interval = if peer.is_some() && canvas_video_active {
+            Duration::from_millis(2)
+        } else if peer.is_some()
+            && (((local_frames || streamed_frames) && live.active()) || canvas_video_active)
+        {
             Duration::from_millis(8)
         } else {
             Duration::from_millis(33)

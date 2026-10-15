@@ -105,6 +105,13 @@ Build optional media through `nix develop` (FFmpeg, clang/libclang, pkg-config;
 ALSA and matching audio plugins on Linux). `--no-default-features` continues to
 link no decoder. Physical macOS audio/Kitty verification remains outstanding.
 
+## Command guides
+
+[`help::Guide`](docs/help.md) is the shared searchable help view for native and
+cell applications. It supports ranked multi-word search, typo tolerance,
+category filters, shortcut discovery and scrollable instructions. Apps supply
+their command catalogue and retain ownership of actions.
+
 ## Start an application
 
 Copy [`examples/starter`](examples/starter) into a new repository. It is an
@@ -237,3 +244,7 @@ for the fixed 120-frame fixture. These deliberately generous CI limits detect
 major regressions; they are not latency targets or proof of 60 Hz rendering.
 Use lower explicit budgets when testing target hardware. The benchmark must
 send a nonzero changed-pixel payload after the initial frame.
+
+The presentation-only `session-frontend` example can stream REEL's demo view and
+sound over SSH without REEL's Linux compositor dependencies on the client.
+See [SSH video/audio](integrations/kitty/README.md#reel-video-and-audio).

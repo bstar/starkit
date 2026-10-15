@@ -24,6 +24,7 @@ pub mod editor_controls;
 pub mod fs;
 #[cfg(feature = "image")]
 pub mod graphics;
+pub mod help;
 pub mod keymap;
 pub mod list;
 pub mod logging;

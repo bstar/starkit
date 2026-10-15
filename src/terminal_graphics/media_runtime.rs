@@ -567,6 +567,7 @@ pub struct Frontend {
     pending_control: Option<(u64, u64, bool, u8)>,
     audio: super::super::audio::Frontend,
     pcm: super::super::audio_v2::Frontend,
+    canvas: super::super::canvas_video::Frontend,
 }
 impl Frontend {
     pub fn video_playing(&self) -> bool {
@@ -579,6 +580,7 @@ impl Frontend {
         self.active = None;
         self.audio.reset();
         self.pcm.reset();
+        self.canvas.reset();
         self.pending_control = None;
     }
     pub fn new(local: bool) -> Self {
@@ -588,13 +590,17 @@ impl Frontend {
             pending_control: None,
             audio: super::super::audio::Frontend::default(),
             pcm: super::super::audio_v2::Frontend::default(),
+            canvas: Default::default(),
         }
     }
     pub fn receive(&mut self, msg: ToClient, out: &Sender<ClientMessage>) -> anyhow::Result<()> {
-        if self.pcm.receive(&msg)? || self.audio.receive(&msg)? {
+        if self.canvas.receive(&msg)? || self.pcm.receive(&msg)? || self.audio.receive(&msg)? {
             return Ok(());
         }
         match msg {
+            ToClient::CanvasVideoOpen { .. }
+            | ToClient::CanvasVideoPacket { .. }
+            | ToClient::CanvasVideoClose { .. } => unreachable!(),
             ToClient::OriginalOpen {
                 session,
                 generation,
@@ -856,6 +862,12 @@ impl Frontend {
             }
         }
         Ok(())
+    }
+    pub(crate) fn canvas_tick(
+        &mut self,
+        out: &Sender<ClientMessage>,
+    ) -> Option<(String, u64, Arc<crate::image::RgbaImage>)> {
+        self.canvas.tick(out)
     }
     pub fn tick(
         &mut self,

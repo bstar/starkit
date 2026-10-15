@@ -6,6 +6,8 @@
 pub mod application;
 pub mod assets;
 mod canvas_frontend;
+#[cfg(feature = "media")]
+mod canvas_video;
 pub mod capabilities;
 mod cell_video;
 pub mod cells;

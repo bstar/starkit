@@ -33,6 +33,12 @@ pub struct Capabilities {
     pub terminal_background: Option<[u8; 3]>,
     #[serde(default)]
     pub local_frames: bool,
+    /// Bounded encoded live frames, without access to the controller's filesystem.
+    #[serde(default)]
+    pub streamed_frames: bool,
+    /// Low-latency H.264 canvas decoding on the terminal computer.
+    #[serde(default)]
+    pub canvas_video: bool,
     #[serde(default)]
     pub key_event_types: bool,
     #[serde(default)]
@@ -137,6 +143,8 @@ impl Capabilities {
         Self {
             terminal_background: None,
             local_frames: false,
+            streamed_frames: false,
+            canvas_video: cfg!(feature = "media") && !remote_terminal,
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,
@@ -212,10 +220,12 @@ mod tests {
         ))
         .unwrap();
         encoded.as_object_mut().unwrap().remove("native_skins");
+        encoded.as_object_mut().unwrap().remove("canvas_video");
         encoded.as_object_mut().unwrap().remove("pixel_mouse");
         encoded.as_object_mut().unwrap().remove("surface_hover");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
         assert!(!old.native_skins);
+        assert!(!old.canvas_video);
         assert!(!old.surface_hover);
         assert!(!old.pixel_mouse);
     }
@@ -224,6 +234,8 @@ mod tests {
         let capabilities = Capabilities {
             terminal_background: None,
             local_frames: false,
+            streamed_frames: false,
+            canvas_video: false,
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,

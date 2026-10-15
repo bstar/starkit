@@ -215,6 +215,27 @@ impl Application {
         let context = self.root.join(format!("{name}.args.json"));
         let failure = self.root.join(format!("{name}.startup-error"));
         if internal {
+            if args[0] == "--graphical-relay" && !args.iter().any(|a| a == "--attach-only") {
+                let directory = args
+                    .iter()
+                    .position(|a| a == "--directory")
+                    .and_then(|i| args.get(i + 1));
+                if !context.exists() {
+                    let domain =
+                        directory.map_or_else(Vec::new, |d| vec!["--directory".into(), d.clone()]);
+                    let bytes = serde_json::to_vec(&Arguments::Context {
+                        args: domain,
+                        directory: std::env::current_dir()?,
+                    })?;
+                    crate::fs::write_private(&context, &bytes)?;
+                } else if directory.is_some() {
+                    let existing = Arguments::read(&context)?;
+                    ensure!(
+                        matches(existing.domain().0, existing.domain().1),
+                        "This session belongs to another resource; choose another session name"
+                    );
+                }
+            }
             if args[0] == "--serve" {
                 struct Cleanup(PathBuf);
                 impl Drop for Cleanup {
@@ -233,39 +254,7 @@ impl Application {
                 }
                 return result;
             }
-            if !socket.exists() {
-                ensure!(
-                    !args.iter().any(|a| a == "--attach-only"),
-                    "Session is no longer running"
-                );
-                let _ = std::fs::remove_file(&failure);
-                use std::os::unix::process::CommandExt;
-                let mut child = Command::new(std::env::current_exe()?)
-                    .args(["--serve", &name])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .process_group(0)
-                    .spawn()?;
-                let start = Instant::now();
-                while !socket.exists() {
-                    if let Some(status) = child.try_wait()? {
-                        let message = std::fs::read_to_string(&failure).unwrap_or_else(|_| {
-                            format!("Application controller exited with {status} before starting")
-                        });
-                        let _ = std::fs::remove_file(&failure);
-                        anyhow::bail!("Could not start application: {message}");
-                    }
-                    if start.elapsed() >= Duration::from_secs(10) {
-                        // Do not leave an invisible controller holding resource locks.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = std::fs::remove_file(&context);
-                        anyhow::bail!("Application controller did not start within 10 seconds");
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
+            let socket = self.ensure_session(&name, args.iter().any(|a| a == "--attach-only"))?;
             return session::relay(&socket);
         }
         if let Some(existing) = self.matching_session(matches)? {
@@ -306,7 +295,46 @@ impl Application {
         }
         Ok(None)
     }
+    fn ensure_session(&self, name: &str, attach_only: bool) -> Result<PathBuf> {
+        let socket = session::socket_path(&self.root, name)?;
+        let context = self.root.join(format!("{name}.args.json"));
+        let failure = self.root.join(format!("{name}.startup-error"));
+        if !socket.exists() {
+            ensure!(!attach_only, "Session is no longer running");
+            let _ = std::fs::remove_file(&failure);
+            use std::os::unix::process::CommandExt;
+            let mut child = Command::new(std::env::current_exe()?)
+                .args(["--serve", name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()?;
+            let start = Instant::now();
+            while !socket.exists() {
+                if let Some(status) = child.try_wait()? {
+                    let message = std::fs::read_to_string(&failure).unwrap_or_else(|_| {
+                        format!("Application controller exited with {status} before starting")
+                    });
+                    let _ = std::fs::remove_file(&failure);
+                    anyhow::bail!("Could not start application: {message}");
+                }
+                if start.elapsed() >= Duration::from_secs(10) {
+                    // Do not leave an invisible controller holding resource locks.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(&context);
+                    anyhow::bail!("Application controller did not start within 10 seconds");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        Ok(socket)
+    }
     fn launch(&self, name: String, attach_only: bool) -> Result<()> {
+        if let Some(bridge) = super::terminal_bridge::probe()? {
+            return bridge.relay(&self.ensure_session(&name, attach_only)?);
+        }
         client::run(Launch {
             executable: std::env::current_exe()?.to_string_lossy().into_owned(),
             host: None,

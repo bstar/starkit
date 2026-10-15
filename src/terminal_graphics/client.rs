@@ -733,10 +733,10 @@ fn run_impl(
         terminal_socket.is_some() || launch.host.is_some(),
     );
     let graphical_available = profile.native;
-    capabilities.local_frames = graphical_available
-        && launch.host.is_none()
-        && terminal_socket.is_none()
-        && !environment.ssh;
+    capabilities.local_frames =
+        graphical_available && launch.host.is_none() && terminal_socket.is_none();
+    capabilities.streamed_frames = graphical_available;
+    capabilities.canvas_video &= graphical_available;
     capabilities.key_event_types = graphical_available
         && crate::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if profile.images == crate::presentation::Images::None {
@@ -840,7 +840,8 @@ fn run_impl(
     let mut geometry_probe = Instant::now();
     let mut reconnect = Instant::now() + Duration::from_secs(5);
     let mut fatal = None;
-    let mut canvases = super::canvas_frontend::Frontend::new()?;
+    let mut canvases =
+        super::canvas_frontend::Frontend::new()?.with_terminal_files(!environment.ssh);
     let mut embedded = super::embedded_input::Router::default();
     let mut capture_keyboard = false;
     let mut frames = 0u64;
@@ -867,6 +868,25 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                ServerMessage::CanvasStream { frame } => {
+                    anyhow::ensure!(
+                        capabilities.streamed_frames,
+                        "Streamed previews were not negotiated"
+                    );
+                    let first = canvases.receive_encoded(&frame)?;
+                    if let Some(c) = &connection {
+                        c.send(ClientMessage::CanvasAck {
+                            stream: frame.stream,
+                            generation: frame.generation,
+                            sequence: frame.sequence,
+                        })?;
+                    }
+                    if first {
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(scene)?;
+                        }
+                    }
+                }
                 ServerMessage::CanvasFrame { frame } => {
                     let first = canvases.receive(&frame, capabilities.local_frames)?;
                     if let Some(c) = &connection {
@@ -939,6 +959,23 @@ fn run_impl(
                 }
                 ServerMessage::Fullscreen { enabled } => window.set(enabled),
                 ServerMessage::Media { message } => {
+                    if matches!(
+                        &message,
+                        super::media::ToClient::CanvasVideoOpen { .. }
+                            | super::media::ToClient::CanvasVideoPacket { .. }
+                            | super::media::ToClient::CanvasVideoClose { .. }
+                    ) {
+                        anyhow::ensure!(
+                            capabilities.canvas_video,
+                            "Live video decoding was not negotiated"
+                        );
+                    }
+                    if let super::media::ToClient::CanvasVideoClose {
+                        stream, generation, ..
+                    } = &message
+                    {
+                        canvases.close(stream, *generation, &mut io::stdout().lock())?;
+                    }
                     if let Some(c) = &connection {
                         media.receive(message, &c.input)?;
                     }
@@ -1098,6 +1135,15 @@ fn run_impl(
             }
         }
         if let Some(c) = &connection {
+            if canvases.video_ready() {
+                if let Some((stream, generation, decoded)) = media.canvas_tick(&c.input) {
+                    if canvases.receive_pixels(stream, generation, decoded)? {
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(scene)?;
+                        }
+                    }
+                }
+            }
             if let Some((id, decoded)) = media
                 .tick(&c.input)
                 .filter(|_| profile.images != crate::presentation::Images::None)
@@ -1464,7 +1510,7 @@ fn run_impl(
             let mut input = custom(&event);
             let routed = last_scene
                 .as_ref()
-                .filter(|_| pixels && capabilities.local_frames)
+                .filter(|_| pixels && (capabilities.local_frames || capabilities.streamed_frames))
                 .map(|scene| embedded.route(&event, scene, capabilities.pixel_mouse));
             if let Some(release) = routed.as_ref().and_then(|r| r.release.clone()) {
                 if let Some(c) = &connection {

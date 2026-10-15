@@ -8,7 +8,28 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+- Start persistent application controllers before attaching a terminal-owned
+  frontend, so normal SSH launch and `--restart` work for fresh sessions.
+
+- Negotiated H.264 live canvases on media-enabled local frontends, using the
+  movie hardware/software decoder helpers on a worker without playback buffering.
+  One access unit in flight, packet/dimension bounds, local Kitty file feedback
+  and epoch cancellation bound work independently of input and recording.
+  Compatibility JPEG/remote-TTY previews retain 10 fps pacing; inline PNGs have
+  an 8 MiB/s per-canvas payload budget. Embedded input also routes streamed frames.
+
+- SIMD bilinear scaling for live canvases, with a direct pixel path at 1:1,
+  reducing per-frame work on the terminal input thread without changing captures.
+- Shared theme-picker pointer handling in native and cell views: wheel to browse,
+  click to choose, and modal bounds that prevent input reaching the underlying app.
+- Shared searchable command guide with native/cell layouts, ranked and typo-tolerant search, category filters, and modal input handling.
+
 ### Added (0.9 candidate)
+
+- Negotiated, bounded live-canvas video over SSH, including inline Kitty
+  presentation in remote shells. A presentation-only frontend example reuses
+  KIT's independent PCM worker for remote app audio without application backend
+  dependencies on the terminal computer.
 
 - Active local live-canvas sessions sample producers every 8 ms, independently
   of UI scene painting. Quiet apps and detached sessions keep the 33 ms timer.

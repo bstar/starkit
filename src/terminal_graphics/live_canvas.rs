@@ -1,5 +1,5 @@
-//! Engine-independent local frames. Pixels never travel in JSON or through a codec.
-//! The session owns bounded mapped files until the local frontend acknowledges them.
+//! Engine-independent live frames. Local sessions retain lossless mapped leases.
+//! Remote previews negotiate bounded encoded frames; source recording stays independent.
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -156,7 +156,7 @@ pub struct Descriptor {
     pub path: PathBuf,
 }
 struct Lease {
-    _file: NamedTempFile,
+    _file: Option<NamedTempFile>,
     descriptor: Descriptor,
 }
 struct Slot {
@@ -304,11 +304,115 @@ impl Transport {
             };
             out.push(descriptor.clone());
             slot.flight = Some(Lease {
-                _file: file,
+                _file: Some(file),
                 descriptor,
             });
         }
         Ok(out)
+    }
+    /// One encoded preview in flight per stream. Recording pixels stay untouched.
+    pub fn flush_streamed(&mut self) -> Result<Vec<EncodedFrame>> {
+        let mut out = Vec::new();
+        for (stream, slot) in &mut self.slots {
+            if slot.flight.is_some() {
+                continue;
+            }
+            let Some(frame) = slot.pending.take() else {
+                continue;
+            };
+            let mut rgba = Vec::with_capacity(frame.width as usize * frame.height as usize * 4);
+            for row in frame.pixels.chunks_exact(frame.stride as usize) {
+                for px in row[..frame.width as usize * 4].as_chunks::<4>().0 {
+                    match frame.format {
+                        PixelFormat::Rgba8 => rgba.extend_from_slice(px),
+                        PixelFormat::Bgra8 => rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]),
+                    }
+                }
+            }
+            let source = crate::image::RgbaImage::from_raw(frame.width, frame.height, rgba)
+                .context("Invalid preview pixels")?;
+            let mut preview = crate::image::DynamicImage::ImageRgba8(source)
+                .thumbnail(1280, 720)
+                .to_rgb8();
+            let bytes = loop {
+                let mut bytes = Vec::new();
+                crate::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 85)
+                    .encode_image(&preview)?;
+                if bytes.len() <= 512 * 1024 {
+                    break bytes;
+                }
+                preview = crate::image::imageops::resize(
+                    &preview,
+                    (preview.width() / 2).max(1),
+                    (preview.height() / 2).max(1),
+                    crate::image::imageops::FilterType::Triangle,
+                );
+            };
+            self.sequence += 1;
+            use base64::Engine as _;
+            out.push(EncodedFrame {
+                stream: stream.clone(),
+                generation: slot.generation,
+                sequence: self.sequence,
+                width: preview.width(),
+                height: preview.height(),
+                presentation_ns: frame.presentation_ns,
+                jpeg: base64::engine::general_purpose::STANDARD.encode(bytes),
+            });
+            slot.flight = Some(Lease {
+                _file: None,
+                descriptor: Descriptor {
+                    stream: stream.clone(),
+                    generation: slot.generation,
+                    sequence: self.sequence,
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.stride,
+                    format: frame.format,
+                    presentation_ns: frame.presentation_ns,
+                    path: PathBuf::new(),
+                },
+            });
+        }
+        Ok(out)
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncodedFrame {
+    pub stream: String,
+    pub generation: u64,
+    pub sequence: u64,
+    pub width: u32,
+    pub height: u32,
+    pub presentation_ns: u64,
+    pub jpeg: String,
+}
+impl EncodedFrame {
+    pub(crate) fn decode(&self) -> Result<Arc<crate::image::RgbaImage>> {
+        ensure!(stream_valid(&self.stream), "Invalid live stream name");
+        ensure!(
+            self.width > 0 && self.width <= 1280 && self.height > 0 && self.height <= 720,
+            "Invalid streamed preview dimensions"
+        );
+        ensure!(
+            self.jpeg.len() <= 700_000,
+            "Streamed preview exceeds budget"
+        );
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&self.jpeg)?;
+        let dimensions = crate::image::ImageReader::with_format(
+            std::io::Cursor::new(&bytes),
+            crate::image::ImageFormat::Jpeg,
+        )
+        .into_dimensions()?;
+        ensure!(
+            dimensions == (self.width, self.height),
+            "Streamed preview dimensions disagree"
+        );
+        Ok(Arc::new(
+            crate::image::load_from_memory_with_format(&bytes, crate::image::ImageFormat::Jpeg)?
+                .to_rgba8(),
+        ))
     }
 }
 /// Import only on a negotiated, same-machine session. No remote path access.
@@ -383,6 +487,40 @@ pub(crate) fn import(descriptor: &Descriptor, local: bool) -> Result<Arc<crate::
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn streamed_frames_are_self_contained_coalesced_and_acknowledged() {
+        let mut transport = Transport::new().unwrap();
+        let frame = |value| Update::Frame {
+            stream: "remote".into(),
+            generation: 2,
+            frame: Frame {
+                width: 8,
+                height: 8,
+                stride: 32,
+                format: PixelFormat::Rgba8,
+                presentation_ns: 123,
+                pixels: Arc::new([value, 20, 30, 255].repeat(64)),
+            },
+        };
+        transport.submit(frame(10)).unwrap();
+        let first = transport.flush_streamed().unwrap().pop().unwrap();
+        transport.submit(frame(40)).unwrap();
+        transport.submit(frame(80)).unwrap();
+        assert!(transport.flush_streamed().unwrap().is_empty());
+        transport.acknowledge("remote", 1, first.sequence);
+        assert!(transport.flush_streamed().unwrap().is_empty());
+        transport.acknowledge("remote", 2, first.sequence);
+        let next = transport.flush_streamed().unwrap().pop().unwrap();
+        assert!(next.sequence > first.sequence);
+        drop(transport); // No producer path or file is needed by the receiver.
+        let wire = serde_json::to_string(&next).unwrap();
+        assert!(!wire.contains("path"));
+        let decoded: EncodedFrame = serde_json::from_str(&wire).unwrap();
+        assert!((decoded.decode().unwrap().get_pixel(0, 0)[0] as i32 - 80).abs() < 8);
+        let mut bad = decoded;
+        bad.width = 7;
+        assert!(bad.decode().is_err());
+    }
     fn frame() -> Frame {
         Frame {
             width: 2,

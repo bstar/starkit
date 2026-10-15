@@ -92,6 +92,64 @@ impl Picker {
             .saturating_add_signed(delta)
             .min(self.choices().len().saturating_sub(1));
     }
+    /// Route modal pointer input against the same native rows that are painted.
+    /// Wheel movement only moves the highlight; a left click applies a theme.
+    pub fn pointer_native(
+        &mut self,
+        style: &Style,
+        bounds: R,
+        action: &str,
+        x: u16,
+        y: u16,
+        button: u8,
+    ) -> Outcome {
+        if !bounds.contains(x, y) {
+            return Outcome::Consumed;
+        }
+        match action {
+            "scroll_up" => self.navigate(-3),
+            "scroll_down" => self.navigate(3),
+            "down" if button == 0 => {
+                if let Some(hit) = self
+                    .native(style, bounds.width, bounds.height)
+                    .hit(x - bounds.x, y - bounds.y)
+                {
+                    return self.action(&hit.action);
+                }
+            }
+            _ => {}
+        }
+        Outcome::Consumed
+    }
+    /// Cell fallback uses identical filtering, row offsets and click semantics.
+    pub fn pointer_cell(
+        &mut self,
+        area: Rect,
+        x: u16,
+        y: u16,
+        down: bool,
+        scroll: Option<bool>,
+    ) -> Outcome {
+        if !area.contains((x, y).into()) {
+            return Outcome::Consumed;
+        }
+        if down && y == area.bottom().saturating_sub(1) && x >= area.right().saturating_sub(12) {
+            return Outcome::Cancel;
+        }
+        if let Some(down) = scroll {
+            self.navigate(if down { 3 } else { -3 });
+        } else if down {
+            let inner = crate::chrome::overlay::inner(area);
+            let rows = usize::from(inner.height.saturating_sub(1));
+            let first = self.selected.saturating_sub(rows.saturating_sub(1));
+            if inner.contains((x, y).into()) && y > inner.y {
+                if let Some(entry) = self.choices().get(first + usize::from(y - inner.y - 1)) {
+                    return Outcome::Select(entry.id.clone());
+                }
+            }
+        }
+        Outcome::Consumed
+    }
     /// Opaque actions from native rows. Validate against the displayed list so
     /// stale pointer targets cannot select a filtered-out theme.
     pub fn action(&self, action: &str) -> Outcome {
@@ -334,6 +392,59 @@ mod tests {
         assert!(Picker::is_shortcut("char:t", 4));
         assert!(!Picker::is_shortcut("char:t", 0));
         assert!(!Picker::is_shortcut("char:t", 6));
+    }
+    #[test]
+    fn pointer_navigation_uses_visible_rows_without_applying_on_scroll() {
+        let mut p = picker();
+        let bounds = R::new(30, 40, 680, 400);
+        let original = p.highlighted().unwrap().to_string();
+        assert_eq!(
+            p.pointer_native(&Style::default(), bounds, "scroll_down", 0, 0, 0),
+            Outcome::Consumed
+        );
+        assert_eq!(p.highlighted(), Some(original.as_str()));
+        p.pointer_native(&Style::default(), bounds, "scroll_down", 100, 150, 0);
+        assert_ne!(p.highlighted(), Some(original.as_str()));
+        let s = p.native(&Style::default(), bounds.width, bounds.height);
+        let h = s
+            .hits
+            .iter()
+            .find(|h| h.action.starts_with("theme-select:"))
+            .unwrap();
+        let expected = p.action(&h.action);
+        assert_eq!(
+            p.pointer_native(
+                &Style::default(),
+                bounds,
+                "down",
+                bounds.x + h.rect.x + 1,
+                bounds.y + h.rect.y + 1,
+                1
+            ),
+            Outcome::Consumed
+        );
+        assert_eq!(
+            p.pointer_native(
+                &Style::default(),
+                bounds,
+                "down",
+                bounds.x + h.rect.x + 1,
+                bounds.y + h.rect.y + 1,
+                0
+            ),
+            expected
+        );
+        let area = Rect::new(3, 5, 60, 12);
+        p.pointer_cell(area, 8, 8, false, Some(true));
+        let mut buffer = Buffer::empty(area);
+        let registry = Registry::<Theme>::new(crate::paths::Paths::new(
+            "starkit-picker-test",
+            "STARKIT_PICKER_TEST_DIR",
+            "STARKIT_PICKER_TEST_CONFIG_DIR",
+        ));
+        p.render_cell(area, &mut buffer, &registry.default_theme());
+        let result = p.pointer_cell(area, area.x + 2, area.y + 2, true, None);
+        assert!(matches!(result, Outcome::Select(_)));
     }
     #[test]
     fn native_and_cell_presentations_are_bounded() {

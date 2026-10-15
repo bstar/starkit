@@ -73,6 +73,12 @@ def main():
         environment = dict(os.environ)
         environment.setdefault("CARGO_TARGET_DIR", str(consumer / "target" / "kit-compat"))
         command = args.cargo or ["check", "--workspace", "--all-targets", "--all-features"]
+        if command[0] == "test":
+            # A shared target may reuse a binary from a removed disposable
+            # tree, including env!("CARGO_MANIFEST_DIR") fixture paths. Force
+            # consumer units to rebuild for this tree; dependency caches stay.
+            for source in tree.rglob("*.rs"):
+                source.touch()
         subprocess.run(["cargo", command[0], "--config", patch, *command[1:]],
                        cwd=tree, env=environment, check=True)
 

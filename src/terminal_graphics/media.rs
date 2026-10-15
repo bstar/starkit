@@ -7,6 +7,23 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {
+    CanvasVideoOpen {
+        session: u64,
+        generation: u64,
+        stream: String,
+        width: u32,
+        height: u32,
+    },
+    CanvasVideoPacket {
+        session: u64,
+        generation: u64,
+        data: String,
+    },
+    CanvasVideoClose {
+        session: u64,
+        generation: u64,
+        stream: String,
+    },
     /// Enable full-song caching for a negotiated audio_cache_v1 frontend.
     PcmPause {
         session: u64,
@@ -103,6 +120,15 @@ pub enum ToClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToHost {
+    CanvasVideoCredit {
+        session: u64,
+        generation: u64,
+    },
+    CanvasVideoError {
+        session: u64,
+        generation: u64,
+        message: String,
+    },
     /// Source frames received and stored on the presentation machine.
     PcmBuffered {
         session: u64,
