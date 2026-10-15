@@ -39,6 +39,10 @@ pub struct Capabilities {
     /// Low-latency H.264 canvas decoding on the terminal computer.
     #[serde(default)]
     pub canvas_video: bool,
+    /// Full-resolution (up to 4K), 4:4:4 H.264 canvases with 8 MiB access units.
+    /// Absent on legacy peers, which retain their 720p/2 MiB contract.
+    #[serde(default)]
+    pub canvas_video_high_quality: bool,
     #[serde(default)]
     pub key_event_types: bool,
     #[serde(default)]
@@ -145,6 +149,7 @@ impl Capabilities {
             local_frames: false,
             streamed_frames: false,
             canvas_video: cfg!(feature = "media") && !remote_terminal,
+            canvas_video_high_quality: cfg!(feature = "media") && !remote_terminal,
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,
@@ -221,11 +226,16 @@ mod tests {
         .unwrap();
         encoded.as_object_mut().unwrap().remove("native_skins");
         encoded.as_object_mut().unwrap().remove("canvas_video");
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("canvas_video_high_quality");
         encoded.as_object_mut().unwrap().remove("pixel_mouse");
         encoded.as_object_mut().unwrap().remove("surface_hover");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
         assert!(!old.native_skins);
         assert!(!old.canvas_video);
+        assert!(!old.canvas_video_high_quality);
         assert!(!old.surface_hover);
         assert!(!old.pixel_mouse);
     }
@@ -236,6 +246,7 @@ mod tests {
             local_frames: false,
             streamed_frames: false,
             canvas_video: false,
+            canvas_video_high_quality: false,
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,

@@ -737,6 +737,7 @@ fn run_impl(
         graphical_available && launch.host.is_none() && terminal_socket.is_none();
     capabilities.streamed_frames = graphical_available;
     capabilities.canvas_video &= graphical_available;
+    capabilities.canvas_video_high_quality &= capabilities.canvas_video;
     capabilities.key_event_types = graphical_available
         && crate::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if profile.images == crate::presentation::Images::None {

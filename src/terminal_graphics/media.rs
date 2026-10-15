@@ -4,6 +4,12 @@ use crate::media_types::Quality;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Bounds advertised by `canvas_video_high_quality`. A single access unit is
+/// always below the protocol's 16 MiB serialized-message limit after base64.
+pub const CANVAS_VIDEO_MAX_WIDTH: u32 = 3840;
+pub const CANVAS_VIDEO_MAX_HEIGHT: u32 = 2160;
+pub const CANVAS_VIDEO_MAX_PACKET: usize = 8 * 1024 * 1024;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToClient {

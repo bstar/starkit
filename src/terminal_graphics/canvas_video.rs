@@ -1,7 +1,9 @@
 //! Movie-style local decoding for interactive canvases, without a playback clock.
 //! One access unit in flight bounds work; interdependent packets are never dropped.
 use super::{
-    media::{ToClient, ToHost},
+    media::{
+        ToClient, ToHost, CANVAS_VIDEO_MAX_HEIGHT, CANVAS_VIDEO_MAX_PACKET, CANVAS_VIDEO_MAX_WIDTH,
+    },
     protocol::ClientMessage,
 };
 use anyhow::{ensure, Context, Result};
@@ -9,7 +11,7 @@ use base64::Engine as _;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::Arc;
 
-const MAX_PACKET: usize = 2 * 1024 * 1024;
+const MAX_PACKET: usize = CANVAS_VIDEO_MAX_PACKET;
 type Decoded = Result<Arc<crate::image::RgbaImage>, String>;
 struct Active {
     session: u64,
@@ -49,8 +51,8 @@ impl Frontend {
                 height,
             } => {
                 ensure!(
-                    (2..=1280).contains(width)
-                        && (2..=720).contains(height)
+                    (2..=CANVAS_VIDEO_MAX_WIDTH).contains(width)
+                        && (2..=CANVAS_VIDEO_MAX_HEIGHT).contains(height)
                         && !stream.is_empty()
                         && stream.len() <= 96
                         && stream
@@ -222,6 +224,9 @@ mod tests {
         }
     }
     fn packets() -> Vec<String> {
+        packets_at(64, 32, ffmpeg_next::format::Pixel::YUV420P)
+    }
+    fn packets_at(width: u32, height: u32, format: ffmpeg_next::format::Pixel) -> Vec<String> {
         use ffmpeg_next as av;
         crate::media::init().unwrap();
         let codec = av::encoder::find_by_name("libx264").unwrap();
@@ -229,9 +234,9 @@ mod tests {
             .encoder()
             .video()
             .unwrap();
-        context.set_width(64);
-        context.set_height(32);
-        context.set_format(av::format::Pixel::YUV420P);
+        context.set_width(width);
+        context.set_height(height);
+        context.set_format(format);
         context.set_time_base((1, 60));
         context.set_max_b_frames(0);
         let mut options = av::Dictionary::new();
@@ -241,10 +246,24 @@ mod tests {
         let mut encoder = context.open_with(options).unwrap();
         let mut packets = vec![];
         for i in 0..3 {
-            let mut frame = av::frame::Video::new(av::format::Pixel::YUV420P, 64, 32);
+            let mut frame = av::frame::Video::new(format, width, height);
             frame.data_mut(0).fill(60 + i * 30);
             frame.data_mut(1).fill(128);
             frame.data_mut(2).fill(128);
+            if format == av::format::Pixel::YUV444P {
+                for plane in [1, 2] {
+                    let stride = frame.stride(plane);
+                    for row in frame
+                        .data_mut(plane)
+                        .chunks_mut(stride)
+                        .take(height as usize)
+                    {
+                        for (x, value) in row.iter_mut().take(width as usize).enumerate() {
+                            *value = if (x + plane) % 2 == 0 { 40 } else { 220 };
+                        }
+                    }
+                }
+            }
             frame.set_pts(Some(i64::from(i)));
             encoder.send_frame(&frame).unwrap();
             let mut packet = av::Packet::empty();
@@ -330,6 +349,67 @@ mod tests {
         client.reset();
         assert!(client.active.is_none());
     }
+    #[test]
+    fn full_hd_444_decode_preserves_single_pixel_color_edges() {
+        let mut client = Frontend::default();
+        let (out, replies) = bounded(4);
+        client
+            .receive(&ToClient::CanvasVideoOpen {
+                session: 42,
+                generation: 7,
+                stream: "desktop".into(),
+                width: 1920,
+                height: 1080,
+            })
+            .unwrap();
+        client.tick(&out);
+        let _ = replies.try_recv();
+        client
+            .receive(&ToClient::CanvasVideoPacket {
+                session: 42,
+                generation: 7,
+                data: packets_at(1920, 1080, ffmpeg_next::format::Pixel::YUV444P).remove(0),
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (_, _, pixels) = loop {
+            if let Some(frame) = client.tick(&out) {
+                break frame;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Full-HD 4:4:4 decode failed: {:?}",
+                replies.try_iter().collect::<Vec<_>>()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(pixels.dimensions(), (1920, 1080));
+        let a = pixels.get_pixel(960, 540);
+        let b = pixels.get_pixel(961, 540);
+        assert!(
+            a[0].abs_diff(b[0]) > 100 && a[2].abs_diff(b[2]) > 100,
+            "One-pixel chroma edges were averaged: {a:?}, {b:?}"
+        );
+    }
+
+    #[test]
+    fn native_canvas_accepts_full_hd_and_4k_without_resizing() {
+        for (width, height) in [(1920, 1080), (3840, 2160)] {
+            let mut client = Frontend::default();
+            client
+                .receive(&ToClient::CanvasVideoOpen {
+                    session: 1,
+                    generation: 1,
+                    stream: "desktop".into(),
+                    width,
+                    height,
+                })
+                .unwrap();
+            assert!(client.active.is_some());
+            client.reset();
+        }
+    }
+
     #[test]
     fn live_video_rejects_bad_bounds_and_oversized_packets_before_decode() {
         let mut client = Frontend::default();

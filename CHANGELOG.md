@@ -8,6 +8,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.10 candidate)
+
+- Additive `canvas_video_high_quality` negotiation for full-resolution H.264
+  canvases up to 3840×2160, including 4:4:4 software decoding. Legacy peers keep
+  their 1280×720/2 MiB contract; new clients accept bounded 8 MiB access units.
+
+
 - Start persistent application controllers before attaching a terminal-owned
   frontend, so normal SSH launch and `--restart` work for fresh sessions.
 
