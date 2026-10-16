@@ -23,6 +23,86 @@ def cursor_hidden(hidden):
     send(objc.objc_getClass(b'NSCursor'), objc.sel_registerName(b'setHiddenUntilMouseMoves:'), hidden)
 
 
+def pointer_visibility(boss, window, enabled, client_pid=None):
+    """Balanced Cocoa hiding, scoped to this live client and Kitty window.
+
+    The timer restores after SIGKILL, moving outside Kitty, tab switches and
+    application focus loss, independently of the terminal client's event loop.
+    """
+    if os.uname().sysname != 'Darwin':
+        return
+    from kitty.fast_data_types import add_timer, remove_timer, get_os_window_size
+    states = getattr(boss, '_star_pointer_visibility', None)
+    if states is None:
+        states = boss._star_pointer_visibility = {}
+    existing = states.get(window.id)
+    if existing:
+        existing['enabled'] = enabled
+        if not enabled:
+            existing['refresh']()
+        return
+    if not enabled:
+        return
+    if not isinstance(client_pid, int) or client_pid <= 0:
+        raise ValueError('Invalid local cursor owner')
+    import ctypes
+    from kitty.utils import platform_window_id
+    class Point(ctypes.Structure):
+        _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double)]
+    objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    sel = lambda name: objc.sel_registerName(name.encode())
+    cls = lambda name: objc.objc_getClass(name.encode())
+    send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    perform = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    flag = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    point = ctypes.CFUNCTYPE(Point, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    number = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, Point, ctypes.c_long)(('objc_msgSend', objc))
+    integer = ctypes.CFUNCTYPE(ctypes.c_ulonglong, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    item = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulonglong)(('objc_msgSend', objc))
+    state = states[window.id] = {'enabled': True, 'hidden': False, 'timer': None}
+    native_id = int(platform_window_id(window.os_window_id))
+    def refresh(timer_id=None):
+        alive = True
+        try:
+            os.kill(client_pid, 0)
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            pass
+        active = boss.active_window
+        owned = state['enabled'] and alive and boss.window_id_map.get(window.id) is window
+        desired = owned and active is window and flag(send(cls('NSApplication'), sel('sharedApplication')), sel('isActive'))
+        if desired:
+            location = point(cls('NSEvent'), sel('mouseLocation'))
+            desired = number(cls('NSWindow'), sel('windowNumberAtPoint:belowWindowWithWindowNumber:'), location, 0) == native_id
+            if desired:
+                windows = send(send(cls('NSApplication'), sel('sharedApplication')), sel('windows'))
+                native_window = next((w for w in (item(windows, sel('objectAtIndex:'), i) for i in range(integer(windows, sel('count'))))
+                                      if integer(w, sel('windowNumber')) == native_id), None)
+                size = get_os_window_size(window.os_window_id)
+                desired = bool(native_window and size and size['width'] and size['height'])
+                if desired:
+                    local = point(native_window, sel('mouseLocationOutsideOfEventStream'))
+                    x = local.x * size['framebuffer_width'] / size['width']
+                    y = (size['height'] - local.y) * size['framebuffer_height'] / size['height']
+                    g = window.geometry
+                    desired = g.left <= x < g.right and g.top <= y < g.bottom
+        if desired != state['hidden']:
+            perform(cls('NSCursor'), sel('hide' if desired else 'unhide'))
+            state['hidden'] = desired
+        if not owned:
+            if state['timer'] is not None:
+                remove_timer(state['timer'])
+            states.pop(window.id, None)
+    state['refresh'] = refresh
+    state['timer'] = add_timer(refresh, 1 / 30, True)
+    refresh()
+
+
 def platform_fullscreen(boss, window):
     from kitty.utils import platform_window_id
     native_id = platform_window_id(window.os_window_id)
@@ -126,13 +206,18 @@ def handle_result(args, result, target_window_id, boss):
     window = boss.window_id_map.get(target_window_id)
     if window is None:
         raise RuntimeError('Kitty window no longer exists')
-    if len(args) != 2 or args[1] not in ('enter', 'leave', 'leave-cleanup', 'cursor-hide', 'cursor-show'):
+    pointer_hide = len(args) == 2 and args[1].startswith('pointer-hide:') and args[1].split(':', 1)[1].isdigit()
+    if len(args) != 2 or (not pointer_hide and args[1] not in ('enter', 'leave', 'leave-cleanup', 'cursor-hide', 'cursor-show', 'pointer-show')):
         raise ValueError('Invalid STAR/KIT fullscreen action')
+    if pointer_hide or args[1] == 'pointer-show':
+        pointer_visibility(boss, window, pointer_hide, int(args[1].split(':', 1)[1]) if pointer_hide else None)
+        return
     if args[1].startswith('cursor-'):
         cursor_hidden(args[1] == 'cursor-hide')
         return
     if args[1] != 'enter':
         cursor_hidden(False)
+        pointer_visibility(boss, window, False)
     apply(boss, window, args[1] == 'enter')
     if args[1] == 'leave-cleanup':
         os.unlink(args[0])

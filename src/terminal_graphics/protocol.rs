@@ -420,6 +420,11 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    /// Negotiated frontend-only mouse visibility over a named live canvas.
+    PointerPolicy {
+        canvas: String,
+        hidden: bool,
+    },
     Export {
         message: super::exports::ToClient,
     },

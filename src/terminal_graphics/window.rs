@@ -12,12 +12,14 @@ use std::{
 pub struct Window {
     sender: Sender<Action>,
     cursor_hidden: Cell<bool>,
+    pointer_hidden: Cell<bool>,
     pub notices: Receiver<String>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 enum Action {
     Fullscreen(bool),
     Cursor(bool),
+    Pointer(bool),
 }
 impl Window {
     pub fn new() -> Result<Self> {
@@ -39,8 +41,11 @@ impl Window {
                     Action::Fullscreen(false) => ("leave", false),
                     Action::Cursor(true) => ("cursor-hide", true),
                     Action::Cursor(false) => ("cursor-show", true),
+                    Action::Pointer(true) => ("pointer-hide", true),
+                    Action::Pointer(false) => ("pointer-show", true),
                 };
-                match operation_action(&path,name) {
+                let action = if name == "pointer-hide" {format!("pointer-hide:{}",std::process::id())} else {name.into()};
+                match operation_action(&path,&action) {
                     Ok(()) => {},
                     Err(error) => { tracing::warn!(%error, "Kitty window operation failed"); if !cursor { let _ = tx.try_send(format!("Desktop fullscreen unavailable: {error:#}. Use Kitty’s fullscreen shortcut.")); } }
                 }
@@ -54,12 +59,21 @@ impl Window {
         Ok(Self {
             sender,
             cursor_hidden: Cell::new(false),
+            pointer_hidden: Cell::new(false),
             notices,
             worker: Some(worker),
         })
     }
     pub fn set(&self, enabled: bool) {
         let _ = self.sender.try_send(Action::Fullscreen(enabled));
+    }
+    pub fn pointer_hidden(&self, hidden: bool) {
+        if cfg!(target_os = "macos")
+            && hidden != self.pointer_hidden.get()
+            && self.sender.try_send(Action::Pointer(hidden)).is_ok()
+        {
+            self.pointer_hidden.set(hidden);
+        }
     }
     pub fn cursor(&self, hidden: bool) {
         if cfg!(target_os = "macos")

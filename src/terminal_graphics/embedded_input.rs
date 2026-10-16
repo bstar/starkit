@@ -41,6 +41,36 @@ pub fn monotonic_ns() -> u64 {
     let time = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
     time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
 }
+/// Hit testing for presentation policies uses the same foreground exclusions
+/// as embedded input. Menus and floating controls always retain a visible cursor.
+pub(super) fn canvas_at(scene: &Scene, point: [f64; 2]) -> Option<&str> {
+    if scene
+        .components
+        .iter()
+        .any(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
+    {
+        return None;
+    }
+    for (index, c) in scene.components.iter().enumerate().rev() {
+        if matches!(c,Component::Surface{surface,..} if !surface.hits.is_empty())
+            && super::pointer::surface_point(scene, index, point).is_some()
+        {
+            return None;
+        }
+        if let Component::LiveCanvas {
+            id,
+            view,
+            interactive: true,
+            ..
+        } = c
+        {
+            if view.to_content(point, false).is_some() {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
 #[derive(Default)]
 pub(crate) struct Router {
     active: Option<String>,
@@ -261,6 +291,8 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         };
+        assert_eq!(canvas_at(&scene, [120., 120.]), None);
+        assert_eq!(canvas_at(&scene, [600., 400.]), Some("desktop"));
         let mut router = Router::default();
         assert!(
             !router.route(&mouse(120, 120), &scene, true).consumed,
@@ -274,6 +306,7 @@ mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         ));
+        assert_eq!(canvas_at(&scene, [600., 400.]), None);
         let routed = router.route(&key, &scene, true);
         assert!(!routed.consumed && routed.release.is_some());
         assert!(router.active.is_none());

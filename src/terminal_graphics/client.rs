@@ -852,6 +852,8 @@ fn run_impl(
     let mut mouse_down = false;
     let mut pending_event = None;
     let mut resize_handles = Vec::new();
+    let mut hidden_pointer_canvas: Option<String> = None;
+    let mut desktop_pointer_position: Option<[f64; 2]> = None;
     let mut pointer_regions = Vec::new();
     let mut pointer_placements: Vec<super::placement::Placement> = Vec::new();
     let mut assets = super::assets::FrontendAssets::default();
@@ -988,6 +990,11 @@ fn run_impl(
                     }
                     persist_generation = Some(size.generation);
                 }
+                ServerMessage::PointerPolicy { canvas, hidden } => {
+                    if capabilities.pointer_hiding {
+                        hidden_pointer_canvas = hidden.then_some(canvas);
+                    }
+                }
                 ServerMessage::Fullscreen { enabled } => window.set(enabled),
                 ServerMessage::Export { message } => {
                     if let (Some(receiver), Some(c)) = (&mut exports, &connection) {
@@ -1045,6 +1052,9 @@ fn run_impl(
                             "Remote session restarted; previous commands will not be replayed"
                         );
                     }
+                    hidden_pointer_canvas = None;
+                    desktop_pointer_position = None;
+                    window.pointer_hidden(false);
                     epoch = Some(e);
                     tracing::debug!("Graphical session handshake received");
                     connected = true;
@@ -1364,6 +1374,9 @@ fn run_impl(
                 io::stdout().write_all(b"\x1b[=5u")?;
                 capture_keyboard = false;
             }
+            hidden_pointer_canvas = None;
+            desktop_pointer_position = None;
+            window.pointer_hidden(false);
             media.reset();
             if let Some(receiver) = &mut exports {
                 receiver.reset();
@@ -1475,6 +1488,18 @@ fn run_impl(
                 && rect.width == scene.viewport.columns && rect.height == scene.viewport.rows)
             })
         });
+        window.pointer_hidden(
+            connected
+                && focused
+                && pixels
+                && hidden_pointer_canvas.as_ref().is_some_and(|wanted| {
+                    desktop_pointer_position
+                        .zip(last_scene.as_ref())
+                        .is_some_and(|(point, scene)| {
+                            super::embedded_input::canvas_at(scene, point) == Some(wanted.as_str())
+                        })
+                }),
+        );
         window.cursor(
             cinema
                 && connected
@@ -1551,6 +1576,18 @@ fn run_impl(
                 }
             })?;
             pending_event = boundary;
+            if let Event::Mouse(mouse) = &event {
+                desktop_pointer_position = Some(if capabilities.pixel_mouse {
+                    [f64::from(mouse.column), f64::from(mouse.row)]
+                } else {
+                    [
+                        (f64::from(mouse.column) + 0.5) * f64::from(size.width)
+                            / f64::from(size.columns.max(1)),
+                        (f64::from(mouse.row) + 0.5) * f64::from(size.height)
+                            / f64::from(size.rows.max(1)),
+                    ]
+                });
+            }
             let mut input = custom(&event);
             let routed = last_scene
                 .as_ref()
@@ -1702,6 +1739,8 @@ fn run_impl(
                     }
                     Event::Paste(text) => input = Some(Input::Paste { text }),
                     Event::FocusLost => {
+                        desktop_pointer_position = None;
+                        window.pointer_hidden(false);
                         focused = false;
                         mouse_down = false;
                         hover_point = None;

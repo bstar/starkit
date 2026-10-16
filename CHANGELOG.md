@@ -8,6 +8,12 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.12 candidate)
+
+- Theme-derived rounded desktop viewport frames that stay outside native video placements.
+
+- Negotiated, frontend-local mouse hiding over a live canvas, restoring the cursor over controls, on focus loss, disconnect and exit. Kitty/Cocoa owns a balanced cursor hide with a client-lifetime watchdog.
+
 ### Added (0.11 candidate)
 
 - Opt-in soft workspace chrome, negotiated native theme gradients with bounded raster caching, floating panels and context menus.

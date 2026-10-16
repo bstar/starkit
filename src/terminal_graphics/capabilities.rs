@@ -36,6 +36,9 @@ pub struct Capabilities {
     /// Opt-in delivery of exported files into a frontend-owned directory.
     #[serde(default)]
     pub file_exports: bool,
+    /// Local Kitty/Cocoa mouse visibility, separate from captured video pixels.
+    #[serde(default)]
+    pub pointer_hiding: bool,
     /// Bounded encoded live frames, without access to the controller's filesystem.
     #[serde(default)]
     pub streamed_frames: bool,
@@ -151,6 +154,8 @@ impl Capabilities {
     ) -> Self {
         Self {
             terminal_background: None,
+            pointer_hiding: cfg!(target_os = "macos")
+                && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
             local_frames: false,
             streamed_frames: false,
@@ -237,11 +242,13 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("canvas_video_high_quality");
+        encoded.as_object_mut().unwrap().remove("pointer_hiding");
         encoded.as_object_mut().unwrap().remove("file_exports");
         encoded.as_object_mut().unwrap().remove("native_gradients");
         encoded.as_object_mut().unwrap().remove("pixel_mouse");
         encoded.as_object_mut().unwrap().remove("surface_hover");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
+        assert!(!old.pointer_hiding);
         assert!(!old.file_exports);
         assert!(!old.native_gradients);
         assert!(!old.native_skins);
@@ -254,6 +261,8 @@ mod tests {
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
             terminal_background: None,
+            pointer_hiding: cfg!(target_os = "macos")
+                && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
             local_frames: false,
             streamed_frames: false,

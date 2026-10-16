@@ -216,6 +216,34 @@ impl Style {
         }
         s
     }
+    /// Quiet rounded frame around a desktop viewport. Keep live content inset
+    /// by six pixels so native video placements cannot cover the outline.
+    pub fn desktop_frame(&self, s: &mut Surface, rect: R) {
+        let rect = R::new(
+            rect.x,
+            rect.y,
+            rect.width.min(s.width.saturating_sub(rect.x)),
+            rect.height.min(s.height.saturating_sub(rect.y)),
+        );
+        if rect.width < 8 || rect.height < 8 {
+            return;
+        }
+        let rgb = |c: [u8; 3]| Rgb::new(c[0], c[1], c[2]);
+        let bg = rgb(self.palette.bg);
+        let fg = rgb(self.palette.fg);
+        let accent = rgb(self.palette.accent);
+        let radius = 10.min(rect.width / 2).min(rect.height / 2);
+        s.nodes.push(Primitive::Border {
+            rect,
+            color: bg.mix(fg, 0.18).mix(accent, 0.16).to_hex(),
+            radius,
+        });
+        s.nodes.push(Primitive::Border {
+            rect: R::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2),
+            color: bg.mix(accent, 0.10).to_hex(),
+            radius: radius.saturating_sub(1),
+        });
+    }
     /// Theme wallpaper is a small primitive; the frontend caches bounded rasters.
     /// Older frontends receive the solid theme base when gradients are disabled.
     pub fn wallpaper(&self, s: &mut Surface, rect: R) {
