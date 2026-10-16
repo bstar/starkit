@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"
@@ -18,6 +18,8 @@ name = "starkit"
 path = "src/lib.rs"
 
 [features]
+# Codec-free original-file streaming and SSH transport for native players.
+streaming = ["dep:serde_json", "dep:sha2", "dep:tempfile"]
 # Pictures are on by default because both applications draw them and a
 # terminal that cannot is detected at runtime, not at compile time. Turning
 # them off is for a build that must not link an image decoder at all.

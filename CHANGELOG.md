@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.13 experimental movie-TV branch)
+
+- Optional codec-free `streaming` engine: loopback HTTP GET/HEAD and bounded original-file byte ranges, opaque media IDs, bearer-token sessions, catalog/clock endpoints and supervised OpenSSH bootstrap/forwarding. Applications own catalog and channel policy; native clients can reuse the wire contract without terminal rendering.
+
 ### Fixed (0.12.2 candidate)
 
 - Overlap live-canvas transport and decoding with a bounded two-frame window, retaining ordered H.264 packets and compatibility with existing hosts. Disconnect both decoder channels before joining on close or reattachment.
