@@ -78,6 +78,15 @@ impl Router {
             release: None,
             keyboard: None,
         };
+        if scene
+            .components
+            .iter()
+            .any(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
+        {
+            result.release = self.release();
+            result.keyboard = Some(false);
+            return result;
+        }
         if self.active.as_ref().is_some_and(|active| {
             !scene
                 .components
@@ -143,19 +152,29 @@ impl Router {
                 (f64::from(mouse.row) + 0.5) * f64::from(v.height) / f64::from(v.rows.max(1)),
             ]
         };
-        let canvas = scene.components.iter().rev().find_map(|c| match c {
-            Component::LiveCanvas {
+        let mut canvas = None;
+        for (component, c) in scene.components.iter().enumerate().rev() {
+            if self.pressed == 0
+                && matches!(c,Component::Surface{surface,..} if !surface.hits.is_empty())
+                && super::pointer::surface_point(scene, component, point).is_some()
+            {
+                break;
+            }
+            if let Component::LiveCanvas {
                 id,
                 view,
                 interactive: true,
                 ..
-            } if (self.pressed != 0 && self.active.as_ref() == Some(id))
-                || view.to_content(point, false).is_some() =>
+            } = c
             {
-                Some((id.clone(), *view))
+                if (self.pressed != 0 && self.active.as_ref() == Some(id))
+                    || view.to_content(point, false).is_some()
+                {
+                    canvas = Some((id.clone(), *view));
+                    break;
+                }
             }
-            _ => None,
-        });
+        }
         let Some((id, view)) = canvas else {
             if matches!(mouse.kind, MouseEventKind::Down(_)) && self.active.is_some() {
                 result.release = self.release();
@@ -208,6 +227,58 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn floating_controls_and_menus_take_input_above_live_apps() {
+        use crate::crossterm::event::MouseEvent;
+        use crate::native_surface::{style::Style, PixelRect};
+        let viewport = super::super::protocol::Viewport::default();
+        let style = Style::default().with_soft_workspace();
+        let mut scene = style.scene(viewport);
+        scene.components.push(Component::LiveCanvas {
+            rect: crate::ratatui::layout::Rect::new(0, 0, viewport.columns, viewport.rows).into(),
+            id: "desktop".into(),
+            view: crate::content_view::ContentView::new(
+                [1920, 1080],
+                PixelRect::new(0, 0, viewport.width as u16, viewport.height as u16),
+            )
+            .unwrap(),
+            interactive: true,
+        });
+        let mut dock = style.floating_panel(440, 54);
+        style.tool(
+            &mut dock,
+            PixelRect::new(8, 8, 100, 34),
+            "Apps",
+            "launch",
+            false,
+        );
+        style.mount(&mut scene, dock, 100, 100).unwrap();
+        let mouse = |x, y| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let mut router = Router::default();
+        assert!(
+            !router.route(&mouse(120, 120), &scene, true).consumed,
+            "Dock must receive its own click"
+        );
+        assert!(router.route(&mouse(600, 400), &scene, true).consumed);
+        scene.components.push(Component::Menu {
+            rect: crate::ratatui::layout::Rect::new(0, 0, 30, 10).into(),
+        });
+        let key = Event::Key(crate::crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ));
+        let routed = router.route(&key, &scene, true);
+        assert!(!routed.consumed && routed.release.is_some());
+        assert!(router.active.is_none());
+        assert!(!router.route(&mouse(600, 400), &scene, true).consumed);
+    }
     #[test]
     fn letterbox_drag_focus_loss_and_toolbar_release_are_balanced() {
         use crate::crossterm::event::MouseEvent;

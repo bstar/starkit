@@ -230,6 +230,8 @@ pub struct Style {
     pub workspace: WorkspaceColors,
     pub metrics: Metrics,
     bitmap: bool,
+    soft_workspace: bool,
+    gradients: bool,
     #[cfg(feature = "terminal-graphics")]
     frames: std::sync::Arc<Frames>,
 }
@@ -254,6 +256,8 @@ impl Style {
             workspace: WorkspaceColors::new(&palette),
             metrics: Metrics::default(),
             bitmap: true,
+            soft_workspace: false,
+            gradients: true,
             #[cfg(feature = "terminal-graphics")]
             frames: {
                 use std::sync::{Arc, OnceLock};
@@ -272,6 +276,11 @@ impl Style {
     /// Disabling artwork uses the same palette and geometry with primitives.
     pub fn with_native_skins(mut self, supported: bool) -> Self {
         self.bitmap = supported;
+        self
+    }
+    /// Negotiate gradient support separately from legacy bitmap skins.
+    pub fn with_native_gradients(mut self, supported: bool) -> Self {
+        self.gradients = supported;
         self
     }
     pub fn surface(&self, width: u16, height: u16) -> Surface {
@@ -408,6 +417,10 @@ impl Style {
         });
     }
     pub fn button(&self, s: &mut Surface, rect: R, text: &str, action: &str, active: bool) {
+        if self.soft_workspace {
+            self.tool(s, rect, text, action, active);
+            return;
+        }
         if rect.width == 0 || rect.height == 0 {
             return;
         }
@@ -469,12 +482,14 @@ impl Style {
             .unwrap()
             .mix(Rgb::parse_hex(&color).unwrap(), 0.12)
             .to_hex();
-        s.fill(rect, &bg, 2);
-        s.nodes.push(Primitive::Border {
-            rect,
-            color: color.clone(),
-            radius: 2,
-        });
+        s.fill(rect, &bg, if self.soft_workspace { 6 } else { 2 });
+        if !self.soft_workspace {
+            s.nodes.push(Primitive::Border {
+                rect,
+                color: color.clone(),
+                radius: 2,
+            });
+        }
         s.text_centered(rect, text, &self.colors.ink, self.metrics.font, true);
         s.hits.push(HitRegion {
             rect,

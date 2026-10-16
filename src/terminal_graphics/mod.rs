@@ -32,6 +32,7 @@ pub mod terminal_bridge;
 
 pub use protocol::{Component, Input, Rect, Scene, Viewport};
 
+pub mod exports;
 pub mod media;
 #[cfg(feature = "media")]
 mod original;

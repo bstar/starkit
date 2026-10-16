@@ -33,6 +33,9 @@ pub struct Capabilities {
     pub terminal_background: Option<[u8; 3]>,
     #[serde(default)]
     pub local_frames: bool,
+    /// Opt-in delivery of exported files into a frontend-owned directory.
+    #[serde(default)]
+    pub file_exports: bool,
     /// Bounded encoded live frames, without access to the controller's filesystem.
     #[serde(default)]
     pub streamed_frames: bool,
@@ -88,6 +91,8 @@ pub struct Capabilities {
     pub native_skins: bool,
     #[serde(default)]
     pub native_paths: bool,
+    #[serde(default)]
+    pub native_gradients: bool,
     /// Native surface background hover is painted without controller input.
     #[serde(default)]
     pub surface_hover: bool,
@@ -146,6 +151,7 @@ impl Capabilities {
     ) -> Self {
         Self {
             terminal_background: None,
+            file_exports: false,
             local_frames: false,
             streamed_frames: false,
             canvas_video: cfg!(feature = "media") && !remote_terminal,
@@ -188,6 +194,7 @@ impl Capabilities {
             native_surfaces: true,
             physical_text: true,
             native_skins: true,
+            native_gradients: cfg!(feature = "terminal-graphics"),
             native_paths: true,
             surface_hover: true,
             pixel_layout: true,
@@ -230,9 +237,13 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("canvas_video_high_quality");
+        encoded.as_object_mut().unwrap().remove("file_exports");
+        encoded.as_object_mut().unwrap().remove("native_gradients");
         encoded.as_object_mut().unwrap().remove("pixel_mouse");
         encoded.as_object_mut().unwrap().remove("surface_hover");
         let old: Capabilities = serde_json::from_value(encoded).unwrap();
+        assert!(!old.file_exports);
+        assert!(!old.native_gradients);
         assert!(!old.native_skins);
         assert!(!old.canvas_video);
         assert!(!old.canvas_video_high_quality);
@@ -243,6 +254,7 @@ mod tests {
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
             terminal_background: None,
+            file_exports: false,
             local_frames: false,
             streamed_frames: false,
             canvas_video: false,
@@ -268,6 +280,7 @@ mod tests {
             native_surfaces: true,
             physical_text: true,
             native_skins: true,
+            native_gradients: cfg!(feature = "terminal-graphics"),
             native_paths: true,
             surface_hover: true,
             pixel_layout: true,

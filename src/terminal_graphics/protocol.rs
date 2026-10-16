@@ -377,6 +377,9 @@ pub enum Input {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    Export {
+        message: super::exports::ToHost,
+    },
     CanvasAck {
         stream: String,
         generation: u64,
@@ -417,6 +420,9 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    Export {
+        message: super::exports::ToClient,
+    },
     CanvasStream {
         frame: super::live_canvas::EncodedFrame,
     },

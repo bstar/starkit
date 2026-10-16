@@ -56,8 +56,17 @@ pub(super) struct Painter {
     assets: HashMap<String, Asset>,
     skin_assets: crate::native_surface::skin::assets::AssetCache,
     skin_scaled: HashMap<SkinKey, Pixmap>,
+    wallpapers: HashMap<WallpaperKey, Pixmap>,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct WallpaperKey {
+    width: u32,
+    height: u32,
+    base: [u8; 3],
+    accent: [u8; 3],
+    secondary: [u8; 3],
+}
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct SkinKey {
     asset: String,
@@ -395,6 +404,60 @@ impl Painter {
                     color,
                     true,
                 ),
+                Primitive::Gradient {
+                    base,
+                    accent,
+                    secondary,
+                    ..
+                } => {
+                    let width = rect[2].round().max(1.) as u32;
+                    let height = rect[3].round().max(1.) as u32;
+                    let pixels = u64::from(width) * u64::from(height);
+                    if pixels > 16_000_000 {
+                        fill(canvas, rect, &crate::native_surface::style::hex(*base));
+                        continue;
+                    }
+                    let key = WallpaperKey {
+                        width,
+                        height,
+                        base: *base,
+                        accent: *accent,
+                        secondary: *secondary,
+                    };
+                    if !self.wallpapers.contains_key(&key) {
+                        let retained: u64 = self
+                            .wallpapers
+                            .values()
+                            .map(|p| u64::from(p.width()) * u64::from(p.height()))
+                            .sum();
+                        if self.wallpapers.len() >= 3 || retained + pixels > 16_000_000 {
+                            self.wallpapers.clear();
+                        }
+                        let wallpaper = crate::native_surface::style::workspace::Wallpaper {
+                            base: *base,
+                            accent: *accent,
+                            secondary: *secondary,
+                        };
+                        let mut bytes = wallpaper.bgra(width, height);
+                        for pixel in bytes.as_chunks_mut::<4>().0 {
+                            pixel.swap(0, 2);
+                        }
+                        let size = tiny_skia::IntSize::from_wh(width, height)
+                            .expect("bounded wallpaper size");
+                        self.wallpapers.insert(
+                            key.clone(),
+                            Pixmap::from_vec(bytes, size).expect("opaque wallpaper pixels"),
+                        );
+                    }
+                    canvas.draw_pixmap(
+                        rect[0].round() as i32,
+                        rect[1].round() as i32,
+                        self.wallpapers[&key].as_ref(),
+                        &tiny_skia::PixmapPaint::default(),
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
                 Primitive::Text {
                     text,
                     color,
@@ -644,6 +707,7 @@ impl Painter {
             assets: HashMap::new(),
             skin_assets: crate::native_surface::skin::assets::AssetCache::new(32_000_000),
             skin_scaled: HashMap::new(),
+            wallpapers: HashMap::new(),
         }
     }
 
@@ -996,12 +1060,12 @@ impl Painter {
                 false,
                 Some(placement),
             )?;
-            crate::image::GenericImage::copy_from(
+            crate::image::imageops::overlay(
                 &mut frame,
                 &layer,
-                u32::from(placement.target.x),
-                u32::from(placement.target.y),
-            )?;
+                i64::from(placement.target.x),
+                i64::from(placement.target.y),
+            );
         }
         Ok(frame)
     }

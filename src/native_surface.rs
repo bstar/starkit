@@ -34,6 +34,13 @@ impl PixelRect {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Primitive {
+    /// Negotiate `native_gradients` before sending theme wallpaper primitives.
+    Gradient {
+        rect: PixelRect,
+        base: [u8; 3],
+        accent: [u8; 3],
+        secondary: [u8; 3],
+    },
     Fill {
         rect: PixelRect,
         color: String,
@@ -77,7 +84,8 @@ pub enum Primitive {
 impl Primitive {
     pub fn rect(&self) -> PixelRect {
         match self {
-            Self::Fill { rect, .. }
+            Self::Gradient { rect, .. }
+            | Self::Fill { rect, .. }
             | Self::Border { rect, .. }
             | Self::Text { rect, .. }
             | Self::Icon { rect, .. }
@@ -272,7 +280,9 @@ impl Surface {
                         *y = scale(*y)?;
                     }
                 }
-                Primitive::Sprite { rect: r, .. } | Primitive::Icon { rect: r, .. } => rect(r)?,
+                Primitive::Gradient { rect: r, .. }
+                | Primitive::Sprite { rect: r, .. }
+                | Primitive::Icon { rect: r, .. } => rect(r)?,
             }
         }
         for rule in &mut self.text_rules {
@@ -373,6 +383,7 @@ impl Surface {
         for node in &self.nodes {
             anyhow::ensure!(inside(node.rect()), "primitive outside surface");
             match node {
+                Primitive::Gradient { .. } => {}
                 Primitive::Path {
                     rect,
                     points,

@@ -100,10 +100,60 @@ pub(super) enum HoverTarget {
     Row(super::protocol::Rect),
     Surface { component: usize, fill: usize },
 }
-impl HoverTarget {
-    pub fn is_surface(self) -> bool {
-        matches!(self, Self::Surface { .. })
+/// Native surface pixel geometry is shared by hover and embedded input routing.
+pub(super) fn surface_point(
+    scene: &super::protocol::Scene,
+    component: usize,
+    point: [f64; 2],
+) -> Option<[u16; 2]> {
+    use super::protocol::Component;
+    let Component::Surface { rect, surface } = scene.components.get(component)? else {
+        return None;
+    };
+    let ordinal=scene.components[..component].iter().filter(|c|matches!(c,Component::Surface{rect:r,surface:s} if r==rect && s.width==surface.width && s.height==surface.height)).count();
+    let target = if let Some(p) = scene
+        .placements
+        .iter()
+        .filter(|p| {
+            p.source == *rect
+                && p.target.width == surface.width
+                && p.target.height == surface.height
+        })
+        .nth(ordinal)
+    {
+        p.target
+    } else if scene.placements.is_empty() {
+        let v = scene.viewport;
+        let x = u32::from(rect.x) * v.width / u32::from(v.columns.max(1));
+        let y = u32::from(rect.y) * v.height / u32::from(v.rows.max(1));
+        let right =
+            (u32::from(rect.x) + u32::from(rect.width)) * v.width / u32::from(v.columns.max(1));
+        let bottom =
+            (u32::from(rect.y) + u32::from(rect.height)) * v.height / u32::from(v.rows.max(1));
+        crate::native_surface::PixelRect::new(
+            x as u16,
+            y as u16,
+            (right - x) as u16,
+            (bottom - y) as u16,
+        )
+    } else {
+        return None;
+    };
+    if target.width == 0
+        || target.height == 0
+        || point[0] < f64::from(target.x)
+        || point[1] < f64::from(target.y)
+        || point[0] >= f64::from(target.x) + f64::from(target.width)
+        || point[1] >= f64::from(target.y) + f64::from(target.height)
+    {
+        return None;
     }
+    Some([
+        ((point[0] - f64::from(target.x)) * f64::from(surface.width) / f64::from(target.width))
+            as u16,
+        ((point[1] - f64::from(target.y)) * f64::from(surface.height) / f64::from(target.height))
+            as u16,
+    ])
 }
 pub(super) fn hovered(
     scene: &super::protocol::Scene,
@@ -111,43 +161,36 @@ pub(super) fn hovered(
     pixel: Option<[u32; 2]>,
 ) -> Option<HoverTarget> {
     use super::protocol::Component;
-    if scene
+    let modal = scene
         .components
         .iter()
-        .any(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
-    {
-        return None;
-    }
-    if let Some([x, y]) = pixel.filter(|_| scene.placements.is_empty()) {
-        // Surface rectangles use the scene's logical grid. Project directly
-        // from physical pixels so adjacent rows do not inherit cell stepping.
-        let v = scene.viewport;
+        .rposition(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }));
+    if let Some(point) = pixel {
         for (component, c) in scene.components.iter().enumerate().rev() {
-            let Component::Surface { rect, surface } = c else {
+            if modal.is_some_and(|index| component <= index) {
+                break;
+            }
+            let Component::Surface { surface, .. } = c else {
                 continue;
             };
-            let left = u32::from(rect.x) * v.width / u32::from(v.columns.max(1));
-            let top = u32::from(rect.y) * v.height / u32::from(v.rows.max(1));
-            let right =
-                (u32::from(rect.x) + u32::from(rect.width)) * v.width / u32::from(v.columns.max(1));
-            let bottom =
-                (u32::from(rect.y) + u32::from(rect.height)) * v.height / u32::from(v.rows.max(1));
-            if x < left || x >= right || y < top || y >= bottom {
+            let Some([x, y]) = surface_point(scene, component, point.map(f64::from)) else {
                 continue;
-            }
-            let sx = ((x - left) * u32::from(surface.width) / (right - left)) as u16;
-            let sy = ((y - top) * u32::from(surface.height) / (bottom - top)) as u16;
+            };
             if let Some(fill) = surface.hover_fills.iter().rposition(|h| {
                 surface
                     .nodes
                     .get(usize::from(h.node))
-                    .is_some_and(|n| n.rect().contains(sx, sy))
+                    .is_some_and(|n| n.rect().contains(x, y))
             }) {
                 return Some(HoverTarget::Surface { component, fill });
             }
         }
     }
-    hovered_row(scene, logical).map(HoverTarget::Row)
+    if modal.is_some() {
+        None
+    } else {
+        hovered_row(scene, logical).map(HoverTarget::Row)
+    }
 }
 pub(super) fn paint_hover(
     scene: &super::protocol::Scene,
@@ -291,6 +334,45 @@ mod tests {
             modifiers: 0,
         });
         scene
+    }
+    #[test]
+    fn placed_workspace_menus_have_precise_local_hover() {
+        use super::super::protocol::Component;
+        use crate::native_surface::{
+            style::{workspace::ContextItem, Style},
+            PixelRect,
+        };
+        let style = Style::default().with_soft_workspace();
+        let mut scene = style.scene(super::super::protocol::Viewport::default());
+        scene.components.push(Component::Menu {
+            rect: super::super::protocol::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 10,
+            },
+        });
+        style
+            .mount(
+                &mut scene,
+                style.context_menu(
+                    302,
+                    "DESKTOP",
+                    &[ContextItem::new("Apps", "", "launch")],
+                    None,
+                ),
+                77,
+                91,
+            )
+            .unwrap();
+        assert_eq!(surface_point(&scene, 1, [91., 135.]), Some([14, 44]));
+        let target = hovered(&scene, None, Some([91, 135]));
+        assert!(matches!(
+            target,
+            Some(HoverTarget::Surface { component: 1, .. })
+        ));
+        assert!(hovered(&scene, None, Some([76, 135])).is_none());
+        assert_eq!(scene.placements[0].target, PixelRect::new(77, 91, 302, 76));
     }
     #[test]
     fn hover_covers_metadata_without_changing_marks_selection_or_base_scene() {

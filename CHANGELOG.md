@@ -8,6 +8,18 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.11 candidate)
+
+- Opt-in soft workspace chrome, negotiated native theme gradients with bounded raster caching, floating panels and context menus.
+- Credit-bounded export delivery to a frontend-owned folder with checksum verification, atomic no-clobber completion and disconnect cleanup.
+
+### Fixed (0.11 candidate)
+
+- Keep independently mounted native surfaces in their own physical placements,
+  preventing duplicated, shifted desktop docks and overlapping controls.
+- Composite transparent placements over existing pixels so rounded docks and focus outlines preserve the desktop beneath them.
+- Route modal and floating-control input ahead of live canvases and preserve precise local hover across physical placements.
+
 ### Added (0.10 candidate)
 
 - Additive `canvas_video_high_quality` negotiation for full-resolution H.264

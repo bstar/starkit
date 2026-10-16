@@ -577,6 +577,7 @@ pub fn run(launch: Launch) -> Result<()> {
         || None,
         PresentationOptions::default(),
         None,
+        None,
     )
 }
 
@@ -588,6 +589,7 @@ pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> R
         None,
         || None,
         PresentationOptions::default(),
+        None,
         None,
     )
 }
@@ -625,7 +627,7 @@ pub fn run_with_options(
     notices: fn() -> Option<String>,
     options: PresentationOptions,
 ) -> Result<()> {
-    run_impl(launch, custom, true, None, notices, options, None)
+    run_impl(launch, custom, true, None, notices, options, None, None)
 }
 
 /// Frontend owned by a local terminal integration, attached through the existing SSH TTY.
@@ -650,7 +652,16 @@ pub fn run_terminal_socket_with_options(
         attach_only: true,
         play: None,
     };
-    run_impl(launch, custom, true, Some(path), || None, options, None)
+    run_impl(
+        launch,
+        custom,
+        true,
+        Some(path),
+        || None,
+        options,
+        None,
+        None,
+    )
 }
 
 /// Mode and its local-only preference file. Explicit launch overrides do not persist.
@@ -674,6 +685,7 @@ pub fn run_with_preference(
         notices,
         options,
         Some(preference),
+        None,
     )
 }
 pub fn run_terminal_socket_with_preference(
@@ -698,8 +710,23 @@ pub fn run_terminal_socket_with_preference(
         || None,
         options,
         Some(preference),
+        None,
     )
 }
+/// Receive exports only inside a directory explicitly chosen by this frontend.
+pub fn run_with_exports(launch: Launch, directory: std::path::PathBuf) -> Result<()> {
+    run_impl(
+        launch,
+        |_| None,
+        false,
+        None,
+        || None,
+        PresentationOptions::default(),
+        None,
+        Some(directory),
+    )
+}
+#[allow(clippy::too_many_arguments)]
 fn run_impl(
     launch: Launch,
     custom: fn(&Event) -> Option<Input>,
@@ -708,6 +735,7 @@ fn run_impl(
     notices: fn() -> Option<String>,
     options: PresentationOptions,
     preference: Option<PresentationPreference>,
+    export_directory: Option<std::path::PathBuf>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("An interactive terminal is required to attach an application session");
@@ -719,6 +747,8 @@ fn run_impl(
     let terminal_background = super::terminal_theme::background();
     let graphics = crate::graphics::Graphics::probe_if_tty(crate::graphics::Mode::Auto);
     let mut capabilities = super::capabilities::Capabilities::detected(&graphics);
+    capabilities.file_exports = export_directory.is_some();
+    let mut exports = export_directory.map(super::exports::Receiver::new);
     capabilities.terminal_background = terminal_background.map(|c| [c.r, c.g, c.b]);
     capabilities.local_media = cfg!(feature = "media")
         && launch.host.is_none()
@@ -959,6 +989,13 @@ fn run_impl(
                     persist_generation = Some(size.generation);
                 }
                 ServerMessage::Fullscreen { enabled } => window.set(enabled),
+                ServerMessage::Export { message } => {
+                    if let (Some(receiver), Some(c)) = (&mut exports, &connection) {
+                        c.send(ClientMessage::Export {
+                            message: receiver.receive(message),
+                        })?;
+                    }
+                }
                 ServerMessage::Media { message } => {
                     if matches!(
                         &message,
@@ -1000,6 +1037,9 @@ fn run_impl(
                         break;
                     }
                     if epoch.as_ref().is_some_and(|old| old != &e) {
+                        if let Some(receiver) = &mut exports {
+                            receiver.reset();
+                        }
                         assets.clear();
                         tracing::warn!(
                             "Remote session restarted; previous commands will not be replayed"
@@ -1325,6 +1365,9 @@ fn run_impl(
                 capture_keyboard = false;
             }
             media.reset();
+            if let Some(receiver) = &mut exports {
+                receiver.reset();
+            }
             window.set(false);
             video_layer.frame = None;
             video_layer.clear(&mut io::stdout().lock())?;
@@ -1650,8 +1693,9 @@ fn run_impl(
                             modifiers: m.modifiers.bits(),
                         });
                         if action == "move"
-                            && previous_hover.is_some_and(super::pointer::HoverTarget::is_surface)
-                            && hovered_row.is_some_and(super::pointer::HoverTarget::is_surface)
+                            && matches!((previous_hover, hovered_row),
+                                (Some(super::pointer::HoverTarget::Surface { component: a, .. }),
+                                 Some(super::pointer::HoverTarget::Surface { component: b, .. })) if a == b)
                         {
                             input = None;
                         }

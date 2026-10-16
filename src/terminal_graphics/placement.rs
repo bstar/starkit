@@ -121,7 +121,7 @@ impl Placement {
     pub fn project(&self, scene: &Scene) -> Scene {
         use unicode_width::UnicodeWidthChar;
         let source = self.source;
-        let spans = self
+        let spans: Vec<_> = self
             .overlay
             .as_ref()
             .unwrap_or(&scene.spans)
@@ -161,7 +161,7 @@ impl Placement {
             .iter()
             .position(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
             .unwrap_or(scene.components.len());
-        let components = scene
+        let components: Vec<_> = scene
             .components
             .iter()
             .enumerate()
@@ -169,6 +169,32 @@ impl Placement {
                 let overlay = index >= overlay_start;
                 if overlay != self.overlay.is_some() {
                     return None;
+                }
+                // Mounted native surfaces own physical pixel placements. An
+                // enclosing pane must not rasterize them again using its own
+                // cell transform (for example, a floating desktop dock).
+                if let Component::Surface { rect, surface } = c {
+                    let matches = |p: &&Placement| {
+                        p.source == *rect
+                            && p.target.width == surface.width
+                            && p.target.height == surface.height
+                    };
+                    let ordinal = scene.components[..index]
+                        .iter()
+                        .filter(|other| {
+                            matches!(other, Component::Surface { rect: r, surface: s }
+                            if r == rect && s.width == surface.width && s.height == surface.height)
+                        })
+                        .count();
+                    if scene
+                        .placements
+                        .iter()
+                        .filter(matches)
+                        .nth(ordinal)
+                        .is_some_and(|owner| owner != self)
+                    {
+                        return None;
+                    }
                 }
                 if !encloses(source, c.rect()) {
                     return None;
@@ -188,6 +214,16 @@ impl Placement {
                 Some(c)
             })
             .collect();
+        let transparent = spans.is_empty()
+            && components.iter().any(|c| {
+                matches!(c,
+            Component::Surface { surface, .. } if surface.background == "transparent")
+            })
+            && components.iter().all(|c| {
+                matches!(c,
+                Component::Surface {surface,..} if surface.background == "transparent")
+                    || matches!(c, Component::Menu { .. } | Component::Dialog { .. })
+            });
         Scene {
             viewport: Viewport {
                 columns: source.width,
@@ -204,7 +240,11 @@ impl Placement {
             revision: scene.revision,
             interaction: scene.interaction,
             scroll_interaction: None,
-            background: scene.background.clone(),
+            background: if transparent {
+                "transparent".into()
+            } else {
+                scene.background.clone()
+            },
             foreground: scene.foreground.clone(),
             accent: scene.accent.clone(),
             border: scene.border.clone(),
@@ -295,6 +335,111 @@ pub fn column(area: PixelRect, gap: u16, heights: &[u16], flexible: usize) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn floating_surfaces_are_not_repainted_inside_the_enclosing_desktop() {
+        use crate::native_surface::{style::Style, Surface};
+        for (width, height, columns, rows) in [
+            (1200, 800, 100, 40),
+            (1301, 803, 97, 41),
+            (796, 482, 88, 28),
+        ] {
+            let v = Viewport {
+                width,
+                height,
+                columns,
+                rows,
+                ..Viewport::default()
+            };
+            let style = Style::default();
+            let mut scene = style.scene(v);
+            scene.background = "#101010".into();
+            let base = PixelRect::new(8, 80, width as u16 - 16, height as u16 - 110);
+            let dock = PixelRect::new((width as u16 - 440) / 2, height as u16 - 81, 440, 42);
+            style
+                .mount(
+                    &mut scene,
+                    Surface::new(base.width, base.height, "#202020".into()),
+                    base.x,
+                    base.y,
+                )
+                .unwrap();
+            style
+                .mount(
+                    &mut scene,
+                    Surface::new(dock.width, dock.height, "#f000ff".into()),
+                    dock.x,
+                    dock.y,
+                )
+                .unwrap();
+            for placement in &scene.placements {
+                let projected = placement.project(&scene);
+                assert_eq!(
+                    projected
+                        .components
+                        .iter()
+                        .filter(|c| matches!(c, Component::Surface { .. }))
+                        .count(),
+                    1
+                );
+            }
+            let image = super::super::renderer::render_reference(&scene).unwrap();
+            for (x, y, pixel) in image.enumerate_pixels() {
+                let expected = if dock.contains(x as u16, y as u16) {
+                    [240, 0, 255, 255]
+                } else if base.contains(x as u16, y as u16) {
+                    [32, 32, 32, 255]
+                } else {
+                    [16, 16, 16, 255]
+                };
+                assert_eq!(
+                    pixel.0, expected,
+                    "Shifted duplicate at {x},{y} in {width}x{height}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn subcell_surfaces_with_matching_logical_bounds_keep_distinct_owners() {
+        use crate::native_surface::{style::Style, Surface};
+        let style = Style::default();
+        let mut scene = style.scene(Viewport::default());
+        style
+            .mount(&mut scene, Surface::new(1200, 800, "#202020".into()), 0, 0)
+            .unwrap();
+        style
+            .mount(&mut scene, Surface::new(4, 4, "#ff0000".into()), 14, 21)
+            .unwrap();
+        style
+            .mount(&mut scene, Surface::new(4, 4, "#00ff00".into()), 17, 24)
+            .unwrap();
+        assert_eq!(scene.placements[1].source, scene.placements[2].source);
+        for (index, color) in ["#202020", "#ff0000", "#00ff00"].into_iter().enumerate() {
+            let projected = scene.placements[index].project(&scene);
+            assert_eq!(projected.components.len(), 1);
+            assert!(
+                matches!(&projected.components[0],Component::Surface{surface,..} if surface.background==color)
+            );
+        }
+    }
+    #[test]
+    fn surfaces_without_an_independent_placement_still_project_into_the_parent() {
+        use crate::native_surface::{style::Style, Surface};
+        let style = Style::default();
+        let mut scene = style.scene(Viewport::default());
+        style
+            .mount(&mut scene, Surface::new(1200, 800, "#202020".into()), 0, 0)
+            .unwrap();
+        scene.components.push(Component::Surface {
+            rect: Rect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            },
+            surface: Surface::new(24, 40, "#ff0000".into()),
+        });
+        assert_eq!(scene.placements[0].project(&scene).components.len(), 2);
+    }
     #[test]
     fn panel_padding_uses_the_same_edges_for_paint_and_input() {
         for (cw, ch) in [(8, 16), (10, 20), (17, 34)] {

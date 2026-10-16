@@ -30,6 +30,7 @@ pub trait Controller {
     fn output_pending(&mut self, _pending: bool) {}
     fn scene(&mut self, viewport: Viewport) -> Scene;
     fn input(&mut self, input: Input);
+    fn export(&mut self, _message: super::exports::ToHost) {}
     fn media(&mut self, _message: super::media::ToHost) {}
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
         vec![]
@@ -451,6 +452,7 @@ fn serve_with_policy(
                         }
                     }
                 }
+                ClientMessage::Export { message } => controller.export(message),
                 ClientMessage::Media { message } => controller.media(message),
                 ClientMessage::Hello {
                     version,
