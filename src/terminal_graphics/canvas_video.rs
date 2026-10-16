@@ -1,5 +1,6 @@
 //! Movie-style local decoding for interactive canvases, without a playback clock.
-//! One access unit in flight bounds work; interdependent packets are never dropped.
+//! Two decoded/pending frames bound work while transport overlaps decoding.
+//! Interdependent packets are never dropped; credits retain the existing wire contract.
 use super::{
     media::{
         ToClient, ToHost, CANVAS_VIDEO_MAX_HEIGHT, CANVAS_VIDEO_MAX_PACKET, CANVAS_VIDEO_MAX_WIDTH,
@@ -12,6 +13,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::Arc;
 
 const MAX_PACKET: usize = CANVAS_VIDEO_MAX_PACKET;
+const FRAME_WINDOW: usize = 2;
 type Decoded = Result<Arc<crate::image::RgbaImage>, String>;
 struct Active {
     session: u64,
@@ -19,8 +21,8 @@ struct Active {
     stream: String,
     input: Sender<Vec<u8>>,
     output: Receiver<Decoded>,
-    outstanding: bool,
-    credit: bool,
+    outstanding: usize,
+    permitted: bool,
     failure: Option<String>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -28,6 +30,10 @@ impl Drop for Active {
     fn drop(&mut self) {
         let (closed, _) = bounded(1);
         drop(std::mem::replace(&mut self.input, closed));
+        // A pipelined decoder may be blocked publishing its second frame.
+        // Disconnect both directions before joining, including on epoch changes.
+        let (_, closed) = bounded(1);
+        drop(std::mem::replace(&mut self.output, closed));
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -61,7 +67,7 @@ impl Frontend {
                     "Invalid live video bounds or stream"
                 );
                 self.reset();
-                let (input, packets) = bounded::<Vec<u8>>(1);
+                let (input, packets) = bounded::<Vec<u8>>(FRAME_WINDOW);
                 let (frames, output) = bounded(1);
                 let (width, height) = (*width, *height);
                 let worker = std::thread::Builder::new().name("star-canvas-decoder".into()).spawn(move || {
@@ -110,8 +116,8 @@ impl Frontend {
                     stream: stream.clone(),
                     input,
                     output,
-                    outstanding: false,
-                    credit: true,
+                    outstanding: 0,
+                    permitted: false,
                     failure: None,
                     worker: Some(worker),
                 });
@@ -127,7 +133,7 @@ impl Frontend {
                     .filter(|a| a.session == *session && a.generation == *generation)
                 {
                     ensure!(
-                        !a.outstanding && !a.credit,
+                        a.permitted && a.outstanding < FRAME_WINDOW,
                         "Live video exceeded its frame credit"
                     );
                     ensure!(
@@ -142,7 +148,8 @@ impl Frontend {
                     a.input
                         .try_send(bytes)
                         .context("Live video decoder unavailable")?;
-                    a.outstanding = true;
+                    a.outstanding += 1;
+                    a.permitted = false;
                 }
             }
             ToClient::CanvasVideoClose {
@@ -170,8 +177,7 @@ impl Frontend {
         let mut frame = None;
         match a.output.try_recv() {
             Ok(Ok(pixels)) => {
-                a.outstanding = false;
-                a.credit = true;
+                a.outstanding -= 1;
                 frame = Some((a.stream.clone(), a.generation, pixels));
             }
             Ok(Err(message)) => {
@@ -194,7 +200,8 @@ impl Frontend {
             }
             return None;
         }
-        if a.credit
+        if !a.permitted
+            && a.outstanding < FRAME_WINDOW
             && out
                 .try_send(ClientMessage::Media {
                     message: ToHost::CanvasVideoCredit {
@@ -204,7 +211,7 @@ impl Frontend {
                 })
                 .is_ok()
         {
-            a.credit = false;
+            a.permitted = true;
         }
         frame
     }
@@ -349,6 +356,83 @@ mod tests {
         client.reset();
         assert!(client.active.is_none());
     }
+    #[test]
+    fn credits_overlap_decode_but_stop_at_two_unpresented_frames() {
+        // Hold decoding explicitly so scheduling cannot hide a serial pipeline.
+        let (input, packets) = bounded(FRAME_WINDOW);
+        let (frames, output) = bounded(1);
+        let mut client = Frontend {
+            active: Some(Active {
+                session: 1,
+                generation: 7,
+                stream: "desktop".into(),
+                input,
+                output,
+                outstanding: 0,
+                permitted: false,
+                failure: None,
+                worker: None,
+            }),
+        };
+        let (out, replies) = bounded(4);
+        let packet = ToClient::CanvasVideoPacket {
+            session: 1,
+            generation: 7,
+            data: "AQ==".into(),
+        };
+        client.tick(&out);
+        assert_eq!(replies.len(), 1);
+        client.receive(&packet).unwrap();
+        // No decoded output exists, yet the next frame can travel already.
+        assert!(client.tick(&out).is_none());
+        assert_eq!(replies.len(), 2);
+        client.receive(&packet).unwrap();
+        assert_eq!(packets.len(), FRAME_WINDOW);
+        assert!(client.tick(&out).is_none());
+        assert_eq!(replies.len(), 2);
+        assert!(client.receive(&packet).is_err());
+        frames
+            .send(Ok(Arc::new(crate::image::RgbaImage::new(64, 32))))
+            .unwrap();
+        assert!(client.tick(&out).is_some());
+        assert_eq!(replies.len(), 3);
+        assert!(client.tick(&out).is_none());
+        assert_eq!(replies.len(), 3, "one permission per released slot");
+    }
+
+    #[test]
+    fn reset_disconnects_a_decoder_blocked_on_presenting_frames() {
+        let (input, packets) = bounded(FRAME_WINDOW);
+        let (frames, output) = bounded(1);
+        frames
+            .send(Ok(Arc::new(crate::image::RgbaImage::new(64, 32))))
+            .unwrap();
+        let (done, finished) = bounded(1);
+        let worker = std::thread::spawn(move || {
+            assert!(frames
+                .send(Ok(Arc::new(crate::image::RgbaImage::new(64, 32))))
+                .is_err());
+            drop(packets);
+            done.send(()).unwrap();
+        });
+        let mut client = Frontend {
+            active: Some(Active {
+                session: 1,
+                generation: 7,
+                stream: "desktop".into(),
+                input,
+                output,
+                outstanding: 2,
+                permitted: false,
+                failure: None,
+                worker: Some(worker),
+            }),
+        };
+        // Bound the test itself if reset ever regresses into a join deadlock.
+        std::thread::spawn(move || client.reset());
+        finished.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
     #[test]
     fn full_hd_444_decode_preserves_single_pixel_color_edges() {
         let mut client = Frontend::default();

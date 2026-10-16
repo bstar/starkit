@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.12.2 candidate)
+
+- Overlap live-canvas transport and decoding with a bounded two-frame window, retaining ordered H.264 packets and compatibility with existing hosts. Disconnect both decoder channels before joining on close or reattachment.
+
 ### Fixed (0.12.1 candidate)
 
 - Composite live-canvas overlays with their own alpha after clearing the stream hole, avoiding opaque bands behind rounded borders and floating controls. Renderer requests retain the active stream set alongside the exact scene.
