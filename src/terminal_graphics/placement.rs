@@ -119,6 +119,10 @@ impl Placement {
     }
 
     pub fn project(&self, scene: &Scene) -> Scene {
+        self.project_after(scene, 0)
+    }
+    /// Project foreground components without losing their original surface ownership.
+    pub(crate) fn project_after(&self, scene: &Scene, first: usize) -> Scene {
         use unicode_width::UnicodeWidthChar;
         let source = self.source;
         let spans: Vec<_> = self
@@ -127,6 +131,9 @@ impl Placement {
             .unwrap_or(&scene.spans)
             .iter()
             .filter_map(|span| {
+                if first > 0 && self.overlay.is_none() {
+                    return None;
+                }
                 if span.y < source.y || span.y >= source.y + source.height {
                     return None;
                 }
@@ -166,6 +173,9 @@ impl Placement {
             .iter()
             .enumerate()
             .filter_map(|(index, c)| {
+                if index < first {
+                    return None;
+                }
                 let overlay = index >= overlay_start;
                 if overlay != self.overlay.is_some() {
                     return None;

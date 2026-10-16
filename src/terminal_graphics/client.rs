@@ -31,9 +31,9 @@ impl Frontend {
             Ok(Self::Cells(super::cells::Cells::default()))
         }
     }
-    fn scene(&mut self, scene: &Scene) -> Result<()> {
+    fn scene(&mut self, scene: &Scene, canvases: &super::canvas_frontend::Frontend) -> Result<()> {
         match self {
-            Self::Pixels(r) => r.scene(scene),
+            Self::Pixels(r) => r.scene_with_canvases(scene, canvases.active_streams()),
             Self::Cells(r) => r.scene(scene),
         }
     }
@@ -916,7 +916,7 @@ fn run_impl(
                     }
                     if first {
                         if let Some(scene) = &last_scene {
-                            renderer.scene(scene)?;
+                            renderer.scene(scene, &canvases)?;
                         }
                     }
                 }
@@ -932,14 +932,14 @@ fn run_impl(
                     // Redraw the transparent live region once when the first frame arrives.
                     if first {
                         if let Some(scene) = &last_scene {
-                            renderer.scene(scene)?;
+                            renderer.scene(scene, &canvases)?;
                         }
                     }
                 }
                 ServerMessage::CanvasClose { stream, generation } => {
                     canvases.close(&stream, generation, &mut io::stdout().lock())?;
                     if let Some(scene) = &last_scene {
-                        renderer.scene(scene)?;
+                        renderer.scene(scene, &canvases)?;
                     }
                 }
                 ServerMessage::TogglePresentation => {
@@ -1088,7 +1088,10 @@ fn run_impl(
                     // both late scenes and late assets from the same cache.
                     if let Some(scene) = &mut last_scene {
                         if assets.hydrate(scene) {
-                            renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                            renderer.scene(
+                                &super::pointer::paint_hover(scene, hovered_row),
+                                &canvases,
+                            )?;
                         }
                     }
                 }
@@ -1161,7 +1164,7 @@ fn run_impl(
                 } else {
                     None
                 };
-                renderer.scene(&super::pointer::paint_hover(&scene, hovered_row))?;
+                renderer.scene(&super::pointer::paint_hover(&scene, hovered_row), &canvases)?;
                 last_scene = Some(scene);
             }
         }
@@ -1190,7 +1193,7 @@ fn run_impl(
                 if let Some((stream, generation, decoded)) = media.canvas_tick(&c.input) {
                     if canvases.receive_pixels(stream, generation, decoded)? {
                         if let Some(scene) = &last_scene {
-                            renderer.scene(scene)?;
+                            renderer.scene(scene, &canvases)?;
                         }
                     }
                 }
@@ -1241,7 +1244,7 @@ fn run_impl(
                                 let frame = frame_pixels.context("Native frame has no pixels")?;
                                 video_layer.mask(
                                     &frame_scene,
-                                    canvases.mask(&frame_scene, frame),
+                                    frame,
                                     Viewport {
                                         columns: terminal_grid.0,
                                         rows: terminal_grid.1,
@@ -1411,7 +1414,7 @@ fn run_impl(
                 scene.resize_handles.clear();
                 scene.pointer_regions.clear();
                 scene.spans.push(Span{x:1,y:size.rows.saturating_sub(1),text:"Disconnected · remote operations continue · Ctrl+R reconnect · Ctrl+Q detach".into(),foreground:"#f38ba8".into(),background:scene.background.clone(),bold:true,modifiers:0});
-                renderer.scene(&scene)?;
+                renderer.scene(&scene, &canvases)?;
             }
         }
         if connection.is_none() && Instant::now() >= reconnect {
@@ -1631,7 +1634,10 @@ fn run_impl(
                             video_layer.invalidate();
                             cell_video.reset();
                             if let Some(scene) = &last_scene {
-                                renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                                renderer.scene(
+                                    &super::pointer::paint_hover(scene, hovered_row),
+                                    &canvases,
+                                )?;
                             }
                             continue;
                         }
@@ -1706,8 +1712,10 @@ fn run_impl(
                                 let next = super::pointer::hovered(scene, hover_point, hover_pixel);
                                 if next != hovered_row {
                                     hovered_row = next;
-                                    renderer
-                                        .scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                                    renderer.scene(
+                                        &super::pointer::paint_hover(scene, hovered_row),
+                                        &canvases,
+                                    )?;
                                 }
                             }
                         }
@@ -1748,7 +1756,10 @@ fn run_impl(
                         hovered_row = None;
                         if pixels {
                             if let Some(scene) = &last_scene {
-                                renderer.scene(&super::pointer::paint_hover(scene, hovered_row))?;
+                                renderer.scene(
+                                    &super::pointer::paint_hover(scene, hovered_row),
+                                    &canvases,
+                                )?;
                             }
                         }
                         pointer.reset(&mut io::stdout().lock())?;

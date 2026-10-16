@@ -1018,7 +1018,7 @@ impl Painter {
             "Scene exceeds limits"
         );
         if scene.placements.is_empty() {
-            return self.render_grid(scene, None, true, None);
+            return self.render_grid(scene, None, true, None, false);
         }
         anyhow::ensure!(scene.placements.len() <= 16, "Too many pixel placements");
         let mut area = 0u64;
@@ -1059,6 +1059,7 @@ impl Painter {
                 Some(font),
                 false,
                 Some(placement),
+                false,
             )?;
             crate::image::imageops::overlay(
                 &mut frame,
@@ -1070,12 +1071,85 @@ impl Painter {
         Ok(frame)
     }
 
+    /// Punch live-video holes before compositing foreground artwork. A flattened
+    /// UI raster cannot supply overlay alpha: its transparent portions already
+    /// contain the opaque workspace beneath the video.
+    pub(crate) fn render_with_canvases(
+        &mut self,
+        scene: &Scene,
+        active: &[String],
+    ) -> Result<RgbaImage> {
+        let mut frame = self.render(scene)?;
+        for (index, component) in scene.components.iter().enumerate() {
+            let Component::LiveCanvas { id, view, .. } = component else {
+                continue;
+            };
+            if !active.contains(id) {
+                continue;
+            }
+            let [x, y, width, height] = view.fitted().map(|n| n.round() as u32);
+            for yy in y..y.saturating_add(height).min(frame.height()) {
+                for xx in x..x.saturating_add(width).min(frame.width()) {
+                    frame.put_pixel(xx, yy, crate::image::Rgba([0; 4]));
+                }
+            }
+            let v = scene.viewport;
+            if scene.placements.is_empty() {
+                let mut foreground = scene.clone();
+                foreground.components = scene.components[index + 1..].to_vec();
+                let layer = self.render_grid(&foreground, None, false, None, true)?;
+                for yy in y..y.saturating_add(height).min(frame.height()) {
+                    for xx in x..x.saturating_add(width).min(frame.width()) {
+                        frame.put_pixel(xx, yy, *layer.get_pixel(xx, yy));
+                    }
+                }
+                continue;
+            }
+            let font = ((v.height as f32 / f32::from(v.rows) * 0.84)
+                .min(v.width as f32 / f32::from(v.columns) / 0.6))
+            .floor()
+            .clamp(1., 64.);
+            for placement in &scene.placements {
+                let foreground = placement.project_after(scene, index + 1);
+                if foreground.components.is_empty() && foreground.spans.is_empty() {
+                    continue;
+                }
+                let layer =
+                    self.render_grid(&foreground, Some(font), false, Some(placement), true)?;
+                // Only replace pixels inside this canvas. Foreground outside
+                // the hole was already composited over its workspace by render.
+                let left = x.max(u32::from(placement.target.x));
+                let top = y.max(u32::from(placement.target.y));
+                let right = x
+                    .saturating_add(width)
+                    .min(u32::from(placement.target.x) + layer.width())
+                    .min(frame.width());
+                let bottom = y
+                    .saturating_add(height)
+                    .min(u32::from(placement.target.y) + layer.height())
+                    .min(frame.height());
+                for yy in top..bottom {
+                    for xx in left..right {
+                        use crate::image::Pixel;
+                        let pixel = layer.get_pixel(
+                            xx - u32::from(placement.target.x),
+                            yy - u32::from(placement.target.y),
+                        );
+                        frame.get_pixel_mut(xx, yy).blend(pixel);
+                    }
+                }
+            }
+        }
+        Ok(frame)
+    }
+
     fn render_grid(
         &mut self,
         scene: &Scene,
         font_override: Option<f32>,
         manage_assets: bool,
         placement: Option<&super::placement::Placement>,
+        transparent_background: bool,
     ) -> Result<RgbaImage> {
         let viewport = scene.viewport.validate()?;
         if self
@@ -1102,10 +1176,12 @@ impl Painter {
         let mut canvas =
             Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?;
         let [r, g, b] = rgb(&scene.background);
-        if scene.background != "transparent" {
+        if !transparent_background && scene.background != "transparent" {
             canvas.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
         }
-        self.spans(&mut canvas, scene, [cw, ch, font], None, placement);
+        if !transparent_background {
+            self.spans(&mut canvas, scene, [cw, ch, font], None, placement);
+        }
         let active_images: HashSet<_> = scene
             .components
             .iter()

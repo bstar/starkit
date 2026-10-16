@@ -352,64 +352,8 @@ impl Frontend {
         }
         Ok(())
     }
-    pub fn mask(&self, scene: &Scene, pixels: Arc<RgbaImage>) -> Arc<RgbaImage> {
-        if self.layers.is_empty() {
-            return pixels;
-        }
-        let mut out = pixels.as_ref().clone();
-        let mut cleared = false;
-        for component in &scene.components {
-            if let Component::LiveCanvas { id, view, .. } = component {
-                if !self.layers.contains_key(id) {
-                    continue;
-                }
-                let [x, y, w, h] = view.fitted();
-                let x = (x.round() as u32).min(out.width());
-                let y = (y.round() as u32).min(out.height());
-                for yy in y..(y + h.round() as u32).min(out.height()) {
-                    for xx in x..(x + w.round() as u32).min(out.width()) {
-                        out.put_pixel(xx, yy, crate::image::Rgba([0; 4]));
-                    }
-                }
-                cleared = true;
-            } else if cleared
-                && matches!(
-                    component,
-                    Component::Surface { .. }
-                        | Component::Menu { .. }
-                        | Component::Dialog { .. }
-                        | Component::TextField { .. }
-                )
-            {
-                let r = component.rect();
-                let v = scene.viewport;
-                let (x, y, ex, ey) =
-                    if let Some(p) = scene.placements.iter().rev().find(|p| p.source == r) {
-                        let t = p.target;
-                        (
-                            u32::from(t.x),
-                            u32::from(t.y),
-                            u32::from(t.x) + u32::from(t.width),
-                            u32::from(t.y) + u32::from(t.height),
-                        )
-                    } else {
-                        (
-                            u32::from(r.x) * v.width / u32::from(v.columns),
-                            u32::from(r.y) * v.height / u32::from(v.rows),
-                            u32::from(r.x + r.width) * v.width / u32::from(v.columns),
-                            u32::from(r.y + r.height) * v.height / u32::from(v.rows),
-                        )
-                    };
-                let ex = ex.min(out.width());
-                let ey = ey.min(out.height());
-                for yy in y.min(out.height())..ey {
-                    for xx in x.min(out.width())..ex {
-                        out.put_pixel(xx, yy, *pixels.get_pixel(xx, yy));
-                    }
-                }
-            }
-        }
-        Arc::new(out)
+    pub fn active_streams(&self) -> Vec<String> {
+        self.layers.keys().cloned().collect()
     }
 }
 
@@ -553,65 +497,6 @@ mod tests {
         let pixels = crate::image::load_from_memory(&png).unwrap().to_rgba8();
         assert_eq!(pixels.width(), 300);
         assert!((pixels.get_pixel(0, 0)[0] as i32 - 10).abs() < 8);
-    }
-    #[test]
-    fn canvas_holes_preserve_overlay_pixels_at_their_physical_placement() {
-        use crate::native_surface::{PixelRect, Surface};
-        let mut frontend = Frontend::new().unwrap();
-        frontend.layers.insert(
-            "demo".into(),
-            Layer {
-                generation: 1,
-                pixels: Arc::new(RgbaImage::new(1, 1)),
-                dirty: true,
-                image: None,
-                files: vec![],
-                view: None,
-                presented_at: None,
-                inline_interval: INLINE_FRAME_INTERVAL,
-            },
-        );
-        let viewport = Viewport {
-            columns: 4,
-            rows: 4,
-            width: 16,
-            height: 16,
-            ..Viewport::default()
-        };
-        let mut scene = scene(viewport, PixelRect::new(0, 0, 16, 16));
-        let rect = super::super::protocol::Rect {
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1,
-        };
-        scene.components.push(Component::Surface {
-            rect,
-            surface: Surface::new(3, 4, "#c86432".into()),
-        });
-        scene
-            .placements
-            .push(super::super::placement::Placement::new(
-                rect,
-                PixelRect::new(3, 5, 3, 4),
-            ));
-        let original = crate::image::Rgba([200, 100, 50, 255]);
-        let masked = frontend.mask(&scene, Arc::new(RgbaImage::from_pixel(16, 16, original)));
-        assert_eq!(
-            *masked.get_pixel(3, 6),
-            original,
-            "Modal pixels must stay above the live image"
-        );
-        assert_eq!(
-            masked.get_pixel(2, 6).0,
-            [0; 4],
-            "The video outside the modal must remain visible"
-        );
-        assert_eq!(
-            *masked.get_pixel(0, 2),
-            original,
-            "The surrounding recording guide is outside the canvas hole"
-        );
     }
 
     fn scene(viewport: Viewport, target: crate::native_surface::PixelRect) -> Scene {

@@ -31,8 +31,8 @@ pub enum RenderMessage {
 pub struct Renderer {
     live: Sender<(String, Arc<RgbaImage>)>,
     old_live: Receiver<(String, Arc<RgbaImage>)>,
-    input: Option<Sender<Scene>>,
-    stale: Receiver<Scene>,
+    input: Option<Sender<(Scene, Vec<String>)>>,
+    stale: Receiver<(Scene, Vec<String>)>,
     pub output: Receiver<RenderMessage>,
     worker: Option<JoinHandle<()>>,
 }
@@ -47,7 +47,7 @@ impl Renderer {
         font: super::font::Font,
         options: super::client::PresentationOptions,
     ) -> Result<Self> {
-        let (input, scenes) = bounded::<Scene>(1);
+        let (input, scenes) = bounded::<(Scene, Vec<String>)>(1);
         let stale = scenes.clone();
         let (live, images) = bounded::<(String, Arc<RgbaImage>)>(1);
         let old_live = images.clone();
@@ -71,7 +71,7 @@ impl Renderer {
                         },
                         default(timeout) => Err(crossbeam_channel::RecvTimeoutError::Timeout),
                     };
-                    let mut scene = match received {
+                    let (mut scene, active_canvases) = match received {
                         Ok(scene) => scenes.try_iter().last().unwrap_or(scene),
                         Err(crossbeam_channel::RecvTimeoutError::Timeout)
                             if painter.animation_due() =>
@@ -86,7 +86,7 @@ impl Renderer {
                     };
                     let started = std::time::Instant::now();
                     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        painter.render(&scene)
+                        painter.render_with_canvases(&scene, &active_canvases)
                     }));
                     // Decoded assets belong to the painter. Presentation only
                     // needs layout, so frame snapshots do not duplicate artwork.
@@ -124,7 +124,7 @@ impl Renderer {
                     if let RenderMessage::Error { message } = &message {
                         tracing::error!(revision = scene.revision, generation = scene.viewport.generation, %message, "Native renderer failed");
                     }
-                    previous = Some(scene);
+                    previous = Some((scene, active_canvases));
                     if let Err(crossbeam_channel::TrySendError::Full(message)) =
                         frames.try_send(message)
                     {
@@ -153,8 +153,11 @@ impl Renderer {
         }
     }
     pub fn scene(&mut self, scene: &Scene) -> Result<()> {
+        self.scene_with_canvases(scene, Vec::new())
+    }
+    pub(crate) fn scene_with_canvases(&mut self, scene: &Scene, active: Vec<String>) -> Result<()> {
         let input = self.input.as_ref().context("Native renderer closed")?;
-        if let Err(error) = input.try_send(scene.clone()) {
+        if let Err(error) = input.try_send((scene.clone(), active)) {
             match error {
                 crossbeam_channel::TrySendError::Full(scene) => {
                     let _ = self.stale.try_recv();
@@ -690,6 +693,98 @@ pub fn render_surface_overlay(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn live_canvas_worker_preserves_overlay_alpha_and_stream_lifecycle() {
+        use super::super::protocol::{Component, Viewport};
+        use crate::{
+            content_view::ContentView,
+            native_surface::{style::Style, PixelRect as R, Surface},
+        };
+        let style = Style::default().with_soft_workspace();
+        let viewport = Viewport {
+            width: 796,
+            height: 407,
+            columns: 79,
+            rows: 21,
+            ..Viewport::default()
+        };
+        let mut scene = style.scene(viewport);
+        style
+            .mount(&mut scene, Surface::new(796, 407, "#345678".into()), 0, 0)
+            .unwrap();
+        let area = R::new(31, 25, 730, 360);
+        scene.components.push(Component::LiveCanvas {
+            rect: crate::native_surface::style::logical_rect(area, viewport),
+            id: "desktop".into(),
+            view: ContentView::new([730, 360], area).unwrap(),
+            interactive: true,
+        });
+        for bottom in [false, true] {
+            let mut strip = Surface::new(730, 12, "transparent".into());
+            strip.fill(
+                R::new(12, if bottom { 10 } else { 0 }, 706, 2),
+                "#abcdef",
+                0,
+            );
+            strip.fill(R::new(0, if bottom { 9 } else { 0 }, 3, 3), "#345678", 0);
+            style
+                .mount(&mut scene, strip, 31, if bottom { 373 } else { 25 })
+                .unwrap();
+        }
+        style
+            .mount(&mut scene, style.floating_panel(160, 54), 320, 300)
+            .unwrap();
+        let mut renderer = Renderer::spawn().unwrap();
+        renderer
+            .scene_with_canvases(&scene, vec!["desktop".into()])
+            .unwrap();
+        let next = |renderer: &Renderer| loop {
+            match renderer
+                .output
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap()
+            {
+                RenderMessage::Frame {
+                    pixels: Some(pixels),
+                    ..
+                } => break pixels,
+                RenderMessage::Error { message } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        let pixels = next(&renderer);
+        assert_eq!(pixels.get_pixel(100, 25).0, [171, 205, 239, 255]);
+        assert_eq!(
+            pixels.get_pixel(31, 25).0,
+            [52, 86, 120, 255],
+            "corner cutout covers the square stream corner"
+        );
+        for (x, y) in [(100, 30), (100, 378), (320, 300), (400, 200)] {
+            assert_eq!(
+                pixels.get_pixel(x, y).0[3],
+                0,
+                "flattened workspace leaked into the stream at {x},{y}"
+            );
+        }
+        assert_eq!(
+            pixels.get_pixel(400, 325).0[3],
+            255,
+            "dock controls stay opaque"
+        );
+        assert_eq!(
+            pixels.get_pixel(0, 0).0,
+            [52, 86, 120, 255],
+            "workspace outside the video stays unchanged"
+        );
+        renderer.scene(&scene).unwrap();
+        let stopped = next(&renderer);
+        assert_eq!(
+            stopped.get_pixel(100, 30).0,
+            [52, 86, 120, 255],
+            "closing the stream restores the workspace"
+        );
+    }
 
     #[test]
     fn skin_overlay_preserves_background_and_checks_dimensions() {

@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.12.1 candidate)
+
+- Composite live-canvas overlays with their own alpha after clearing the stream hole, avoiding opaque bands behind rounded borders and floating controls. Renderer requests retain the active stream set alongside the exact scene.
+
 ### Added (0.12 candidate)
 
 - Theme-derived rounded desktop viewport frames that stay outside native video placements.
