@@ -91,7 +91,37 @@ impl Processor {
         })
     }
     pub(super) fn set_preview_bounds(&mut self, width: u32, height: u32) {
-        self.preview_bounds = Some((width, height));
+        let bounds = Some((width, height));
+        if self.preview_bounds != bounds {
+            self.preview_bounds = bounds;
+            self.graph = None;
+        }
+    }
+    /// Fit before float HDR conversion, retaining source pixels for fullscreen.
+    /// Bounds are presentation hints, not a change to the original media stream.
+    pub(super) fn fit_output(&mut self, source: &frame::Video, bounds: u64) {
+        if bounds == 0 {
+            if self.preview_bounds.take().is_some() {
+                self.graph = None;
+            }
+            return;
+        }
+        let (mut width, mut height) = ((bounds >> 32) as u32, bounds as u32);
+        if matches!(self.rotation.rem_euclid(360), 90 | 270) {
+            std::mem::swap(&mut width, &mut height);
+        }
+        let sar = source.aspect_ratio();
+        let aspect = if sar.numerator() > 0 && sar.denominator() > 0 {
+            f64::from(sar)
+        } else {
+            1.0
+        };
+        let factor = (f64::from(width) / (f64::from(source.width()) * aspect))
+            .min(f64::from(height) / f64::from(source.height()))
+            .min(1.0);
+        let width = ((f64::from(source.width()) * factor) as u32 / 2 * 2).max(2);
+        let height = ((f64::from(source.height()) * factor) as u32 / 2 * 2).max(2);
+        self.set_preview_bounds(width, height);
     }
     pub fn process(&mut self, source: &frame::Video) -> Result<frame::Video> {
         if self.graph.is_none() {
@@ -101,7 +131,7 @@ impl Processor {
                     | av::color::TransferCharacteristic::ARIB_STD_B67
             );
             let mut filters = vec![];
-            // SSH previews must reduce 4K frames before HDR tone mapping and
+            // Small previews must reduce 4K frames before HDR tone mapping and
             // RGBA/subtitle composition, rather than doing all work at source size.
             if let Some((width, height)) = self.preview_bounds {
                 filters.push(format!("scale=w={width}:h={height}:flags=bilinear"));
@@ -116,7 +146,9 @@ impl Processor {
                 } else {
                     "limited"
                 };
-                filters.push(format!("zscale=min={}:pin={}:tin={}:rin={range}:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=iec61966-2-1:m=gbr:r=full", matrix as i32, primaries as i32, transfer as i32));
+                // Preserve shadows and in-range midtones; Hable darkened even
+                // ordinary diffuse content while compressing HDR highlights.
+                filters.push(format!("zscale=min={}:pin={}:tin={}:rin={range}:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:param=0.3:desat=2,zscale=t=iec61966-2-1:m=gbr:r=full", matrix as i32, primaries as i32, transfer as i32));
             }
             if self.bitmap.is_none() {
                 match &self.selection {

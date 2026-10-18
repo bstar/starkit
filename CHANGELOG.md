@@ -10,6 +10,7 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed (0.12.2 candidate)
 
+- Preserve HDR shadows and midtones with a Mobius SDR conversion shared by movie playback, proxies and posters. Fit color processing to the actual preview placement before float conversion; resizing does not reopen the stream and fullscreen can recover source detail. Coalesce pending seeks to the final decoder generation.
 - Redraw retired cell-image footprints when previews become text, move, shrink or are covered by a modal. Preserve incremental updates for unchanged images and avoid terminal cursor queries.
 - Overlap live-canvas transport and decoding with a bounded two-frame window, retaining ordered H.264 packets and compatibility with existing hosts. Disconnect both decoder channels before joining on close or reattachment.
 

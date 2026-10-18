@@ -219,6 +219,9 @@ impl Host {
         }
     }
     pub fn restart(&mut self, position: f64) {
+        // Several seek inputs can arrive before effects are drained. Only the
+        // final generation should open decoders or audio devices on the client.
+        self.control.clear();
         self.cancel.store(true, Ordering::Relaxed);
         self.cancel = Arc::new(AtomicBool::new(false));
         self.credit = Arc::new(Mutex::new(0));
@@ -570,6 +573,28 @@ pub struct Frontend {
     canvas: super::super::canvas_video::Frontend,
 }
 impl Frontend {
+    pub(in crate::terminal_graphics) fn fit_video(
+        &self,
+        scene: &super::super::protocol::Scene,
+        terminal: super::super::protocol::Viewport,
+    ) {
+        let Some(active) = &self.active else { return };
+        let Some(rect) = super::super::video_presenter::VideoPresenter::image_rect(
+            scene,
+            &active.image,
+            terminal,
+        ) else {
+            return;
+        };
+        let width =
+            (u32::from(rect.width) * terminal.width / u32::from(terminal.columns)).clamp(2, 8192);
+        let height =
+            (u32::from(rect.height) * terminal.height / u32::from(terminal.rows)).clamp(2, 8192);
+        active.player.controls.render_bounds.store(
+            (u64::from(width) << 32) | u64::from(height),
+            Ordering::Relaxed,
+        );
+    }
     pub fn video_playing(&self) -> bool {
         self.active.as_ref().is_some_and(|a| {
             !a.player.controls.paused.load(Ordering::Relaxed)
@@ -933,6 +958,100 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_processing_uses_physical_placement_and_expands_without_seek() {
+        use crate::terminal_graphics::protocol::{Component, Rect, Scene, Viewport};
+        let mut frontend = Frontend::new(true);
+        let (out, _) = bounded(8);
+        frontend
+            .receive(
+                ToClient::Open {
+                    session: 1,
+                    generation: 1,
+                    image: "movie".into(),
+                    local: Some(PathBuf::new()),
+                    start: 0.0,
+                    quality: Quality::Balanced,
+                    options: Default::default(),
+                },
+                &out,
+            )
+            .unwrap();
+        let viewport = Viewport::default();
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0,
+                0,
+                viewport.columns,
+                viewport.rows,
+            )),
+            viewport,
+            1,
+        );
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 20,
+        };
+        scene.components.push(Component::Image {
+            rect,
+            id: "movie".into(),
+            png: None,
+            scale: Default::default(),
+            zoom: 100,
+        });
+        scene
+            .placements
+            .push(super::super::super::placement::Placement::new(
+                rect,
+                crate::native_surface::PixelRect::new(0, 0, 600, 200),
+            ));
+        frontend.fit_video(&scene, viewport);
+        let active = frontend.active.as_ref().unwrap();
+        assert_eq!(
+            active.player.controls.render_bounds.load(Ordering::Relaxed),
+            (600_u64 << 32) | 200
+        );
+        scene.placements[0].target = crate::native_surface::PixelRect::new(0, 0, 1200, 800);
+        frontend.fit_video(&scene, viewport);
+        assert_eq!(
+            active.player.controls.render_bounds.load(Ordering::Relaxed),
+            (1200_u64 << 32) | 800
+        );
+        assert_eq!(active.generation, 1, "Resize must not reopen the decoder");
+    }
+    #[test]
+    fn rapid_seeks_only_open_the_final_decoder_generation() {
+        let mut host = Host::new(PathBuf::new(), "seek".into(), 1, true);
+        host.set_control(false, 70);
+        for position in [12.0, 30.0, 85.0] {
+            host.restart(position);
+        }
+        let effects = host.effects();
+        assert_eq!(effects.len(), 2);
+        assert!(matches!(
+            &effects[0],
+            ServerMessage::Media {
+                message: ToClient::Open {
+                    start: 85.0,
+                    generation: 4,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            &effects[1],
+            ServerMessage::Media {
+                message: ToClient::Control {
+                    paused: false,
+                    volume: 70,
+                    generation: 4,
+                    ..
+                }
+            }
+        ));
+    }
     #[test]
     fn restored_playback_opens_only_at_saved_position_and_control_state() {
         let mut host = Host::new(PathBuf::new(), "resume".into(), 1, true);

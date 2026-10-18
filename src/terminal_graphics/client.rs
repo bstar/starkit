@@ -1189,6 +1189,17 @@ fn run_impl(
             }
         }
         if let Some(c) = &connection {
+            #[cfg(feature = "media")]
+            if let Some(scene) = &last_scene {
+                media.fit_video(
+                    scene,
+                    Viewport {
+                        columns: terminal_grid.0,
+                        rows: terminal_grid.1,
+                        ..size
+                    },
+                );
+            }
             if canvases.video_ready() {
                 if let Some((stream, generation, decoded)) = media.canvas_tick(&c.input) {
                     if canvases.receive_pixels(stream, generation, decoded)? {

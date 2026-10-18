@@ -204,6 +204,61 @@ fn hdr_is_tone_mapped_and_anamorphic_pixels_are_normalized() {
 }
 
 #[test]
+fn hdr_shadows_preserve_reference_luminance_in_playback_and_poster() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("luminance.mkv");
+    // Linear neutral patches at 0, 1, 10, 25, 100 and 1000 nits, encoded
+    // losslessly as PQ. SDR shadows must retain their reference luminance.
+    let mut encoder = Command::new("ffmpeg")
+        .args(["-v", "error", "-f", "rawvideo", "-pixel_format", "gbrpf32le",
+            "-video_size", "96x16", "-framerate", "1", "-i", "pipe:0",
+            "-vf", "zscale=tin=linear:pin=2020:min=gbr:rin=full:t=smpte2084:p=2020:m=2020_ncl:r=limited:npl=100,format=yuv444p10le",
+            "-frames:v", "1", "-c:v", "ffv1", "-color_primaries", "bt2020",
+            "-color_trc", "smpte2084", "-colorspace", "bt2020nc", "-y"])
+        .arg(&path).stdin(Stdio::piped()).spawn().unwrap();
+    let levels = [0.0_f32, 0.01, 0.1, 0.25, 1.0, 10.0];
+    let mut data = vec![];
+    for _plane in 0..3 {
+        for _y in 0..16 {
+            for x in 0..96 {
+                data.extend_from_slice(&levels[x / 16].to_le_bytes());
+            }
+        }
+    }
+    encoder.stdin.take().unwrap().write_all(&data).unwrap();
+    assert!(encoder.wait().unwrap().success());
+    let player = Player::file_with_options(
+        path.clone(),
+        0.0,
+        PlaybackOptions {
+            audio: Selection::Off,
+            subtitle: Selection::Off,
+        },
+    )
+    .unwrap();
+    let frame = player.frames.recv_timeout(Duration::from_secs(5)).unwrap();
+    let poster = starkit::media::poster(&path, Arc::new(AtomicBool::new(false))).unwrap();
+    for pixels in [&frame.pixels, &poster.pixels] {
+        let values: Vec<_> = (0..6)
+            .map(|i| pixels.get_pixel(i * 16 + 8, 8).0[0])
+            .collect();
+        assert!(values[0] < 3, "Black must remain black: {values:?}");
+        for (i, expected) in [(1, 25_i16), (2, 89), (3, 137)] {
+            assert!(
+                (i16::from(values[i]) - expected).abs() <= 5,
+                "HDR shadows should retain sRGB reference luminance: {values:?}"
+            );
+        }
+        assert!(
+            values.windows(2).all(|w| w[0] < w[1]),
+            "Highlight rolloff must remain monotonic: {values:?}"
+        );
+    }
+}
+
+#[test]
 fn decoded_colors_match_the_source_pixel_format() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("red.mp4");

@@ -32,6 +32,8 @@ pub struct Controls {
     pub audio_origin_us: AtomicU64,
     pub dropped: AtomicU64,
     pub underruns: AtomicU64,
+    /// Packed physical output width/height. Zero preserves native resolution.
+    pub(crate) render_bounds: AtomicU64,
     audio_clock: AudioClock,
 }
 impl Controls {
@@ -261,6 +263,8 @@ impl Player {
                             }
                             let started = Instant::now();
                             let processed = if let Some(processor) = &mut processor {
+                                processor
+                                    .fit_output(&f, ctrl.render_bounds.load(Ordering::Relaxed));
                                 processor.process(&f).context("Video filters")?
                             } else {
                                 hardware::download(&f)?
@@ -796,6 +800,128 @@ fn schedule_frames(
 #[cfg(test)]
 mod clock_tests {
     use super::*;
+    #[test]
+    fn preview_resize_restores_source_detail_without_reopening_playback() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("resize.mkv");
+        assert!(std::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x360:rate=24",
+                "-t",
+                "2",
+                "-c:v",
+                "ffv1",
+                "-y",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        let player = Player::file_with_options(
+            path,
+            0.0,
+            tracks::PlaybackOptions {
+                audio: tracks::Selection::Off,
+                subtitle: tracks::Selection::Off,
+            },
+        )
+        .unwrap();
+        let mut last = -1.0;
+        for (width, height, expected) in [
+            (320_u64, 180_u64, (320, 180)),
+            (1280, 720, (640, 360)),
+            (160, 90, (160, 90)),
+        ] {
+            player
+                .controls
+                .render_bounds
+                .store((width << 32) | height, Ordering::Relaxed);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let frame = player
+                    .frames
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .unwrap();
+                assert!(frame.seconds > last, "Resize must not rewind playback");
+                last = frame.seconds;
+                if frame.pixels.dimensions() == expected {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+            }
+        }
+    }
+    #[test]
+    #[ignore = "Uses STAR_VIDEO_TEST_FILE for a bounded real-file playback diagnostic"]
+    fn real_file_preview_seek_diagnostic() {
+        let path = std::path::PathBuf::from(
+            std::env::var_os("STAR_VIDEO_TEST_FILE").expect("STAR_VIDEO_TEST_FILE"),
+        );
+        let bounded = std::env::var_os("STAR_VIDEO_TEST_NATIVE").is_none();
+        for position in [900.0, 1800.0, 600.0] {
+            let player = Player::file_with_options(
+                path.clone(),
+                position,
+                tracks::PlaybackOptions {
+                    audio: if std::env::var_os("STAR_VIDEO_TEST_AUDIO").is_some() {
+                        tracks::Selection::Auto
+                    } else {
+                        tracks::Selection::Off
+                    },
+                    subtitle: tracks::Selection::Off,
+                },
+            )
+            .unwrap();
+            if bounded {
+                player
+                    .controls
+                    .render_bounds
+                    .store((1280_u64 << 32) | 720, Ordering::Relaxed);
+            }
+            let began = Instant::now();
+            let mut first = None;
+            let mut last = 0.0;
+            let mut frames = 0;
+            let mut dimensions = (0, 0);
+            while began.elapsed() < Duration::from_secs(4) {
+                if let Ok(frame) = player.frames.recv_timeout(Duration::from_millis(100)) {
+                    first.get_or_insert((began.elapsed().as_secs_f64(), frame.seconds));
+                    last = frame.seconds;
+                    frames += 1;
+                    dimensions = frame.pixels.dimensions();
+                    if frames == 1 {
+                        if let Some(root) = std::env::var_os("STAR_VIDEO_TEST_CAPTURES") {
+                            std::fs::create_dir_all(&root).unwrap();
+                            frame
+                                .pixels
+                                .save(
+                                    std::path::PathBuf::from(root)
+                                        .join(format!("frame-{position:.0}.png")),
+                                )
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+            let (latency, start) = first.unwrap_or_else(|| {
+                panic!(
+                    "No frame: {:?}",
+                    player.notices.try_iter().collect::<Vec<_>>()
+                )
+            });
+            println!("seek={position} first_frame_s={latency:.3} frames={frames} media_s={:.3} dimensions={dimensions:?} underruns={} dropped={}", last - start, player.controls.underruns.load(Ordering::Relaxed), player.controls.dropped.load(Ordering::Relaxed));
+            assert!(start >= position - 0.001);
+            if bounded {
+                assert!(dimensions.0 <= 1280 && dimensions.1 <= 720);
+            }
+            assert!(frames > 1);
+        }
+    }
     #[test]
     fn buffering_recovery_keeps_frames_paced() {
         let start = Instant::now();

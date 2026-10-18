@@ -172,6 +172,13 @@ layout boxes without scaling the glyphs. `pixel_layout` is separately negotiated
 
 ## Native video preview experiment
 
+Movie presentation sends physical image-placement bounds to the decoder worker
+through one packed atomic. Resize the decoded frame before float HDR conversion,
+rebuild only the filter graph when bounds change, and preserve source-resolution
+decoding and the playback generation. Use the shared Mobius conversion for
+posters, playback and proxies; test reference HDR luminance, not only nonblack
+output. Pending seek effects must open only the final requested generation.
+
 `media` owns native FFmpeg poster/proxy/decoding and CPAL output. Terminal
 `media` messages negotiate video and trusted local file access separately; a
 remote frontend must never open a host-supplied local path. Generations scope

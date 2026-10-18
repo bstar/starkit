@@ -154,7 +154,15 @@ pub fn poster(path: &Path, cancel: Arc<AtomicBool>) -> Result<Poster> {
             && u64::from(decoder.width()) * u64::from(decoder.height()) <= 32_000_000,
         "Video dimensions exceed preview limits"
     );
-    let (w, h) = dimensions(decoder.width(), decoder.height(), 480);
+    let time = stream.time_base();
+    let mut processor = processing::Processor::new(
+        path,
+        &input,
+        &tracks::Selection::Off,
+        time,
+        0.0,
+        cancel.clone(),
+    )?;
     let mut scale = None;
     let duration = (input.duration() as f64 / 1_000_000.0).max(0.0);
     let audio = input.streams().best(av::media::Type::Audio).is_some();
@@ -170,8 +178,14 @@ pub fn poster(path: &Path, cancel: Arc<AtomicBool>) -> Result<Poster> {
         decoder.send_packet(&p)?;
         let mut frame = av::frame::Video::empty();
         if decoder.receive_frame(&mut frame).is_ok() {
+            processor.fit_output(&frame, (1280_u64 << 32) | 480);
+            let processed = processor.process(&frame)?;
             return Ok(Poster {
-                pixels: Arc::new(rgba(&frame, &mut scale, (w, h))?),
+                pixels: Arc::new(rgba(
+                    &processed,
+                    &mut scale,
+                    (processed.width(), processed.height()),
+                )?),
                 duration,
                 width: decoder.width(),
                 height: decoder.height(),
