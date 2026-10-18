@@ -458,17 +458,27 @@ pub fn movie_transport_surface(
             );
         }
         if rect.width >= 88 {
+            let label_rect = R::new(
+                rect.x + icon + 12,
+                rect.y,
+                rect.width.saturating_sub(icon + 18),
+                rect.height,
+            );
             surface.text(
-                R::new(
-                    rect.x + icon + 12,
-                    rect.y,
-                    rect.width.saturating_sub(icon + 18),
-                    rect.height,
-                ),
+                label_rect,
                 *label,
                 &hex(palette.fg),
                 font.clamp(10, 16),
                 false,
+            );
+            // All three shortcuts start the label (A/S/F), so the highlighted
+            // glyph uses the label's own shaping origin, including in cells.
+            surface.text(
+                label_rect,
+                &label[..1],
+                &hex(palette.accent),
+                font.clamp(10, 16),
+                true,
             );
         }
         surface.hits.push(HitRegion {

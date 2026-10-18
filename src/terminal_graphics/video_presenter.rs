@@ -26,26 +26,24 @@ struct SourceRect {
     height: u32,
 }
 pub(crate) fn image_background(scene: &Scene, id: &str) -> [u8; 3] {
-    let color = if scene.placements.is_empty() {
-        scene
-            .components
-            .iter()
-            .find_map(|component| match component {
-                Component::Image { rect, id: key, .. } if key == id => scene
-                    .spans
-                    .iter()
-                    .find(|span| {
-                        span.y == rect.y
-                            && span.x <= rect.x
-                            && usize::from(span.x) + crate::wrap::width_of(&span.text) as usize
-                                > usize::from(rect.x)
-                    })
-                    .map(|span| span.background.as_str()),
-                _ => None,
-            })
-    } else {
-        None
-    };
+    // The movie belongs to the preview well, including in a physically placed
+    // scene. Using the desktop background gives its letterbox a lighter face.
+    let color = scene
+        .components
+        .iter()
+        .find_map(|component| match component {
+            Component::Image { rect, id: key, .. } if key == id => scene
+                .spans
+                .iter()
+                .find(|span| {
+                    span.y == rect.y
+                        && span.x <= rect.x
+                        && usize::from(span.x) + crate::wrap::width_of(&span.text) as usize
+                            > usize::from(rect.x)
+                })
+                .map(|span| span.background.as_str()),
+            _ => None,
+        });
     super::native::rgb(color.unwrap_or(&scene.background))
 }
 impl VideoPresenter {
@@ -720,6 +718,14 @@ mod tests {
             bold: false,
             modifiers: 0,
         });
+        // A native preview has a placement but still owns the same dark well;
+        // the desktop palette must not replace its letterbox background.
+        scene
+            .placements
+            .push(super::super::placement::Placement::new(
+                rect,
+                crate::native_surface::PixelRect::new(100, 100, 600, 300),
+            ));
         let mut presenter = VideoPresenter::new().unwrap();
         presenter.frame = Some(("movie".into(), Arc::new(RgbaImage::new(1920, 1080))));
         let frame = Arc::new(RgbaImage::from_pixel(
