@@ -9,7 +9,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::ratatui::{
     backend::{Backend, CrosstermBackend},
-    buffer::Buffer,
+    buffer::{Buffer, CellDiffOption},
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Widget},
@@ -216,6 +216,7 @@ pub(crate) fn buffer(scene: &Scene) -> Buffer {
 pub struct Cells {
     profile: crate::presentation::Profile,
     previous: Option<Buffer>,
+    images: Vec<(String, Rect)>,
     generation: Option<u64>,
     output: Receiver<RenderMessage>,
     frames: Sender<RenderMessage>,
@@ -229,6 +230,7 @@ impl Default for Cells {
                 Default::default(),
             ),
             previous: None,
+            images: Vec::new(),
             generation: None,
             output,
             frames,
@@ -240,8 +242,7 @@ impl Cells {
         &self.output
     }
     pub fn scene(&mut self, scene: &Scene) -> Result<()> {
-        let mut next = buffer(scene);
-        self.profile.adapt_buffer(&mut next);
+        let mut next = self.prepare(scene);
         let mut out = io::stdout().lock();
         out.write_all(b"\x1b[?2026h")?;
         if self.generation != Some(scene.viewport.generation)
@@ -259,6 +260,11 @@ impl Cells {
         Backend::flush(&mut backend)?;
         out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
+        for cell in &mut next.content {
+            if cell.diff_option == CellDiffOption::AlwaysUpdate {
+                cell.set_diff_option(CellDiffOption::None);
+            }
+        }
         self.previous = Some(next);
         self.generation = Some(scene.viewport.generation);
         // Cell drawing is synchronous: acknowledgements follow the actual
@@ -273,6 +279,45 @@ impl Cells {
             scene: std::sync::Arc::new(scene.clone()),
         })?;
         Ok(())
+    }
+
+    fn prepare(&mut self, scene: &Scene) -> Buffer {
+        let mut next = buffer(scene);
+        self.profile.adapt_buffer(&mut next);
+        let images: Vec<_> = scene
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                Component::Image { id, rect, .. } => {
+                    let rect =
+                        Rect::new(rect.x, rect.y, rect.width, rect.height).intersection(next.area);
+                    let covered = scene.components.iter().any(|component| match component {
+                        Component::Menu { rect: r } | Component::Dialog { rect: r, .. } => {
+                            rect.intersects(Rect::new(r.x, r.y, r.width, r.height))
+                        }
+                        _ => false,
+                    });
+                    (!rect.is_empty() && !covered).then(|| (id.clone(), rect))
+                }
+                _ => None,
+            })
+            .collect();
+        // Raster assets are painted after the cell diff, outside its buffer.
+        // Redraw their former footprint even where the logical cells stayed
+        // blank, including when an image moves, shrinks or a modal covers it.
+        for (_, rect) in self.images.iter().filter(|image| !images.contains(image)) {
+            let rect = rect.intersection(next.area);
+            for y in rect.y..rect.bottom() {
+                for x in rect.x..rect.right() {
+                    let cell = &mut next[(x, y)];
+                    if cell.diff_option == CellDiffOption::None {
+                        cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+                    }
+                }
+            }
+        }
+        self.images = images;
+        next
     }
     pub fn clipboard(&mut self, text: &str) -> Result<()> {
         clipboard(text)
@@ -338,6 +383,85 @@ fn clipboard_command(command: &mut Command, text: &str, timeout: Duration) -> Re
 mod tests {
     use super::super::protocol::{Span, Viewport};
     use super::*;
+
+    #[test]
+    fn raster_footprints_are_repainted_when_removed_moved_or_covered() {
+        let mut scene = Scene::from_buffer(
+            &Buffer::empty(Rect::new(0, 0, 20, 5)),
+            Viewport {
+                columns: 20,
+                rows: 5,
+                ..Viewport::default()
+            },
+            1,
+        );
+        let rect = super::super::protocol::Rect {
+            x: 2,
+            y: 1,
+            width: 8,
+            height: 3,
+        };
+        scene.components.push(Component::Image {
+            rect,
+            id: "preview".into(),
+            png: Some("encoded image".into()),
+            zoom: 100,
+            scale: super::super::protocol::ImageScale::Smooth,
+        });
+        for change in ["text", "move", "shrink", "replace", "menu", "dialog"] {
+            let mut cells = Cells::default();
+            let before = cells.prepare(&scene);
+            assert!(
+                before.diff(&cells.prepare(&scene)).is_empty(),
+                "stable images stay incremental"
+            );
+            let mut changed = scene.clone();
+            match change {
+                "text" => {
+                    changed.components.clear();
+                    changed.spans.push(Span {
+                        x: 2,
+                        y: 1,
+                        text: "text".into(),
+                        foreground: "#ffffff".into(),
+                        background: "#111111".into(),
+                        bold: false,
+                        modifiers: 0,
+                    });
+                }
+                "menu" => changed.components.push(Component::Menu { rect }),
+                "dialog" => changed.components.push(Component::Dialog {
+                    rect,
+                    title: "dialog".into(),
+                }),
+                _ => {
+                    if let Component::Image { rect, id, .. } = &mut changed.components[0] {
+                        match change {
+                            "move" => rect.x += 1,
+                            "shrink" => rect.width -= 1,
+                            _ => *id = "replacement".into(),
+                        }
+                    }
+                }
+            }
+            let next = cells.prepare(&changed);
+            let updates = before.diff(&next);
+            for y in rect.y..rect.y + rect.height {
+                for x in rect.x..rect.x + rect.width {
+                    assert!(
+                        updates.iter().any(|(cx, cy, _)| (*cx, *cy) == (x, y)),
+                        "{change} left a raster cell at {x},{y}"
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            CrosstermBackend::new(&mut output)
+                .draw(updates.into_iter())
+                .unwrap();
+            assert!(!output.windows(4).any(|bytes| bytes == b"\x1b[6n"));
+            assert!(!output.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+        }
+    }
 
     #[test]
     fn clipboard_helper_preserves_text_and_bounds_failure() {
