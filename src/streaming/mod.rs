@@ -6,3 +6,6 @@ mod hls;
 mod server;
 pub mod ssh;
 pub use server::{Resource, Server, Session};
+
+#[cfg(unix)]
+mod control;

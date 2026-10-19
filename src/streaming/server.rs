@@ -19,6 +19,7 @@ use std::{
 pub struct Resource {
     pub id: String,
     relative: PathBuf,
+    details: serde_json::Value,
 }
 impl Resource {
     pub fn new(relative: PathBuf) -> Result<Self> {
@@ -33,7 +34,20 @@ impl Resource {
             "{:x}",
             Sha256::digest(relative.as_os_str().as_encoded_bytes())
         );
-        Ok(Self { id, relative })
+        Ok(Self {
+            id,
+            relative,
+            details: serde_json::Value::Null,
+        })
+    }
+    /// Bounded application metadata for local stream observers, without source paths.
+    pub fn with_details(mut self, details: serde_json::Value) -> Result<Self> {
+        ensure!(
+            serde_json::to_vec(&details)?.len() <= 4096,
+            "Stream metadata exceeds limit"
+        );
+        self.details = details;
+        Ok(self)
     }
 }
 
@@ -77,6 +91,7 @@ pub struct Server {
     pub session: Session,
     stop: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
+    management: Option<super::control::Management>,
 }
 impl Server {
     /// Listen only on loopback. Native remote clients forward this port over SSH.
@@ -90,12 +105,19 @@ impl Server {
         let root = root.canonicalize().context("Open media root")?;
         ensure!(root.is_dir(), "Media root must be a directory");
         let mut files = HashMap::new();
+        let mut descriptions = HashMap::new();
         for resource in resources {
             let path = root.join(&resource.relative).canonicalize()?;
             ensure!(
                 path.starts_with(&root) && path.is_file(),
                 "Media resource escapes the library"
             );
+            let details = if resource.details.is_null() {
+                serde_json::json!({"title":resource.relative.file_stem().map(|p|p.to_string_lossy())})
+            } else {
+                resource.details
+            };
+            descriptions.insert(resource.id.clone(), details);
             ensure!(
                 files.insert(resource.id, resource.relative).is_none(),
                 "Duplicate media resource"
@@ -115,8 +137,11 @@ impl Server {
                 serde_json::json!({"hls":true,"version":1}),
             );
         }
+        let control = Arc::new(super::control::State::new(session.port));
         let data = Arc::new(Data {
-            hls: super::hls::Hls::default(),
+            control: control.clone(),
+            descriptions,
+            hls: Arc::new(super::hls::Hls::default()),
             root,
             files,
             catalog: serde_json::to_vec(&catalog)?,
@@ -131,6 +156,10 @@ impl Server {
             session,
             stop,
             workers: Vec::new(),
+            management: Some(super::control::Management::start(
+                control,
+                data.hls.clone(),
+            )?),
         };
         for _ in 0..8 {
             let listener = listener.try_clone()?;
@@ -151,7 +180,24 @@ impl Server {
                                     }
                                     let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
                                     let _ = socket.set_write_timeout(Some(Duration::from_secs(1)));
-                                    let _ = data.request(&mut socket, &stop);
+                                    if let Some(transfer) = data.control.begin(
+                                        socket
+                                            .peer_addr()
+                                            .map(|a| a.to_string())
+                                            .unwrap_or_default(),
+                                    ) {
+                                        if data.request(&mut socket, &stop, &transfer).is_err() {
+                                            data.control.failures.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    } else {
+                                        let _ = reply(
+                                            &mut socket,
+                                            "503 Service Unavailable",
+                                            "text/plain",
+                                            b"Concurrent transfer limit reached",
+                                            false,
+                                        );
+                                    }
                                 }
                                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                     std::thread::sleep(Duration::from_millis(10))
@@ -171,20 +217,28 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.management.take();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
 }
 struct Data {
-    hls: super::hls::Hls,
+    hls: Arc<super::hls::Hls>,
+    control: Arc<super::control::State>,
+    descriptions: HashMap<String, serde_json::Value>,
     root: PathBuf,
     files: HashMap<String, PathBuf>,
     catalog: Vec<u8>,
     token: String,
 }
 impl Data {
-    fn request(&self, stream: &mut TcpStream, stop: &AtomicBool) -> Result<()> {
+    fn request(
+        &self,
+        stream: &mut TcpStream,
+        stop: &AtomicBool,
+        transfer: &super::control::Transfer,
+    ) -> Result<()> {
         let mut headers = Vec::new();
         let began = std::time::Instant::now();
         while !headers.ends_with(b"\r\n\r\n") {
@@ -258,8 +312,44 @@ impl Data {
                 head,
             );
         }
+        transfer.describe(path);
+        if let Some(resource) = path
+            .strip_prefix("/v1/hls/")
+            .or_else(|| path.strip_prefix("/v1/media/"))
+        {
+            let mut parts = resource.split('/');
+            let id = parts.next().unwrap_or_default();
+            if let Some(details) = self.descriptions.get(id) {
+                let rendition = parts.next().unwrap_or("original");
+                transfer.movie(
+                    id,
+                    details,
+                    if path.starts_with("/v1/hls/") {
+                        "HLS"
+                    } else {
+                        "Original"
+                    },
+                    rendition,
+                    range,
+                );
+            }
+        }
+        if path.starts_with("/v1/hls/") || path.starts_with("/v1/media/") {
+            if !self.control.allowed(path.starts_with("/v1/hls/")) {
+                return reply(
+                    stream,
+                    "503 Service Unavailable",
+                    "text/plain",
+                    b"This media route is disabled by the host",
+                    head,
+                );
+            }
+            if !self.control.flow(0, stop, transfer.epoch) {
+                return Ok(());
+            }
+        }
         if let Some(route) = path.strip_prefix("/v1/hls/") {
-            return self.hls_request(stream, route, range, head, stop);
+            return self.hls_request(stream, route, range, head, stop, transfer);
         }
         let Some(relative) = path
             .strip_prefix("/v1/media/")
@@ -323,7 +413,11 @@ impl Data {
                 let limit = remaining.min(buffer.len() as u64) as usize;
                 let n = file.read(&mut buffer[..limit])?;
                 ensure!(n != 0, "Media changed during streaming");
+                if !self.control.flow(n, stop, transfer.epoch) {
+                    break;
+                }
                 stream.write_all(&buffer[..n])?;
+                transfer.sent(n as u64);
                 remaining -= n as u64;
             }
         }
@@ -336,6 +430,7 @@ impl Data {
         range: Option<&str>,
         head: bool,
         stop: &AtomicBool,
+        transfer: &super::control::Transfer,
     ) -> Result<()> {
         let pieces = route.split('/').collect::<Vec<_>>();
         let valid = matches!(
@@ -386,7 +481,9 @@ impl Data {
                 &bytes,
                 head,
             ),
-            Ok(HlsResponse::Part(part)) => send_part(stream, part, range, head, stop),
+            Ok(HlsResponse::Part(part)) => {
+                send_part(stream, part, range, head, stop, &self.control, transfer)
+            }
             Err(error) => {
                 eprintln!("Adaptive movie request failed: {error}");
                 reply(stream,"503 Service Unavailable","text/plain",b"The host could not prepare this movie stream. Check FFmpeg and hardware encoder support.",head)
@@ -404,6 +501,8 @@ fn send_part(
     range: Option<&str>,
     head: bool,
     stop: &AtomicBool,
+    control: &super::control::State,
+    transfer: &super::control::Transfer,
 ) -> Result<()> {
     let size = part.length;
     let (start, length, partial) = match range {
@@ -433,7 +532,11 @@ fn send_part(
             let limit = remaining.min(buffer.len() as u64) as usize;
             let n = part.file.read(&mut buffer[..limit])?;
             ensure!(n > 0, "Truncated HLS segment");
+            if !control.flow(n, stop, transfer.epoch) {
+                break;
+            }
             stream.write_all(&buffer[..n])?;
+            transfer.sent(n as u64);
             remaining -= n as u64;
         }
     }

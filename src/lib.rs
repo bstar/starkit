@@ -89,3 +89,6 @@ pub mod pcm_output;
 /// Codec-free native movie delivery over an SSH-forwarded loopback service.
 #[cfg(feature = "streaming")]
 pub mod streaming;
+
+#[cfg(all(unix, feature = "streaming"))]
+mod session_control;

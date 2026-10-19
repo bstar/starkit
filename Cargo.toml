@@ -19,7 +19,7 @@ path = "src/lib.rs"
 
 [features]
 # Original files, supervised external FFmpeg HLS and native-player SSH transport.
-streaming = ["dep:serde_json", "dep:sha2", "dep:tempfile"]
+streaming = ["dep:serde_json", "dep:sha2", "dep:tempfile", "dep:rustix", "dep:crossbeam-channel"]
 # Pictures are on by default because both applications draw them and a
 # terminal that cannot is detected at runtime, not at compile time. Turning
 # them off is for a build that must not link an image decoder at all.

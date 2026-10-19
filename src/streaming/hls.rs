@@ -39,7 +39,8 @@ impl Encoder {
     }
     fn default_max_height(self) -> u32 {
         // Software 4K can take several playback intervals per fragment on grainy
-        // features. Do not let network bandwidth alone select an unsustainable encode.
+        // features. Advertising it lets AVPlayer select by network bandwidth even
+        // though the just-in-time encoder cannot replenish that buffer in time.
         match self {
             Self::SoftwareHevc | Self::Software => 1080,
             Self::Vaapi | Self::VideoToolbox => 2160,
@@ -197,6 +198,35 @@ pub(super) struct Hls {
     movies: Mutex<HashMap<String, Arc<Adaptive>>>,
 }
 impl Hls {
+    pub fn diagnostics(&self) -> Value {
+        let Ok(movies) = self.movies.try_lock() else {
+            return serde_json::json!({"busy":true});
+        };
+        let entries=movies.iter().map(|(id,movie)| {
+            let cache=movie.cache.try_lock();
+            serde_json::json!({"id":id,"fps":movie.fps,"qualities":movie.qualities.iter().map(|q|serde_json::json!({"name":q.name,"width":q.width,"height":q.height,"bitrate_bps":q.rate})).collect::<Vec<_>>(),"movie":movie.source.file_name().map(|n|n.to_string_lossy()),"encoder":movie.encoder.name(),"segment_seconds":movie.step,
+                "cache_bytes":cache.as_ref().ok().map(|c|c.bytes),"cached_segments":cache.as_ref().ok().map(|c|c.segments.len()),"busy":cache.is_err()})
+        }).collect::<Vec<_>>();
+        serde_json::json!({"movies":entries,"cache_limit_per_movie_bytes":CACHE_BYTES,"segment_limit_bytes":MAX_SEGMENT_BYTES,
+            "encoder_override":std::env::var("STAR_STREAM_ENCODER").ok()})
+    }
+    pub fn clear_idle(&self) -> Value {
+        let mut cleared = 0;
+        if let Ok(movies) = self.movies.try_lock() {
+            for movie in movies.values() {
+                if Arc::strong_count(movie) != 1 {
+                    continue;
+                }
+                let Ok(mut cache) = movie.cache.try_lock() else {
+                    continue;
+                };
+                cleared += cache.segments.len();
+                cache.segments.clear();
+                cache.bytes = 0;
+            }
+        }
+        serde_json::json!({"cleared_segments":cleared})
+    }
     pub fn movie(&self, id: &str, source: &Path, stop: &AtomicBool) -> Result<Arc<Adaptive>> {
         let mut movies = self
             .movies
@@ -587,6 +617,16 @@ fn fragment_start(mut file: File, size: u64) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn software_auto_avoids_unsustainable_4k_but_allows_an_explicit_cap() {
+        assert_eq!(max_height(Encoder::SoftwareHevc, None), 1080);
+        assert_eq!(max_height(Encoder::Software, None), 1080);
+        assert_eq!(max_height(Encoder::VideoToolbox, None), 2160);
+        assert_eq!(max_height(Encoder::SoftwareHevc, Some("2160")), 2160);
+        assert_eq!(max_height(Encoder::SoftwareHevc, Some("720")), 720);
+        assert_eq!(max_height(Encoder::SoftwareHevc, Some("0")), 1080);
+        assert_eq!(max_height(Encoder::SoftwareHevc, Some("9999")), 1080);
+    }
     #[test]
     fn cancelled_codec_is_terminated_promptly() {
         let mut command = Command::new("sleep");
