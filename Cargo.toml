@@ -18,7 +18,7 @@ name = "starkit"
 path = "src/lib.rs"
 
 [features]
-# Codec-free original-file streaming and SSH transport for native players.
+# Original files, supervised external FFmpeg HLS and native-player SSH transport.
 streaming = ["dep:serde_json", "dep:sha2", "dep:tempfile"]
 # Pictures are on by default because both applications draw them and a
 # terminal that cannot is detected at runtime, not at compile time. Turning
@@ -154,3 +154,7 @@ required-features = ["terminal-graphics", "audio-output"]
 [[example]]
 name = "pixel-mouse-probe"
 required-features = ["terminal-graphics"]
+
+[[example]]
+name = "streaming-probe"
+required-features = ["streaming"]

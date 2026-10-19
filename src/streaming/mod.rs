@@ -1,7 +1,8 @@
-//! Original-file HTTP byte ranges for native players, carried inside SSH.
+//! Original-file byte ranges and adaptive HLS for native players inside SSH.
 //!
-//! This module has no codec, audio-device, terminal, or application dependencies.
+//! HLS uses a supervised external FFmpeg; no codec, audio-device or UI linkage.
 //! Catalog documents belong to the application; all media URLs use opaque IDs.
+mod hls;
 mod server;
 pub mod ssh;
 pub use server::{Resource, Server, Session};

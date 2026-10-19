@@ -84,7 +84,7 @@ impl Server {
     pub fn start(
         root: &Path,
         resources: Vec<Resource>,
-        catalog: serde_json::Value,
+        mut catalog: serde_json::Value,
         token: String,
     ) -> Result<Self> {
         let root = root.canonicalize().context("Open media root")?;
@@ -109,7 +109,14 @@ impl Server {
         };
         session.validate()?;
         listener.set_nonblocking(true)?;
+        if let Some(object) = catalog.as_object_mut() {
+            object.insert(
+                "streaming".into(),
+                serde_json::json!({"hls":true,"version":1}),
+            );
+        }
         let data = Arc::new(Data {
+            hls: super::hls::Hls::default(),
             root,
             files,
             catalog: serde_json::to_vec(&catalog)?,
@@ -170,6 +177,7 @@ impl Drop for Server {
     }
 }
 struct Data {
+    hls: super::hls::Hls,
     root: PathBuf,
     files: HashMap<String, PathBuf>,
     catalog: Vec<u8>,
@@ -250,6 +258,9 @@ impl Data {
                 head,
             );
         }
+        if let Some(route) = path.strip_prefix("/v1/hls/") {
+            return self.hls_request(stream, route, range, head, stop);
+        }
         let Some(relative) = path
             .strip_prefix("/v1/media/")
             .and_then(|id| self.files.get(id))
@@ -318,6 +329,115 @@ impl Data {
         }
         Ok(())
     }
+    fn hls_request(
+        &self,
+        stream: &mut TcpStream,
+        route: &str,
+        range: Option<&str>,
+        head: bool,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        let pieces = route.split('/').collect::<Vec<_>>();
+        let valid = matches!(
+            pieces.as_slice(),
+            [_, "master.m3u8"] | [_, _, "index.m3u8"] | [_, _, _, "init.mp4" | "media.m4s"]
+        );
+        let Some(relative) = pieces
+            .first()
+            .filter(|_| valid)
+            .and_then(|id| self.files.get(*id))
+        else {
+            return reply(stream, "404 Not Found", "text/plain", &[], head);
+        };
+        let source = self
+            .root
+            .join(relative)
+            .canonicalize()
+            .ok()
+            .filter(|p| p.starts_with(&self.root) && p.is_file());
+        let Some(source) = source else {
+            return reply(stream, "404 Not Found", "text/plain", &[], head);
+        };
+        let prepared = (|| -> Result<_> {
+            let movie = self.hls.movie(pieces[0], &source, stop)?;
+            if pieces.len() == 2 {
+                return Ok(HlsResponse::Playlist(movie.master(pieces[0], &self.token)));
+            }
+            if pieces.len() == 3 {
+                return Ok(HlsResponse::Playlist(movie.playlist(
+                    pieces[0],
+                    pieces[1],
+                    &self.token,
+                )?));
+            }
+            let index = pieces[2].parse::<u32>().context("Invalid segment index")?;
+            Ok(HlsResponse::Part(movie.part(
+                pieces[1],
+                index,
+                pieces[3] == "init.mp4",
+                stop,
+            )?))
+        })();
+        match prepared {
+            Ok(HlsResponse::Playlist(bytes)) => reply(
+                stream,
+                "200 OK",
+                "application/vnd.apple.mpegurl",
+                &bytes,
+                head,
+            ),
+            Ok(HlsResponse::Part(part)) => send_part(stream, part, range, head, stop),
+            Err(error) => {
+                eprintln!("Adaptive movie request failed: {error}");
+                reply(stream,"503 Service Unavailable","text/plain",b"The host could not prepare this movie stream. Check FFmpeg and hardware encoder support.",head)
+            }
+        }
+    }
+}
+enum HlsResponse {
+    Playlist(Vec<u8>),
+    Part(super::hls::Part),
+}
+fn send_part(
+    stream: &mut TcpStream,
+    mut part: super::hls::Part,
+    range: Option<&str>,
+    head: bool,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let size = part.length;
+    let (start, length, partial) = match range {
+        None => (0, size, false),
+        Some(value) => match byte_range(value, size) {
+            Some((start, end)) => (start, end - start + 1, true),
+            None => {
+                write!(stream,"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{size}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+                return Ok(());
+            }
+        },
+    };
+    write!(stream,"HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nCache-Control: private, max-age=3600\r\nConnection: close\r\n",if partial{"206 Partial Content"}else{"200 OK"},part.mime)?;
+    if partial {
+        write!(
+            stream,
+            "Content-Range: bytes {start}-{}/{size}\r\n",
+            start + length - 1
+        )?;
+    }
+    stream.write_all(b"\r\n")?;
+    if !head {
+        part.file.seek(SeekFrom::Start(part.offset + start))?;
+        let mut buffer = [0; 64 * 1024];
+        let mut remaining = length;
+        while remaining > 0 && !stop.load(Ordering::Acquire) {
+            let limit = remaining.min(buffer.len() as u64) as usize;
+            let n = part.file.read(&mut buffer[..limit])?;
+            ensure!(n > 0, "Truncated HLS segment");
+            stream.write_all(&buffer[..n])?;
+            remaining -= n as u64;
+        }
+    }
+    Ok(())
 }
 fn reply(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8], head: bool) -> Result<()> {
     write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len())?;
@@ -373,6 +493,24 @@ mod tests {
         .unwrap();
         let response = String::from_utf8(request(&server, "GET", "/v1/catalog", "")).unwrap();
         assert!(response.starts_with("HTTP/1.1 401"), "{response:?}");
+        assert!(
+            request(&server, "GET", &format!("/v1/hls/{id}/master.m3u8"), "")
+                .starts_with(b"HTTP/1.1 401")
+        );
+        assert!(request(
+            &server,
+            "GET",
+            &format!("/v1/hls/unknown/master.m3u8?token={}", server.session.token),
+            ""
+        )
+        .starts_with(b"HTTP/1.1 404"));
+        assert!(request(
+            &server,
+            "GET",
+            &format!("/v1/hls/{id}/../secret?token={}", server.session.token),
+            ""
+        )
+        .starts_with(b"HTTP/1.1 404"));
         let path = format!("/v1/media/{id}?token={}", server.session.token);
         let bytes = request(&server, "GET", &path, "Range: bytes=2-5\r\n");
         assert!(bytes.starts_with(b"HTTP/1.1 206"));

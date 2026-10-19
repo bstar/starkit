@@ -10,7 +10,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Added (0.13 experimental movie-TV branch)
 
+- Authenticated adaptive HLS with seekable VOD playlists, per-segment lazy FFmpeg encoding, HEVC hardware probing, H.264 software fallback, MKV input and AAC audio conversion. Bound each of two movie caches to 384 MiB; stop codec workers on session shutdown. Existing original-file clients remain compatible.
+
 - Optional codec-free `streaming` engine: loopback HTTP GET/HEAD and bounded original-file byte ranges, opaque media IDs, bearer-token sessions, catalog/clock endpoints and supervised OpenSSH bootstrap/forwarding. Applications own catalog and channel policy; native clients can reuse the wire contract without terminal rendering.
+
+### Fixed (0.13 experimental movie-TV branch)
+
+- Default Linux adaptive movies to CPU HEVC, preserving 4K while avoiding Radeon VAAPI's silently corrupt pictures and black Apple TV playback. Keep VAAPI opt-in for driver testing; compare decoded pixels against source frames in the streaming integration proof.
 
 ### Fixed (0.12.2 candidate)
 

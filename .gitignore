@@ -13,3 +13,7 @@ node_modules/
 __pycache__/
 
 /examples/starter/target
+
+# Native Apple package compiler output
+apple/StarKit/.build/
+apple/StarKit/.swiftpm/
