@@ -10,6 +10,7 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed (0.12.2 candidate)
 
+- Backpressure graphical input against available acknowledgment capacity instead of disconnecting a busy frontend and tearing down its paused movie. Keep ordered inputs queued while output catches up, and log attachment timeout diagnostics.
 - Match movie letterboxing to the preview well in native placements. Highlight A/S/F in movie Audio, Subtitles and Full screen controls using the same geometry as their labels and cell counterparts.
 - Preserve HDR shadows and midtones with a Mobius SDR conversion shared by movie playback, proxies and posters. Fit color processing to the actual preview placement before float conversion; resizing does not reopen the stream and fullscreen can recover source detail. Coalesce pending seeks to the final decoder generation.
 - Redraw retired cell-image footprints when previews become text, move, shrink or are covered by a modal. Preserve incremental updates for unchanged images and avoid terminal cursor queries.

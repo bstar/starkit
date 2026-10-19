@@ -210,6 +210,13 @@ impl Peer {
     fn control(&self, message: ServerMessage) -> bool {
         self.control.try_send(message).is_ok()
     }
+    fn incoming(&self) -> Vec<Option<ClientMessage>> {
+        // Every input can require one reliable reply. Only the session thread
+        // produces controls, so reserving this much space before admission keeps
+        // an input burst from mistaking a full reply queue for a lost peer.
+        let available = self.control.capacity().unwrap_or(64) - self.control.len();
+        self.messages.try_iter().take(available.min(64)).collect()
+    }
     fn scene(&mut self, scene: &Scene) -> bool {
         if self.client.is_none() || !self.presentation.ready(scene.viewport.generation) {
             return false;
@@ -419,14 +426,10 @@ fn serve_with_policy(
                 }
             }
         }
-        let messages = handshake
-            .into_iter()
-            .chain(
-                peer.as_ref()
-                    .map(|p| p.messages.try_iter().take(64).collect::<Vec<_>>())
-                    .unwrap_or_default(),
-            )
-            .collect::<Vec<_>>();
+        let messages = match handshake {
+            Some(message) => vec![message],
+            None => peer.as_ref().map(Peer::incoming).unwrap_or_default(),
+        };
         for message in messages {
             let Some(message) = message else {
                 if peer.as_ref().is_some_and(|p| p.client.is_some()) {
@@ -535,6 +538,7 @@ fn serve_with_policy(
                         }
                     }
                     if !p.control(ServerMessage::Ack { id, accepted }) {
+                        tracing::warn!(id, "Graphical input reply channel closed");
                         peer = None;
                         break;
                     }
@@ -713,7 +717,13 @@ fn serve_with_policy(
         // Keep the timer for worker updates and accepting new attachments.
         if let Some(p) = &peer {
             let mut wait = crossbeam_channel::Select::new();
-            wait.recv(&p.messages);
+            if p.control.is_full() {
+                // Pending input cannot advance until its reply has room. Wait
+                // for output instead of spinning on the nonempty input queue.
+                wait.send(&p.control);
+            } else {
+                wait.recv(&p.messages);
+            }
             let _ = wait.ready_timeout(remaining);
         } else {
             std::thread::sleep(remaining);
@@ -747,6 +757,78 @@ pub fn relay(socket: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_bursts_wait_for_reliable_reply_capacity_without_losing_order() {
+        // Keep output deliberately stalled, as with a busy graphical frontend.
+        // A live writer would make this regression depend on thread scheduling.
+        let (_client, socket) = UnixStream::pair().unwrap();
+        let (input, messages) = bounded(64);
+        let (control, replies) = bounded(64);
+        let (media, _media) = bounded(8);
+        let (frames, old_frame) = bounded(1);
+        let peer = Peer {
+            socket,
+            messages,
+            control,
+            media,
+            frames,
+            old_frame,
+            client: Some("paused-movie".into()),
+            assets: std::sync::Mutex::new(HashSet::new()),
+            presentation: PresentationBudget::default(),
+            presentation_switch: false,
+        };
+        let mut acknowledged = Vec::new();
+        for burst in 0..16 {
+            for _ in 0..63 {
+                assert!(peer.control(ServerMessage::Pong));
+            }
+            for offset in 0..64 {
+                input
+                    .send(Some(ClientMessage::Input {
+                        id: burst * 64 + offset,
+                        revision: 1,
+                        generation: 1,
+                        input: Input::Key {
+                            code: "space".into(),
+                            modifiers: 0,
+                        },
+                    }))
+                    .unwrap();
+            }
+            let first = peer.incoming();
+            assert_eq!(first.len(), 1);
+            let Some(ClientMessage::Input { id, .. }) = &first[0] else {
+                panic!("input");
+            };
+            assert!(peer.control(ServerMessage::Ack {
+                id: *id,
+                accepted: true,
+            }));
+            assert!(peer.incoming().is_empty());
+            assert_eq!(peer.messages.len(), 63);
+            for reply in replies.try_iter() {
+                if let ServerMessage::Ack { id, .. } = reply {
+                    acknowledged.push(id);
+                }
+            }
+            for message in peer.incoming() {
+                let Some(ClientMessage::Input { id, .. }) = message else {
+                    panic!("input");
+                };
+                assert!(peer.control(ServerMessage::Ack { id, accepted: true }));
+            }
+            for reply in replies.try_iter() {
+                let ServerMessage::Ack { id, .. } = reply else {
+                    panic!("acknowledgment");
+                };
+                acknowledged.push(id);
+            }
+        }
+        assert_eq!(acknowledged, (0..1024).collect::<Vec<_>>());
+        assert!(peer.messages.is_empty());
+    }
 
     #[test]
     fn skin_assets_use_reliable_channel_once_and_survive_scene_replacement() {

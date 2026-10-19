@@ -1382,6 +1382,11 @@ fn run_impl(
                     .flatten()
                     .is_some());
         if dead {
+            tracing::warn!(
+                timed_out,
+                quiet_ms = last_reply.elapsed().as_millis(),
+                "Graphical attachment disconnected"
+            );
             embedded.release();
             canvases.clear(&mut io::stdout().lock())?;
             if capture_keyboard {
