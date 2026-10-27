@@ -10,6 +10,126 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 
 use super::protocol::Scene;
 
+/// Scene rasterization policy; CPU remains the default reference implementation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    #[default]
+    Cpu,
+    Gpu,
+    Auto,
+}
+impl Backend {
+    pub fn from_environment() -> Result<Self> {
+        match std::env::var("STAR_GRAPHICS_RENDERER").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("cpu") => Ok(Self::Cpu),
+            Ok("gpu") => Ok(Self::Gpu),
+            Ok("auto") => Ok(Self::Auto),
+            _ => anyhow::bail!("STAR_GRAPHICS_RENDERER must be cpu, gpu or auto"),
+        }
+    }
+}
+/// Actual backend selected, including a hardware adapter or explicit fallback reason.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BackendInfo {
+    pub requested: Backend,
+    pub selected: Backend,
+    pub adapter: Option<String>,
+    pub api: Option<String>,
+    pub fallback_reason: Option<String>,
+}
+fn configure_backend(
+    painter: &mut super::native::Painter,
+    requested: Backend,
+) -> Result<BackendInfo> {
+    let mut info = BackendInfo {
+        requested,
+        selected: Backend::Cpu,
+        adapter: None,
+        api: None,
+        fallback_reason: None,
+    };
+    if requested == Backend::Cpu {
+        return Ok(info);
+    }
+    #[cfg(feature = "gpu-renderer")]
+    {
+        match super::gpu::Gpu::new() {
+            Ok(gpu) => {
+                info.selected = Backend::Gpu;
+                info.adapter = Some(gpu.name.clone());
+                info.api = Some(gpu.backend.clone());
+                painter.gpu = Some(gpu);
+            }
+            Err(error) if requested == Backend::Auto => {
+                info.fallback_reason = Some(format!("{error:#}"));
+                tracing::warn!(%error,"GPU initialization unavailable; using CPU scene renderer");
+            }
+            Err(error) => return Err(error.context("GPU renderer requested")),
+        }
+    }
+    #[cfg(not(feature = "gpu-renderer"))]
+    {
+        let _ = painter;
+        let reason = "This build has no gpu-renderer feature";
+        if requested == Backend::Gpu {
+            anyhow::bail!("{reason}")
+        }
+        info.fallback_reason = Some(reason.into());
+    }
+    Ok(info)
+}
+fn render_selected(
+    painter: &mut super::native::Painter,
+    backend: Backend,
+    scene: &Scene,
+    active: &[String],
+) -> Result<(RgbaImage, Option<String>)> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        painter.render_with_canvases(scene, active)
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("Scene renderer panicked")));
+    #[cfg(feature = "gpu-renderer")]
+    if backend == Backend::Auto && painter.gpu.is_some() {
+        if let Err(error) = result {
+            let reason = format!("{error:#}");
+            tracing::warn!(%reason,"GPU rendering failed; retrying the scene on CPU");
+            painter.gpu = None;
+            return Ok((painter.render_with_canvases(scene, active)?, Some(reason)));
+        }
+    }
+    let _ = backend;
+    result.map(|image| (image, None))
+}
+/// Reusable synchronous scene renderer for benchmarks and offscreen exports.
+/// Layout and text shaping are shared with the terminal worker.
+pub struct SceneRenderer {
+    painter: super::native::Painter,
+    info: BackendInfo,
+}
+impl SceneRenderer {
+    pub fn new(backend: Backend) -> Result<Self> {
+        let mut painter =
+            super::native::Painter::with_font(super::font::Font::default().configured());
+        let info = configure_backend(&mut painter, backend)?;
+        Ok(Self { painter, info })
+    }
+    pub fn backend(&self) -> &BackendInfo {
+        &self.info
+    }
+    pub fn render(&mut self, scene: &Scene) -> Result<RgbaImage> {
+        let (image, fallback) =
+            render_selected(&mut self.painter, self.info.requested, scene, &[])?;
+        if let Some(reason) = fallback {
+            self.info.selected = Backend::Cpu;
+            self.info.adapter = None;
+            self.info.api = None;
+            self.info.fallback_reason = Some(reason);
+        }
+        Ok(image)
+    }
+}
+
 #[derive(Debug)]
 pub enum RenderMessage {
     Ready,
@@ -47,6 +167,7 @@ impl Renderer {
         font: super::font::Font,
         options: super::client::PresentationOptions,
     ) -> Result<Self> {
+        let backend = Backend::from_environment()?;
         let (input, scenes) = bounded::<(Scene, Vec<String>)>(1);
         let stale = scenes.clone();
         let (live, images) = bounded::<(String, Arc<RgbaImage>)>(1);
@@ -60,6 +181,9 @@ impl Renderer {
                     font,
                     options.pane_corner_radius,
                 );
+                if let Err(error)=configure_backend(&mut painter,backend){
+                    let _=frames.send(RenderMessage::Error{message:format!("Native renderer initialization: {error:#}")});return;
+                }
                 let mut previous = None;
                 loop {
                     let timeout = if painter.animating() { std::time::Duration::from_millis(20) } else { std::time::Duration::from_secs(3600) };
@@ -86,7 +210,7 @@ impl Renderer {
                     };
                     let started = std::time::Instant::now();
                     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        painter.render_with_canvases(&scene, &active_canvases)
+                        render_selected(&mut painter,backend,&scene,&active_canvases).map(|(image,_)|image)
                     }));
                     // Decoded assets belong to the painter. Presentation only
                     // needs layout, so frame snapshots do not duplicate artwork.
@@ -204,6 +328,7 @@ pub struct KittyPresenter {
     invalidated: bool,
     repair_cursor: usize,
     repaired_at: std::time::Instant,
+    repair_batch_at: std::time::Instant,
 }
 struct RegionCache {
     pixels: Arc<RgbaImage>,
@@ -223,6 +348,7 @@ impl Default for KittyPresenter {
             invalidated: false,
             repair_cursor: 0,
             repaired_at: std::time::Instant::now(),
+            repair_batch_at: std::time::Instant::now(),
         }
     }
 }
@@ -275,7 +401,7 @@ impl KittyPresenter {
             write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
         }
         if let Some(regions) = self.regions.take() {
-            for (_, old) in regions.placements {
+            for (_, old) in regions.placements.into_iter().filter(|(_, id)| *id != 0) {
                 write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
             }
         }
@@ -293,7 +419,7 @@ impl KittyPresenter {
             write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
         }
         if let Some(regions) = self.regions.take() {
-            for (_, id) in regions.placements {
+            for (_, id) in regions.placements.into_iter().filter(|(_, id)| *id != 0) {
                 write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
             }
         }
@@ -333,15 +459,24 @@ impl KittyPresenter {
         now: std::time::Instant,
         out: &mut impl Write,
     ) -> anyhow::Result<usize> {
-        let count = self
-            .regions
-            .as_ref()
-            .map_or(1, |r| r.placements.len())
-            .max(1);
-        let interval = std::time::Duration::from_secs(2) / count as u32;
-        if now.saturating_duration_since(self.repaired_at) < interval {
+        let count = self.regions.as_ref().map_or(1, |r| {
+            r.placements.iter().filter(|(_, id)| *id != 0).count()
+        });
+        if count == 0 {
+            self.repaired_at = now;
             return Ok(0);
         }
+        let interval = std::time::Duration::from_secs(2) / count as u32;
+        // Batch recovery rather than waking Kitty/the desktop compositor for
+        // each tile (a large window can have over 150). Live app video and
+        // changed chrome still present immediately through their own paths.
+        if now.saturating_duration_since(self.repaired_at) < interval
+            || now.saturating_duration_since(self.repair_batch_at)
+                < std::time::Duration::from_millis(100)
+        {
+            return Ok(0);
+        }
+        self.repair_batch_at = now;
         let Some(regions) = &mut self.regions else {
             self.repaired_at = now;
             return self.repaint(out);
@@ -356,8 +491,13 @@ impl KittyPresenter {
         let mut retired = Vec::new();
         out.write_all(b"\x1b[?2026h")?;
         for _ in 0..due {
-            let index = self.repair_cursor % regions.placements.len();
-            self.repair_cursor = self.repair_cursor.wrapping_add(1);
+            let index = loop {
+                let index = self.repair_cursor % regions.placements.len();
+                self.repair_cursor = self.repair_cursor.wrapping_add(1);
+                if regions.placements[index].1 != 0 {
+                    break index;
+                }
+            };
             let (rect, old) = regions.placements[index];
             self.next = self.next.wrapping_add(1);
             let image = self.next;
@@ -468,6 +608,13 @@ impl KittyPresenter {
             }
             let crop =
                 crate::image::imageops::crop_imm(pixels.as_ref(), x, y, width, height).to_image();
+            // Native terminal holes need no Kitty image. Uploading transparent
+            // tiles still allocates textures and wakes Kitty/the compositor;
+            // periodic recovery would otherwise resend every empty tile too.
+            if crop.pixels().all(|pixel| pixel.0[3] == 0) {
+                changes.push((index, rect, String::new()));
+                continue;
+            }
             let mut encoded = Vec::new();
             crate::image::codecs::png::PngEncoder::new_with_quality(
                 &mut encoded,
@@ -532,7 +679,12 @@ impl KittyPresenter {
         let mut retired = Vec::new();
         if !same_geometry {
             if let Some(old) = &self.regions {
-                retired.extend(old.placements.iter().map(|(_, id)| *id));
+                retired.extend(
+                    old.placements
+                        .iter()
+                        .map(|(_, id)| *id)
+                        .filter(|id| *id != 0),
+                );
             }
         }
         if let Some(id) = self.previous {
@@ -541,13 +693,17 @@ impl KittyPresenter {
         if !changes.is_empty() {
             out.write_all(b"\x1b[?2026h")?;
             for (index, rect, encoded) in changes {
-                self.next = self.next.wrapping_add(1);
-                let id = self.next;
-                if same_geometry {
+                if same_geometry && placements[index].1 != 0 {
                     retired.push(placements[index].1);
                 }
+                let id = if encoded.is_empty() {
+                    0
+                } else {
+                    self.next = self.next.wrapping_add(1);
+                    write_region(out, self.next, rect, &encoded)?;
+                    self.next
+                };
                 placements[index] = (rect, id);
-                write_region(out, id, rect, &encoded)?;
                 encoded_regions[index] = encoded;
             }
             // All replacement regions are placed before retiring any old
@@ -899,6 +1055,113 @@ mod tests {
     }
 
     #[test]
+    fn large_idle_windows_batch_recovery_instead_of_waking_for_each_tile() {
+        let viewport = super::super::protocol::Viewport {
+            columns: 264,
+            rows: 130,
+            width: 1056,
+            height: 1040,
+            generation: 1,
+        };
+        let frame = Arc::new(RgbaImage::from_pixel(
+            1056,
+            1040,
+            crate::image::Rgba([20, 30, 40, 255]),
+        ));
+        let mut presenter = KittyPresenter::default();
+        let mut wire = Vec::new();
+        presenter
+            .present_pixels(frame, viewport, &mut wire)
+            .unwrap();
+        let start = std::time::Instant::now();
+        presenter.repaired_at = start;
+        presenter.repair_batch_at = start;
+        wire.clear();
+        assert_eq!(
+            presenter
+                .maintain_at(start + std::time::Duration::from_millis(60), &mut wire)
+                .unwrap(),
+            0
+        );
+        assert!(wire.is_empty());
+        presenter
+            .maintain_at(start + std::time::Duration::from_millis(100), &mut wire)
+            .unwrap();
+        assert!((2..=8).contains(&String::from_utf8_lossy(&wire).matches("a=T").count()));
+        wire.clear();
+        presenter
+            .maintain_at(start + std::time::Duration::from_millis(110), &mut wire)
+            .unwrap();
+        assert!(
+            wire.is_empty(),
+            "Recovery must not spin to catch up between batches"
+        );
+    }
+
+    #[test]
+    fn native_terminal_holes_never_upload_or_repair_invisible_textures() {
+        let viewport = super::super::protocol::Viewport {
+            columns: 80,
+            rows: 20,
+            width: 320,
+            height: 160,
+            generation: 1,
+        };
+        let mut frame = RgbaImage::new(320, 160);
+        let mut presenter = KittyPresenter::default();
+        let mut images = BTreeMap::new();
+        let mut wire = Vec::new();
+        presenter
+            .present_pixels(Arc::new(frame.clone()), viewport, &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        assert!(images.is_empty());
+        wire.clear();
+        let now = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        assert_eq!(presenter.maintain_at(now, &mut wire).unwrap(), 0);
+        assert!(
+            wire.is_empty(),
+            "An empty native pane must cause no GPU traffic"
+        );
+
+        // Opening an overlay creates only the occupied tile, not eight
+        // transparent textures covering the native terminal around it.
+        frame.put_pixel(20, 20, crate::image::Rgba([200, 100, 50, 255]));
+        presenter
+            .present_pixels(Arc::new(frame.clone()), viewport, &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        assert_eq!(images.len(), 1);
+        images.clear();
+        wire.clear();
+        presenter
+            .maintain_at(now + std::time::Duration::from_secs(3), &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        assert_eq!(
+            images.len(),
+            1,
+            "Visible overlays must still recover after image loss"
+        );
+        assert_eq!(String::from_utf8_lossy(&wire).matches("a=T").count(), 1);
+
+        // Closing the overlay deletes its texture, revealing native text.
+        frame.put_pixel(20, 20, crate::image::Rgba([0, 0, 0, 0]));
+        wire.clear();
+        presenter
+            .present_pixels(Arc::new(frame), viewport, &mut wire)
+            .unwrap();
+        apply_wire(&wire, &mut images);
+        assert!(images.is_empty());
+        assert!(!String::from_utf8_lossy(&wire).contains("a=T"));
+        wire.clear();
+        presenter
+            .maintain_at(now + std::time::Duration::from_secs(6), &mut wire)
+            .unwrap();
+        assert!(wire.is_empty(), "Closed overlays must not be resurrected");
+    }
+
+    #[test]
     fn dirty_regions_reconstruct_skipped_frames_and_retire_replaced_images() {
         let viewport = super::super::protocol::Viewport {
             columns: 80,
@@ -1148,7 +1411,7 @@ mod tests {
             height: 160,
             generation: 1,
         };
-        let mut frame = RgbaImage::new(320, 160);
+        let mut frame = RgbaImage::from_pixel(320, 160, crate::image::Rgba([20, 30, 40, 255]));
         let mut presenter = KittyPresenter::default();
         let mut images = BTreeMap::new();
         let mut wire = Vec::new();
@@ -1299,5 +1562,38 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
         assert!(s.find("a=T").unwrap() < s.find("a=d").unwrap());
         assert!(p.present("\x1b", 80, 24, &mut vec![]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod backend_tests {
+    #[test]
+    fn offscreen_renderers_can_be_moved_to_a_worker() {
+        fn send<T: Send>() {}
+        send::<super::SceneRenderer>();
+        send::<super::SurfaceOverlayRenderer>();
+    }
+    #[cfg(not(feature = "gpu-renderer"))]
+    #[test]
+    fn graphics_only_build_has_an_explicit_gpu_policy() {
+        assert!(super::SceneRenderer::new(super::Backend::Gpu).is_err());
+        let mut renderer = super::SceneRenderer::new(super::Backend::Auto).unwrap();
+        assert_eq!(renderer.backend().selected, super::Backend::Cpu);
+        assert!(renderer.backend().fallback_reason.is_some());
+        let viewport = super::super::protocol::Viewport::default();
+        let scene = super::super::protocol::Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0,
+                0,
+                viewport.columns,
+                viewport.rows,
+            )),
+            viewport,
+            1,
+        );
+        assert_eq!(
+            renderer.render(&scene).unwrap(),
+            super::render_reference(&scene).unwrap()
+        );
     }
 }

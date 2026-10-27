@@ -77,6 +77,7 @@ pub(crate) struct Router {
     pressed: u8,
     sequence: u64,
 }
+#[derive(Default)]
 pub(crate) struct Routed {
     pub consumed: bool,
     pub input: Option<Input>,
@@ -84,6 +85,32 @@ pub(crate) struct Routed {
     pub keyboard: Option<bool>,
 }
 impl Router {
+    pub fn active_canvas(&self) -> Option<&str> {
+        self.active.as_deref()
+    }
+    /// Explicit local frontend request; never infer focus from a mouse position.
+    pub fn focus_canvas(&mut self, canvas: &str, scene: &Scene) -> Routed {
+        let allowed = !scene.components.iter().any(|c| matches!(c, Component::Menu { .. } | Component::Dialog { .. }))
+            && scene.components.iter().any(|c| matches!(c, Component::LiveCanvas { id, interactive: true, .. } if id == canvas));
+        if !allowed {
+            return Routed {
+                release: self.release(),
+                keyboard: Some(false),
+                ..Default::default()
+            };
+        }
+        let release = if self.active.as_deref() != Some(canvas) {
+            self.release()
+        } else {
+            None
+        };
+        self.active = Some(canvas.into());
+        Routed {
+            release,
+            keyboard: Some(true),
+            ..Default::default()
+        }
+    }
     fn event(&mut self, canvas: String, kind: EmbeddedKind) -> Input {
         self.sequence = self.sequence.wrapping_add(1);
         Input::Embedded {
@@ -397,6 +424,75 @@ mod tests {
         );
         assert!(r.route(&Event::FocusLost, &scene, true).release.is_some());
         assert!(r.active.is_none());
+    }
+    #[test]
+    fn explicit_window_activation_restores_capture_without_a_pointer_click() {
+        let mut scene = Scene::from_buffer(
+            &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                0, 0, 100, 40,
+            )),
+            Default::default(),
+            1,
+        );
+        scene.components.push(Component::LiveCanvas {
+            rect: crate::ratatui::layout::Rect::new(0, 0, 100, 40).into(),
+            id: "terminal".into(),
+            view: crate::content_view::ContentView::new(
+                [1000, 600],
+                crate::native_surface::PixelRect::new(0, 0, 1000, 600),
+            )
+            .unwrap(),
+            interactive: true,
+        });
+        let mut router = Router::default();
+        // Ordinary applications still require their own explicit focus policy.
+        assert_eq!(
+            router.route(&Event::FocusGained, &scene, true).keyboard,
+            None
+        );
+        assert!(router.active.is_none());
+        assert_eq!(router.focus_canvas("terminal", &scene).keyboard, Some(true));
+        assert!(router
+            .route(&Event::FocusLost, &scene, true)
+            .release
+            .is_some());
+        assert!(router.active.is_none());
+        assert_eq!(router.focus_canvas("terminal", &scene).keyboard, Some(true));
+        let key = crate::crossterm::event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(matches!(
+            router.route(&Event::Key(key), &scene, true).input,
+            Some(Input::Embedded {
+                event: EmbeddedEvent {
+                    kind: EmbeddedKind::Key {
+                        phase: KeyPhase::Press,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(router.focus_canvas("missing", &scene).keyboard, Some(false));
+        assert!(router.active.is_none());
+        if let Component::LiveCanvas { interactive, .. } = &mut scene.components[0] {
+            *interactive = false;
+        }
+        assert_eq!(
+            router.focus_canvas("terminal", &scene).keyboard,
+            Some(false)
+        );
+        if let Component::LiveCanvas { interactive, .. } = &mut scene.components[0] {
+            *interactive = true;
+        }
+        scene.components.push(Component::Dialog {
+            rect: crate::ratatui::layout::Rect::new(0, 0, 30, 10).into(),
+            title: "Rename".into(),
+        });
+        assert_eq!(
+            router.focus_canvas("terminal", &scene).keyboard,
+            Some(false)
+        );
+        assert!(router.active.is_none());
     }
     #[test]
     fn key_phases_and_escape_balance_capture() {

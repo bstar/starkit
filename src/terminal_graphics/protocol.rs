@@ -420,6 +420,15 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    TerminalFont {
+        size_millipoints: u32,
+    },
+    TerminalCells {
+        frame: super::terminal_cells::Frame,
+    },
+    CanvasPixels {
+        frame: super::pixel_stream::Pixels,
+    },
     /// Negotiated frontend-only mouse visibility over a named live canvas.
     PointerPolicy {
         canvas: String,

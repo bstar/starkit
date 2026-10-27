@@ -249,3 +249,39 @@ The four consumers expose `scripts/check-kit.sh`; candidate checks modify only
 disposable manifests/locks. Development main pins an immutable 0.9 candidate
 revision so fresh checkouts build without a sibling repository. This is not a
 release; release source pins still move only after tagging.
+
+## Application UI renovation (0.13 candidate)
+
+The user selected AMP-derived chrome and a KIT-owned UI tree/lifecycle, with
+consistent actions in cells and graphics. Cell headings remain compact border
+headings; graphical headings use physical title strips. Windows 3.11 describes
+simplicity and consistency, not a visual recreation. SCREEN replaces REEL and
+is the fifth migration target at `../starscreen`.
+
+`ui` owns the new component tree, command registry, layout snapshots, focus,
+editing, pointer capture and bounded custom content. `ui::application::Host`
+adapts it to the persistent local/SSH session. Legacy controllers remain
+compatible and periodic unless they opt into `scene_dirty`. Do not describe a
+consumer as migrated merely because it compiles against the candidate.
+
+- [x] Reconcile main with FOLD/SCREEN's 0.12 media and presentation fixes.
+- [x] Implement the initial retained UI contract and independent public gallery.
+- [ ] Complete the control catalog, visual fixtures and real terminal input gates.
+- [ ] Migrate AMP, FOLD, CORD, WIRE and SCREEN to framework-owned presentation.
+- [ ] Verify five-consumer behavior, performance, SSH, media and display recovery.
+- [ ] Publish the accepted minor release and move application pins separately.
+
+Preserve FOLD's existing terminal-lab and `src/ui/layout.rs` working edits.
+The initial candidate deliberately does not tag a release or claim completed
+consumer migrations. See `docs/application-ui.md` for the public API contract.
+
+## Crossterm coordinate parser
+
+Crossterm 0.29.0 panics on zero SGR mouse/cursor coordinates in debug builds.
+KIT and both independent examples patch crates.io to upstream commit
+`d4e9929f9a1c4adf91505d54f8527c817ae504cd`, matching AMP/CORD. Cargo only
+honors the root manifest's patch; applications must keep their own until a
+released Crossterm contains the fix. FOLD's vendored parser already guards
+these coordinates and retains its OSC drop extension. Do not silently remove
+these root patches when updating KIT pins. The gallery proof injects zero
+coordinates before exercising shortcuts and theme changes.

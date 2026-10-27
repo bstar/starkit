@@ -23,11 +23,22 @@ pub enum PointerPrecision {
     Cells,
 }
 
+/// Font measurements owned by the presenting computer, including SSH frontends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalTypography {
+    pub millipixels: u32,
+    pub cell: [u16; 2],
+    /// Measured cells for integer pixel sizes 10 through 32.
+    pub sizes: [[u16; 2]; 23],
+}
+
 /// A Kitty image reply does not imply pixel-precise mouse events. Current
 /// input defaults to cells, even when image dimensions are measured pixels.
 /// `pixel_mouse` separately reports an enabled SGR pixel mouse mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_typography: Option<TerminalTypography>,
     /// Actual default background reported by the presenting terminal (OSC 11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_background: Option<[u8; 3]>,
@@ -42,6 +53,12 @@ pub struct Capabilities {
     /// Bounded encoded live frames, without access to the controller's filesystem.
     #[serde(default)]
     pub streamed_frames: bool,
+    #[serde(default)]
+    pub lossless_frames: bool,
+    #[serde(default)]
+    pub native_terminal_cells: bool,
+    #[serde(default)]
+    pub native_font_millipoints: Option<u32>,
     /// Low-latency H.264 canvas decoding on the terminal computer.
     #[serde(default)]
     pub canvas_video: bool,
@@ -49,6 +66,8 @@ pub struct Capabilities {
     /// Absent on legacy peers, which retain their 720p/2 MiB contract.
     #[serde(default)]
     pub canvas_video_high_quality: bool,
+    #[serde(default)]
+    pub canvas_video_pipelined: bool,
     #[serde(default)]
     pub key_event_types: bool,
     #[serde(default)]
@@ -153,14 +172,22 @@ impl Capabilities {
         remote_terminal: bool,
     ) -> Self {
         Self {
+            terminal_typography: None,
             terminal_background: None,
             pointer_hiding: cfg!(target_os = "macos")
                 && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
             local_frames: false,
             streamed_frames: false,
+            lossless_frames: true,
+            native_terminal_cells: true,
+            native_font_millipoints: std::env::var("STAR_KIT_FONT_MILLIPOINTS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|size| (6000..=32000).contains(size)),
             canvas_video: cfg!(feature = "media") && !remote_terminal,
             canvas_video_high_quality: cfg!(feature = "media") && !remote_terminal,
+            canvas_video_pipelined: cfg!(feature = "media"),
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,
@@ -241,6 +268,19 @@ mod tests {
         encoded
             .as_object_mut()
             .unwrap()
+            .remove("canvas_video_pipelined");
+        encoded.as_object_mut().unwrap().remove("lossless_frames");
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("native_terminal_cells");
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("native_font_millipoints");
+        encoded
+            .as_object_mut()
+            .unwrap()
             .remove("canvas_video_high_quality");
         encoded.as_object_mut().unwrap().remove("pointer_hiding");
         encoded.as_object_mut().unwrap().remove("file_exports");
@@ -253,6 +293,10 @@ mod tests {
         assert!(!old.native_gradients);
         assert!(!old.native_skins);
         assert!(!old.canvas_video);
+        assert!(!old.canvas_video_pipelined);
+        assert!(!old.lossless_frames);
+        assert!(!old.native_terminal_cells);
+        assert_eq!(old.native_font_millipoints, None);
         assert!(!old.canvas_video_high_quality);
         assert!(!old.surface_hover);
         assert!(!old.pixel_mouse);
@@ -260,14 +304,22 @@ mod tests {
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
         let capabilities = Capabilities {
+            terminal_typography: None,
             terminal_background: None,
             pointer_hiding: cfg!(target_os = "macos")
                 && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
             local_frames: false,
             streamed_frames: false,
+            lossless_frames: true,
+            native_terminal_cells: true,
+            native_font_millipoints: std::env::var("STAR_KIT_FONT_MILLIPOINTS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|size| (6000..=32000).contains(size)),
             canvas_video: false,
             canvas_video_high_quality: false,
+            canvas_video_pipelined: false,
             key_event_types: false,
             relative_pointer: false,
             cell_presentation: None,

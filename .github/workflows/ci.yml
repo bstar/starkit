@@ -114,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [staramp, starfold, starcord, starwire]
+        app: [staramp, starfold, starcord, starwire, starscreen]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -128,6 +128,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
       - name: Native build dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
+      - name: SCREEN capture and compositor dependencies
+        if: matrix.app == 'starscreen'
+        run: sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libges-1.0-dev libcairo2-dev libwayland-dev libxkbcommon-dev libudev-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libpixman-1-dev
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: consumer -> target/kit-compat

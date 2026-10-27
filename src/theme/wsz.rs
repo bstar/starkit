@@ -58,6 +58,7 @@ pub fn read(path: &Path) -> Result<SkinColors> {
         if let Ok(f) = zip.by_index(i) {
             let name = f
                 .name()
+                .context("reading Winamp skin entry name")?
                 .rsplit(['/', '\\'])
                 .next()
                 .unwrap_or("")

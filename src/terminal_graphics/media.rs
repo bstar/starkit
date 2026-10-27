@@ -20,6 +20,12 @@ pub enum ToClient {
         width: u32,
         height: u32,
     },
+    /// Opt-in bounded pipelining; sent only to canvas_video_pipelined peers.
+    CanvasVideoWindow {
+        session: u64,
+        generation: u64,
+        frames: usize,
+    },
     CanvasVideoPacket {
         session: u64,
         generation: u64,

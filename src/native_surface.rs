@@ -82,6 +82,19 @@ pub enum Primitive {
     },
 }
 impl Primitive {
+    /// Presentation adapters move bounds through KIT so new primitive variants
+    /// do not require exhaustive geometry matches in every application.
+    pub fn rect_mut(&mut self) -> &mut PixelRect {
+        match self {
+            Self::Gradient { rect, .. }
+            | Self::Fill { rect, .. }
+            | Self::Border { rect, .. }
+            | Self::Text { rect, .. }
+            | Self::Icon { rect, .. }
+            | Self::Sprite { rect, .. }
+            | Self::Path { rect, .. } => rect,
+        }
+    }
     pub fn rect(&self) -> PixelRect {
         match self {
             Self::Gradient { rect, .. }
@@ -110,6 +123,14 @@ pub struct TextRule {
     pub color: String,
 }
 
+/// Optional shaped caret for a text node. Byte offsets refer to its UTF-8 text;
+/// older frontends may ignore this additive presentation hint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextCaret {
+    pub node: u16,
+    pub byte: usize,
+    pub color: String,
+}
 /// A presentation-only hover color for an existing background fill. It does
 /// not carry an action or alter the controller's selection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +169,10 @@ pub struct Surface {
     /// Fixed editor grid, in source pixels. Ordinary surfaces use shaped text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_size: Option<[u16; 2]>,
+    /// Terminal font size in thousandths of a physical pixel. Also opts fixed
+    /// grids into whole-run shaping, preserving ligatures and cluster bearings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_font_millipixels: Option<u32>,
     /// Content-addressed PNG payloads; None references artwork cached by the frontend.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub assets: std::collections::BTreeMap<String, Option<String>>,
@@ -162,6 +187,8 @@ pub struct Surface {
     /// Older frontends ignore this optional presentation hint.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub centered_text: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_carets: Vec<TextCaret>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -198,6 +225,14 @@ impl Surface {
                 false
             }
         });
+        self.text_carets.retain_mut(|caret| {
+            if let Some(Some(node)) = mapping.get(usize::from(caret.node)) {
+                caret.node = *node;
+                true
+            } else {
+                false
+            }
+        });
         self.centered_text = self
             .centered_text
             .iter()
@@ -212,12 +247,14 @@ impl Surface {
             text_scale: TextScale::Terminal,
             ui_font: false,
             cell_size: None,
+            terminal_font_millipixels: None,
             assets: Default::default(),
             nodes: vec![],
             hits: vec![],
             hover_fills: vec![],
             text_rules: vec![],
             centered_text: vec![],
+            text_carets: vec![],
         }
     }
     pub fn with_physical_text(mut self) -> Self {
@@ -313,8 +350,14 @@ impl Surface {
                 && self.hits.len() <= 256
                 && self.hover_fills.len() <= 256
                 && self.text_rules.len() <= 256
-                && self.centered_text.len() <= 256,
+                && self.centered_text.len() <= 256
+                && self.text_carets.len() <= 256,
             "surface exceeds limits"
+        );
+        anyhow::ensure!(
+            self.terminal_font_millipixels
+                .is_none_or(|n| (4000..=96000).contains(&n)),
+            "invalid terminal font size"
         );
         if let Some([width, height]) = self.cell_size {
             anyhow::ensure!(
@@ -357,6 +400,7 @@ impl Surface {
                     Some(Primitive::Text { rect, .. }) if rect.x <= rule.end)),
             "invalid surface text rule"
         );
+        anyhow::ensure!(self.text_carets.iter().all(|caret| color(&caret.color) && matches!(self.nodes.get(usize::from(caret.node)), Some(Primitive::Text { text, .. }) if text.is_char_boundary(caret.byte))), "invalid surface text caret");
         let skin_id = |id: &str| {
             id.strip_prefix("skin/").is_some_and(|h| {
                 h.len() == 64
@@ -680,5 +724,28 @@ mod tests {
         assert!(s.hit(40, 40).is_none());
         s.fill(PixelRect::new(190, 0, 20, 1), "#ffffff", 0);
         assert!(s.validate().is_err());
+    }
+    #[test]
+    fn shaped_caret_offsets_validate_and_remap_with_retained_nodes() {
+        let mut surface = Surface::new(200, 40, "#000000".into()).with_ui_text();
+        surface.fill(PixelRect::new(0, 0, 200, 40), "#101010", 0);
+        surface.text(
+            PixelRect::new(4, 4, 192, 32),
+            "日本語",
+            "#ffffff",
+            12,
+            false,
+        );
+        surface.text_carets.push(TextCaret {
+            node: 1,
+            byte: 3,
+            color: "#ffffff".into(),
+        });
+        surface.validate().unwrap();
+        surface.retain_nodes(|node| matches!(node, Primitive::Text { .. }));
+        assert_eq!(surface.text_carets[0].node, 0);
+        surface.validate().unwrap();
+        surface.text_carets[0].byte = 1;
+        assert!(surface.validate().is_err());
     }
 }

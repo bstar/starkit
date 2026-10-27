@@ -581,6 +581,9 @@ pub fn run(launch: Launch) -> Result<()> {
     )
 }
 
+/// The local callback may return a `focus-canvas:ID` notice on `FocusGained`
+/// to restore an interactive canvas's keyboard capture. The notice also reaches
+/// the controller so it can restore focus inside its embedded application.
 pub fn run_with_events(launch: Launch, custom: fn(&Event) -> Option<Input>) -> Result<()> {
     run_impl(
         launch,
@@ -789,6 +792,13 @@ fn run_impl(
     tracing::info!(?capabilities, "Terminal presentation capabilities");
     let cell = graphics.cell_size().unwrap_or((10, 20));
     font.cell = Some(cell);
+    capabilities.terminal_typography = super::native::terminal_typography(&font);
+    if std::env::var_os("STAR_GRAPHICS_FONT_DEBUG").is_some() {
+        eprintln!(
+            "Terminal font probe: {font:?}; metrics: {:?}",
+            capabilities.terminal_typography
+        );
+    }
     let mut size = viewport(1, cell)?;
     let mut terminal_grid = (size.columns, size.rows);
     let pixel_scale = if graphical_available {
@@ -873,10 +883,12 @@ fn run_impl(
     let mut geometry_probe = Instant::now();
     let mut reconnect = Instant::now() + Duration::from_secs(5);
     let mut fatal = None;
+    let mut native_terminals = super::terminal_cells::Frontend::default();
     let mut canvases =
         super::canvas_frontend::Frontend::new()?.with_terminal_files(!environment.ssh);
     let mut embedded = super::embedded_input::Router::default();
     let mut capture_keyboard = false;
+    let mut pending_canvas_focus: Option<String> = None;
     let mut frames = 0u64;
     let mut bytes = 0u64;
     loop {
@@ -901,6 +913,39 @@ fn run_impl(
         for message in controls {
             last_reply = Instant::now();
             match message {
+                // The Kitty bridge applies this bounded, window-local setting.
+                ServerMessage::TerminalFont { size_millipoints } => {
+                    anyhow::ensure!(
+                        size_millipoints == 0 || (6000..=32000).contains(&size_millipoints),
+                        "Invalid native font size"
+                    );
+                }
+                ServerMessage::TerminalCells { frame } => {
+                    anyhow::ensure!(
+                        capabilities.native_terminal_cells,
+                        "Native terminal cells were not negotiated"
+                    );
+                    native_terminals.receive(frame)?;
+                }
+                ServerMessage::CanvasPixels { frame } => {
+                    anyhow::ensure!(
+                        capabilities.lossless_frames,
+                        "Lossless frames were not negotiated"
+                    );
+                    let first = canvases.receive_pixels_exact(&frame)?;
+                    if let Some(c) = &connection {
+                        c.send(ClientMessage::CanvasAck {
+                            stream: frame.stream,
+                            generation: frame.generation,
+                            sequence: frame.sequence,
+                        })?;
+                    }
+                    if first {
+                        if let Some(scene) = &last_scene {
+                            renderer.scene(scene, &canvases)?;
+                        }
+                    }
+                }
                 ServerMessage::CanvasStream { frame } => {
                     anyhow::ensure!(
                         capabilities.streamed_frames,
@@ -1007,6 +1052,7 @@ fn run_impl(
                     if matches!(
                         &message,
                         super::media::ToClient::CanvasVideoOpen { .. }
+                            | super::media::ToClient::CanvasVideoWindow { .. }
                             | super::media::ToClient::CanvasVideoPacket { .. }
                             | super::media::ToClient::CanvasVideoClose { .. }
                     ) {
@@ -1243,13 +1289,18 @@ fn run_impl(
                     scene: frame_scene,
                 } if generation == size.generation && width > 0 && height > 0 => {
                     let presentation_started = Instant::now();
+                    if !pixels {
+                        native_terminals.invalidate();
+                    }
                     if pixels {
                         if shown.is_none() {
                             let mut out = io::stdout().lock();
                             video_layer.clear(&mut out)?;
                             canvases.invalidate();
+                            native_terminals.invalidate();
                             out.write_all(b"\x1b[2J\x1b[H")?;
                         }
+                        native_terminals.restore_cursor();
                         bytes += presenter.present_pixels(
                             {
                                 let frame = frame_pixels.context("Native frame has no pixels")?;
@@ -1388,6 +1439,7 @@ fn run_impl(
                 "Graphical attachment disconnected"
             );
             embedded.release();
+            pending_canvas_focus = None;
             canvases.clear(&mut io::stdout().lock())?;
             if capture_keyboard {
                 io::stdout().write_all(b"\x1b[=5u")?;
@@ -1459,7 +1511,7 @@ fn run_impl(
         if connected {
             if let Some(c) = &connection {
                 for _ in 0..8 {
-                    if c.input.len() >= 4 {
+                    if c.input.len() >= 4 || !c.outbox.accepts_input() {
                         break;
                     }
                     let Ok(output) = drop_bridge.responses().try_recv() else {
@@ -1530,7 +1582,11 @@ fn run_impl(
         if let Some(scene) = &shown_scene {
             if pixels {
                 if shown.is_some() {
-                    bytes += presenter.maintain(&mut io::stdout().lock())? as u64;
+                    let maintained = presenter.maintain(&mut io::stdout().lock())? as u64;
+                    bytes += maintained;
+                    if maintained > 0 {
+                        native_terminals.restore_cursor();
+                    }
                 }
                 canvases.present(
                     scene,
@@ -1557,6 +1613,54 @@ fn run_impl(
                     &mut io::stdout().lock(),
                 )?;
             }
+            native_terminals.present(
+                scene,
+                Viewport {
+                    columns: terminal_grid.0,
+                    rows: terminal_grid.1,
+                    ..size
+                },
+                &mut io::stdout().lock(),
+            )?;
+        }
+        // Activation may arrive between a tiler resize and the next scene, or
+        // while a context menu is being dismissed on blur. Retry the explicit
+        // request when an interactive canvas becomes available.
+        if focused {
+            if let (Some(canvas), Some(scene), Some(c)) = (
+                pending_canvas_focus.as_ref(),
+                last_scene.as_ref(),
+                connection.as_ref(),
+            ) {
+                let routed = embedded.focus_canvas(canvas, scene);
+                if routed.keyboard == Some(true) {
+                    let (revision, generation) = shown.unwrap_or((0, size.generation));
+                    if let Some(input) = routed.release {
+                        id += 1;
+                        c.send(ClientMessage::Input {
+                            id,
+                            revision,
+                            generation,
+                            input,
+                        })?;
+                    }
+                    if capabilities.key_event_types && !capture_keyboard {
+                        io::stdout().write_all(b"\x1b[=15u")?;
+                        io::stdout().flush()?;
+                        capture_keyboard = true;
+                    }
+                    id += 1;
+                    c.send(ClientMessage::Input {
+                        id,
+                        revision,
+                        generation,
+                        input: Input::Notice {
+                            message: format!("focus-canvas:{canvas}"),
+                        },
+                    })?;
+                    pending_canvas_focus = None;
+                }
+            }
         }
         let poll_ms = if canvases.active()
             || media.video_playing()
@@ -1580,7 +1684,17 @@ fn run_impl(
                 }
             }
         }
-        if pending_event.is_some() || event::poll(Duration::from_millis(poll_ms))? {
+        // File drops can deliver thousands of reliable OSC chunks at once.
+        // Leave them in the terminal input stream while the writer catches up;
+        // do not turn a full send queue into a frontend exit. Media, acknowledgments
+        // and rendering above continue to run while terminal reads are paused.
+        let accepts_input = connection.as_ref().is_none_or(|c| c.outbox.accepts_input());
+        if !accepts_input {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if accepts_input
+            && (pending_event.is_some() || event::poll(Duration::from_millis(poll_ms))?)
+        {
             last_input = Instant::now();
             window.cursor(false);
             let first = match pending_event.take() {
@@ -1608,10 +1722,47 @@ fn run_impl(
                 });
             }
             let mut input = custom(&event);
+            match &event {
+                Event::Resize(..) if focused => {
+                    if let Some(canvas) = embedded.active_canvas() {
+                        pending_canvas_focus = Some(canvas.to_owned());
+                    }
+                }
+                Event::FocusGained => {
+                    pending_canvas_focus = match &input {
+                        Some(Input::Notice { message }) => {
+                            message.strip_prefix("focus-canvas:").map(str::to_owned)
+                        }
+                        _ => None,
+                    };
+                }
+                Event::FocusLost | Event::Key(_) => pending_canvas_focus = None,
+                Event::Mouse(mouse)
+                    if matches!(mouse.kind, crate::crossterm::event::MouseEventKind::Down(_)) =>
+                {
+                    pending_canvas_focus = None
+                }
+                _ => {}
+            }
             let routed = last_scene
                 .as_ref()
                 .filter(|_| pixels && (capabilities.local_frames || capabilities.streamed_frames))
-                .map(|scene| embedded.route(&event, scene, capabilities.pixel_mouse));
+                .map(|scene| {
+                    // A local custom event callback may explicitly choose a
+                    // canvas on window activation. Keep other apps opt-in and
+                    // preserve the notice for the controller's native focus.
+                    let requested = match &input {
+                        Some(Input::Notice { message }) if matches!(event, Event::FocusGained) => {
+                            message.strip_prefix("focus-canvas:")
+                        }
+                        _ => None,
+                    };
+                    if let Some(canvas) = requested {
+                        embedded.focus_canvas(canvas, scene)
+                    } else {
+                        embedded.route(&event, scene, capabilities.pixel_mouse)
+                    }
+                });
             if let Some(release) = routed.as_ref().and_then(|r| r.release.clone()) {
                 if let Some(c) = &connection {
                     let (revision, generation) = shown.unwrap_or((0, size.generation));
@@ -1625,6 +1776,9 @@ fn run_impl(
                 }
             }
             if let Some(change) = routed.as_ref().and_then(|r| r.keyboard) {
+                if change {
+                    pending_canvas_focus = None;
+                }
                 if capabilities.key_event_types && change != capture_keyboard {
                     io::stdout().write_all(if change { b"\x1b[=15u" } else { b"\x1b[=5u" })?;
                     io::stdout().flush()?;
@@ -1641,12 +1795,14 @@ fn run_impl(
                             && k.code == KeyCode::Char('l')
                         {
                             if pixels {
+                                native_terminals.restore_cursor();
                                 bytes += presenter.repaint(&mut io::stdout().lock())? as u64;
                             } else {
                                 renderer = Frontend::spawn(false, font.clone(), options)?;
                                 io::stdout().write_all(b"\x1b[2J\x1b[H")?;
                             }
                             canvases.invalidate();
+                            native_terminals.invalidate();
                             video_layer.invalidate();
                             cell_video.reset();
                             if let Some(scene) = &last_scene {
@@ -1809,9 +1965,11 @@ fn run_impl(
                     Event::FocusGained => {
                         focused = true;
                         if pixels {
+                            native_terminals.restore_cursor();
                             bytes += presenter.repaint(&mut io::stdout().lock())? as u64;
                         }
                         canvases.invalidate();
+                        native_terminals.invalidate();
                         video_layer.invalidate();
                     }
                     _ => {}
@@ -1868,7 +2026,7 @@ fn run_impl(
     }
     canvases.clear(&mut io::stdout().lock())?;
     drop_bridge.reset();
-    io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+    io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\\x1b]72;t=A:i=1\x1b\\")?;
     io::stdout().flush()?;
     presenter.clear(&mut io::stdout().lock())?;
     tracing::info!(
@@ -1930,7 +2088,99 @@ fn coalesce_motion(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn slow_transport_backpressures_image_chunks_without_losing_bytes_or_controls() {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        let (writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        writer
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let connection = Connection::streams(writer, std::io::empty(), None, None).unwrap();
+        let (complete, result) = bounded(1);
+        const CHUNKS: u64 = 256;
+        let receiver = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(reader);
+            let mut digest = Sha256::new();
+            let mut count = 0;
+            let mut controls = 0;
+            while count < CHUNKS || controls < CHUNKS / 8 {
+                match read_message::<ClientMessage>(&mut reader).unwrap().unwrap() {
+                    ClientMessage::Input {
+                        id,
+                        input: Input::Osc72 { text },
+                        ..
+                    } => {
+                        assert_eq!(id, count + 1);
+                        let data = base64::engine::general_purpose::STANDARD
+                            .decode(text.split_once(';').unwrap().1)
+                            .unwrap();
+                        assert_eq!(data, vec![count as u8; 16384]);
+                        digest.update(&data);
+                        count += 1;
+                    }
+                    ClientMessage::EffectAck { id } => {
+                        assert_eq!(id, (controls + 1) * 8);
+                        controls += 1;
+                    }
+                    _ => panic!("Unexpected transfer message"),
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            complete
+                .send((digest.finalize().to_vec(), controls))
+                .unwrap();
+        });
+        let mut pauses = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut expected = Sha256::new();
+        for index in 0..CHUNKS {
+            while !connection.outbox.accepts_input() {
+                assert!(Instant::now() < deadline, "Transport did not resume");
+                pauses += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let data = vec![index as u8; 16384];
+            expected.update(&data);
+            connection
+                .send(ClientMessage::Input {
+                    id: index + 1,
+                    revision: 1,
+                    generation: 1,
+                    input: Input::Osc72 {
+                        text: format!(
+                            "t=r:x=1:y=1:m=1;{}",
+                            base64::engine::general_purpose::STANDARD.encode(data)
+                        ),
+                    },
+                })
+                .unwrap();
+            if (index + 1) % 8 == 0 {
+                connection
+                    .send(ClientMessage::EffectAck { id: index + 1 })
+                    .unwrap();
+            }
+        }
+        let (digest, controls) = result.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(digest, expected.finalize().to_vec());
+        assert_eq!(controls, CHUNKS / 8);
+        assert!(
+            pauses > 0,
+            "Test did not exercise a blocked transfer writer"
+        );
+        receiver.join().unwrap();
+    }
+    #[test]
     fn stalled_pipe_coalesces_drag_and_delivers_every_release_and_control() {
+        stalled_pipe_motion(false);
+    }
+    #[test]
+    fn stalled_pipe_coalesces_desktop_hover_and_keeps_drop_and_mime_offer() {
+        stalled_pipe_motion(true);
+    }
+    fn stalled_pipe_motion(desktop_drag: bool) {
         use std::sync::{Arc, Mutex};
         struct GatedWriter {
             started: Option<crossbeam_channel::Sender<()>>,
@@ -1968,13 +2218,26 @@ mod tests {
             id,
             revision: 1,
             generation: 1,
-            input: Input::Pointer {
-                action: action.into(),
-                button: 0,
-                modifiers: 0,
-                pixel: None,
-                x: 1,
-                y: 1,
+            input: if desktop_drag {
+                Input::Osc72 {
+                    text: match action {
+                        "down" => "t=q:i=1".into(),
+                        "up" => "t=M:x=1:y=1:i=1;text/uri-list".into(),
+                        _ => format!(
+                            "t=m:x=1:y=1:i=1{}",
+                            if id == 2 { ";text/uri-list" } else { "" }
+                        ),
+                    },
+                }
+            } else {
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    modifiers: 0,
+                    pixel: None,
+                    x: 1,
+                    y: 1,
+                }
             },
         };
         connection.send(pointer(1, "down")).unwrap();
@@ -2013,9 +2276,18 @@ mod tests {
             &messages[1],
             ClientMessage::Input { id: 10001, .. }
         ));
-        assert!(
-            matches!(&messages[2],ClientMessage::Input{id:10002,input:Input::Pointer{action,..},..}if action=="up")
-        );
+        if desktop_drag {
+            assert!(
+                matches!(&messages[1], ClientMessage::Input { input: Input::Osc72 { text }, .. } if text.ends_with(";text/uri-list"))
+            );
+            assert!(
+                matches!(&messages[2], ClientMessage::Input { id: 10002, input: Input::Osc72 { text }, .. } if text.starts_with("t=M:"))
+            );
+        } else {
+            assert!(
+                matches!(&messages[2],ClientMessage::Input{id:10002,input:Input::Pointer{action,..},..}if action=="up")
+            );
+        }
     }
     /// Run only against an isolated ALSA null device. Deliberately never poll
     /// Connection.messages or frames: terminal processing is suspended.

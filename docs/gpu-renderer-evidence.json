@@ -1,0 +1,267 @@
+{
+  "verified_at": "2026-10-24T02:19:45.483434+00:00",
+  "status": "unreleased local candidate",
+  "hardware_1080p": {
+    "comparison": {
+      "channels_over_16": 31884,
+      "max_channel_error": 50,
+      "mean_absolute_channel_error": 0.13975260416666666
+    },
+    "includes": "native scene layout, text coverage, vector rasterization/composition and GPU readback; excludes Kitty PNG encoding and final terminal display",
+    "reports": [
+      {
+        "backend": {
+          "adapter": null,
+          "api": null,
+          "fallback_reason": null,
+          "requested": "cpu",
+          "selected": "cpu"
+        },
+        "changed_channels": 430518,
+        "frames": 40,
+        "height": 1080,
+        "initialization_ms": 7.810957999999999,
+        "scene_to_rgba_ms": {
+          "median": 7.966901,
+          "p95": 8.648136000000001
+        },
+        "width": 1920
+      },
+      {
+        "backend": {
+          "adapter": "AMD Radeon 8060S Graphics (RADV STRIX_HALO)",
+          "api": "Vulkan",
+          "fallback_reason": null,
+          "requested": "gpu",
+          "selected": "gpu"
+        },
+        "changed_channels": 436758,
+        "frames": 40,
+        "height": 1080,
+        "initialization_ms": 56.89904,
+        "scene_to_rgba_ms": {
+          "median": 2.780152,
+          "p95": 3.450326
+        },
+        "width": 1920
+      }
+    ]
+  },
+  "hardware_4k": {
+    "comparison": {
+      "channels_over_16": 64061,
+      "max_channel_error": 50,
+      "mean_absolute_channel_error": 0.07045367959104938
+    },
+    "includes": "native scene layout, text coverage, vector rasterization/composition and GPU readback; excludes Kitty PNG encoding and final terminal display",
+    "reports": [
+      {
+        "backend": {
+          "adapter": null,
+          "api": null,
+          "fallback_reason": null,
+          "requested": "cpu",
+          "selected": "cpu"
+        },
+        "changed_channels": 960438,
+        "frames": 40,
+        "height": 2160,
+        "initialization_ms": 7.8746860000000005,
+        "scene_to_rgba_ms": {
+          "median": 6.7822070000000005,
+          "p95": 7.197991
+        },
+        "width": 3840
+      },
+      {
+        "backend": {
+          "adapter": "AMD Radeon 8060S Graphics (RADV STRIX_HALO)",
+          "api": "Vulkan",
+          "fallback_reason": null,
+          "requested": "gpu",
+          "selected": "gpu"
+        },
+        "changed_channels": 974358,
+        "frames": 40,
+        "height": 2160,
+        "initialization_ms": 61.846992,
+        "scene_to_rgba_ms": {
+          "median": 6.390959,
+          "p95": 7.047828
+        },
+        "width": 3840
+      }
+    ]
+  },
+  "forced_no_adapter": {
+    "comparison": {
+      "channels_over_16": 0,
+      "max_channel_error": 0,
+      "mean_absolute_channel_error": 0.0
+    },
+    "includes": "native scene layout, text coverage, vector rasterization/composition and GPU readback; excludes Kitty PNG encoding and final terminal display",
+    "reports": [
+      {
+        "backend": {
+          "adapter": null,
+          "api": null,
+          "fallback_reason": null,
+          "requested": "cpu",
+          "selected": "cpu"
+        },
+        "changed_channels": 6168,
+        "frames": 3,
+        "height": 360,
+        "initialization_ms": 7.874835999999999,
+        "scene_to_rgba_ms": {
+          "median": 1.4705320000000002,
+          "p95": 1.61297
+        },
+        "width": 640
+      },
+      {
+        "backend": {
+          "adapter": null,
+          "api": null,
+          "fallback_reason": "No hardware GPU adapter: No suitable graphics adapter found; noop support not compiled in, vulkan not requested, metal not requested, dx12 not requested, gl not requested, webgpu not requested",
+          "requested": "auto",
+          "selected": "cpu"
+        },
+        "changed_channels": 6168,
+        "frames": 3,
+        "height": 360,
+        "initialization_ms": 7.292168,
+        "scene_to_rgba_ms": {
+          "median": 1.337953,
+          "p95": 1.52765
+        },
+        "width": 640
+      }
+    ]
+  },
+  "checks": {
+    "minimal_library_tests": 383,
+    "cpu_graphics_library_tests": 574,
+    "all_features_library_tests": 634,
+    "all_features_ignored": 4,
+    "movie_tests": 5,
+    "doctests": 2,
+    "strict_all_features_clippy": "passed",
+    "consumers": [
+      "staramp-graphical",
+      "starcord",
+      "starwire",
+      "starfold",
+      "starscreen"
+    ]
+  },
+  "gpu_text_redraw_regression": {
+    "verified_at": "2026-10-24T03:35:46.829886+00:00",
+    "passed": true,
+    "before_fix": {
+      "failure": "labels vanished at redraw 0",
+      "expected_label_pixels": 1744,
+      "actual_label_pixels": 0
+    },
+    "after_fix": {
+      "hardware_redraws": 120,
+      "interleaved_vector_only_scenes": true,
+      "active_live_canvas": true,
+      "real_kitty_header_ink_samples": [
+        394,
+        394,
+        394,
+        394
+      ],
+      "sample_interval_seconds": 3
+    },
+    "strict_all_features_clippy": "passed",
+    "portable_starmux_lock": "unchanged",
+    "all_features_library_tests": {
+      "passed": 634,
+      "failed": 0,
+      "ignored_hardware_and_platform": 5
+    }
+  },
+  "codex_focused_drop_and_exit_cleanup": {
+    "passed": true,
+    "ssh": "authenticated loopback",
+    "real_desktop_drop": true,
+    "frontend_kill_and_reattach": true,
+    "codex_image_understanding": true,
+    "no_protocol_in_agent_input": true,
+    "no_drag_reports_after_exit": true,
+    "pids_preserved": [
+      966429,
+      966579
+    ],
+    "workspace": "proof-9e68f64d",
+    "verified_at": "2026-10-24T03:51:31.645137+00:00",
+    "renderer": "gpu",
+    "codex_version": "0.162.1",
+    "focused_composer": true,
+    "composer": "[Image #1]",
+    "answer": "Green",
+    "filename": "screen shot \u03bb.png",
+    "term_restoration_unit_tests": 4,
+    "strict_all_features_clippy": "passed"
+  },
+  "held_drag_backpressure": {
+    "passed": true,
+    "ssh": "authenticated loopback",
+    "real_desktop_drop": true,
+    "frontend_kill_and_reattach": true,
+    "codex_image_understanding": true,
+    "hover_events_before_drop": 4000,
+    "viewport_test_size": [
+      1500,
+      1900
+    ],
+    "no_protocol_in_agent_input": true,
+    "no_drag_reports_after_exit": true,
+    "pids_preserved": [
+      984666,
+      984821
+    ],
+    "workspace": "proof-f8f2e058",
+    "verified_at": "2026-10-24T03:58:29.421213+00:00",
+    "renderer": "gpu",
+    "codex_version": "0.162.1",
+    "composer": "[Image #1]",
+    "answer": "Green",
+    "blocked_writer_hover_updates": 10000,
+    "queue_unit_tests_passed": 4,
+    "connection_stalled_writer_tests_passed": 2
+  },
+  "mixed_hover_markdown_drop": {
+    "passed": true,
+    "ssh": "authenticated loopback",
+    "real_desktop_drop": true,
+    "frontend_kill_and_reattach": true,
+    "codex_image_understanding": false,
+    "codex_markdown_read": true,
+    "hover_events_before_drop": 4000,
+    "viewport_test_size": [
+      1500,
+      1900
+    ],
+    "no_protocol_in_agent_input": true,
+    "no_drag_reports_after_exit": true,
+    "pids_preserved": [
+      1002765,
+      1002917
+    ],
+    "workspace": "proof-54b64baf",
+    "verified_at": "2026-10-24T04:07:07.854951+00:00",
+    "renderer": "gpu",
+    "source_app": "Nautilus",
+    "codex_version": "0.162.1",
+    "filename": "AGENTS.md",
+    "answer": "STARMUX_MARKDOWN_DROP_OK_8317",
+    "mixed_queue_regression": "10000 hover updates with mouse and presentation acknowledgments",
+    "queue_unit_tests_passed": 5,
+    "stalled_connection_tests_passed": 2,
+    "strict_all_features_clippy": "passed",
+    "limitation": "User-specific source route not yet reproduced"
+  }
+}

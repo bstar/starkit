@@ -3,6 +3,9 @@
 Longer pieces that do not fit in a doc comment, for the parts of this crate
 where the shape of the API is not the interesting question.
 
+- `application-ui.md` — retained application UI, shared commands, bounded content
+  and the 0.13 renovation candidate.
+- `gpu-renderer.md` — optional hardware scene rendering, fallback behavior and measured limits.
 - `themes.md` — the theme file format, the derivation chain, and how an
   application adds tables of its own. *(with the theme modules)*
 - `graphics.md` — capability probing, the protocols, cache keys, and the rules

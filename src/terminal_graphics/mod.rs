@@ -5,6 +5,7 @@
 #[cfg(unix)]
 pub mod application;
 pub mod assets;
+mod canvas;
 mod canvas_frontend;
 #[cfg(feature = "media")]
 mod canvas_video;
@@ -15,14 +16,18 @@ pub mod client;
 mod drop_bridge;
 pub mod embedded_input;
 mod font;
+#[cfg(feature = "gpu-renderer")]
+mod gpu;
 mod input_queue;
 pub mod live_canvas;
 mod mouse;
 mod native;
+pub mod pixel_stream;
 pub mod placement;
 mod pointer;
 pub mod protocol;
 pub mod renderer;
+pub mod terminal_cells;
 pub mod terminal_theme;
 pub use crate::native_surface as surface;
 #[cfg(unix)]
@@ -48,3 +53,5 @@ pub mod video_presenter;
 mod audio_v2;
 #[cfg(feature = "audio-output")]
 mod pcm_cache;
+
+pub mod drop_receive;

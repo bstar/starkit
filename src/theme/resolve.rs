@@ -15,7 +15,7 @@ use super::color::Rgb;
 use super::schema::{ThemeFile, Variant};
 
 /// Every colour the shared UI can ask for, all concrete.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub name: String,
     pub id: String,

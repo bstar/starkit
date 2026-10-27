@@ -16,3 +16,13 @@ starkit = { git = "https://github.com/bstar/starkit", rev = "6c8877650bcb87c1a88
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Crossterm 0.29.0 underflows on zero mouse/cursor coordinates. This is the
+# upstream parser fix used by AMP/CORD until a crates.io release includes it.
+# Cargo only honors patches in the application root; keep it in copied starters.
+[patch.crates-io]
+crossterm = { git = "https://github.com/crossterm-rs/crossterm", rev = "d4e9929f9a1c4adf91505d54f8527c817ae504cd" }
+
+# Rasterization and PNG transport must remain interactive in development too.
+[profile.dev.package."*"]
+opt-level = 2

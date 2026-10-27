@@ -624,6 +624,7 @@ impl Frontend {
         }
         match msg {
             ToClient::CanvasVideoOpen { .. }
+            | ToClient::CanvasVideoWindow { .. }
             | ToClient::CanvasVideoPacket { .. }
             | ToClient::CanvasVideoClose { .. } => unreachable!(),
             ToClient::OriginalOpen {

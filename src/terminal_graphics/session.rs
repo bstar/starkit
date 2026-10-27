@@ -20,6 +20,15 @@ pub trait Controller {
     fn frame_interval(&self) -> Duration {
         Duration::from_millis(33)
     }
+    /// Event-driven adapters return false while their retained UI is unchanged.
+    /// Legacy controllers retain their existing periodic scene behavior.
+    /// Poll producers independently of the chrome redraw cadence.
+    fn tick_interval(&self) -> Duration {
+        Duration::from_millis(33)
+    }
+    fn scene_dirty(&self) -> bool {
+        true
+    }
     fn attached(&mut self) {}
     fn capabilities(&mut self, _capabilities: super::capabilities::Capabilities) {}
     fn supports_presentation_switch(&self) -> bool {
@@ -35,11 +44,18 @@ pub trait Controller {
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
+    fn lossless_canvas(&self, _stream: &str) -> bool {
+        false
+    }
     fn live_frames(&mut self) -> Vec<super::live_canvas::Update> {
         vec![]
     }
     fn effects(&mut self) -> Vec<ServerMessage> {
         vec![]
+    }
+    /// A controller failure is reported to its attached frontend before close.
+    fn failure(&self) -> Option<&str> {
+        None
     }
     fn closed(&self) -> bool;
     fn shutdown(&mut self);
@@ -345,6 +361,7 @@ fn serve_with_policy(
     let mut live = super::live_canvas::Transport::new()?;
     let mut local_frames = false;
     let mut streamed_frames = false;
+    let mut exact: Option<super::pixel_stream::Transport> = None;
     let mut canvas_video_active = false;
     let mut streamed_at = Instant::now() - Duration::from_secs(1);
     let mut history = VecDeque::from([(
@@ -483,11 +500,15 @@ fn serve_with_policy(
                     live = super::live_canvas::Transport::new()?;
                     local_frames = false;
                     streamed_frames = false;
+                    exact = None;
                     canvas_video_active = false;
                     controller.attached();
                     if let Some(capabilities) = capabilities {
                         local_frames = capabilities.local_frames;
                         streamed_frames = capabilities.streamed_frames && !local_frames;
+                        if streamed_frames && capabilities.lossless_frames {
+                            exact = Some(super::pixel_stream::Transport::new()?);
+                        }
                         p.presentation.enabled = capabilities.presentation_ack;
                         p.presentation_switch = capabilities.presentation_switch;
                         controller.capabilities(capabilities);
@@ -570,16 +591,46 @@ fn serve_with_policy(
                     sequence,
                 } => {
                     live.acknowledge(&stream, generation, sequence);
+                    if let Some(exact) = &exact {
+                        exact.acknowledge(&stream, generation, sequence);
+                    }
                 }
             }
         }
         controller.output_pending(!effects.is_empty() || !in_flight.is_empty());
         controller.tick();
         for update in controller.live_frames() {
+            let stream = match &update {
+                super::live_canvas::Update::Frame { stream, .. }
+                | super::live_canvas::Update::Close { stream, .. } => stream,
+            };
+            if controller.lossless_canvas(stream) {
+                if let Some(exact) = exact.as_mut() {
+                    exact.submit(update)?;
+                    continue;
+                }
+            }
             if (local_frames || streamed_frames) && peer.is_some() {
                 if let Some((stream, generation)) = live.submit(update)? {
                     if let Some(p) = &peer {
                         p.control(ServerMessage::CanvasClose { stream, generation });
+                    }
+                }
+            }
+        }
+        if let Some(exact) = &exact {
+            for output in exact.output.try_iter() {
+                if let Some(p) = &peer {
+                    match output {
+                        super::pixel_stream::Output::Frame(frame) => {
+                            p.control(ServerMessage::CanvasPixels { frame });
+                        }
+                        super::pixel_stream::Output::Close(stream, generation) => {
+                            p.control(ServerMessage::CanvasClose { stream, generation });
+                        }
+                        super::pixel_stream::Output::Error(message) => {
+                            p.control(ServerMessage::Error { message });
+                        }
                     }
                 }
             }
@@ -601,6 +652,7 @@ fn serve_with_policy(
                 }
             } else {
                 live = super::live_canvas::Transport::new()?;
+                exact = None;
                 local_frames = false;
                 streamed_frames = false;
             }
@@ -635,7 +687,7 @@ fn serve_with_policy(
                     .as_ref()
                     .is_some_and(|p| p.presentation.ready(viewport.generation)))
                 || input_dirty
-                || painted.elapsed() >= controller.frame_interval())
+                || (controller.scene_dirty() && painted.elapsed() >= controller.frame_interval()))
         {
             let mut next = controller.scene(viewport);
             input_dirty = false;
@@ -694,6 +746,11 @@ fn serve_with_policy(
         if controller.closed() {
             controller.shutdown();
             if let Some(p) = &peer {
+                if let Some(message) = controller.failure() {
+                    p.control(ServerMessage::Error {
+                        message: message.into(),
+                    });
+                }
                 p.control(ServerMessage::Closed);
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -706,12 +763,15 @@ fn serve_with_policy(
         let interval = if peer.is_some() && canvas_video_active {
             Duration::from_millis(2)
         } else if peer.is_some()
-            && (((local_frames || streamed_frames) && live.active()) || canvas_video_active)
+            && (((local_frames || streamed_frames)
+                && (live.active() || exact.as_ref().is_some_and(|e| e.active())))
+                || canvas_video_active)
         {
             Duration::from_millis(8)
         } else {
             Duration::from_millis(33)
         };
+        let interval = interval.min(controller.tick_interval());
         let remaining = interval.saturating_sub(start.elapsed());
         // Input and presentation acknowledgements wake the controller immediately.
         // Keep the timer for worker updates and accepting new attachments.

@@ -25,6 +25,8 @@ class Session:
         from kitty.fast_data_types import add_timer
         from kitty.launch import launch, parse_launch_args
         self.boss, self.window, self.nonce = boss, window, nonce
+        from kitty.fast_data_types import os_window_font_size
+        self.initial_font_size = os_window_font_size(window.os_window_id)
         self.root = tempfile.mkdtemp(prefix='star-kit-terminal-', dir='/tmp')
         self.listener = socket.socket(socket.AF_UNIX)
         path = os.path.join(self.root, nonce)
@@ -46,7 +48,8 @@ class Session:
         self.timer = add_timer(self.tick, .005, True)
         try:
             opts, args = parse_launch_args(['--type=overlay-main', '--copy-colors', '--copy-env',
-                                          '--next-to', f'id:{window.id}'])
+                                          '--next-to', f'id:{window.id}',
+                                          '--env', f'STAR_KIT_FONT_MILLIPOINTS={round(self.initial_font_size * 1000)}'])
             self.overlay = launch(boss, opts, [str(CLIENT), path],
                                   target_tab=window.tabref(), force_target_tab=True,
                                   rc_from_window=window)
@@ -84,6 +87,12 @@ class Session:
         elif op == 'end':
             # Reject raw newlines/escape injection into the local transport.
             message = json.loads(self.frame)
+            if message.get('type') == 'terminal_font':
+                size = message.get('size_millipoints')
+                if not isinstance(size, int) or (size != 0 and not 6000 <= size <= 32000):
+                    raise ValueError('Invalid terminal font size')
+                points = self.initial_font_size if size == 0 else size / 1000
+                self.boss._change_font_size({self.window.os_window_id: points})
             if message.get('type') == 'ack':
                 self.pending_input_bytes -= self.pending_inputs.pop(message.get('id'), 0)
             if b'\n' in self.frame or self.output_size + len(self.frame) + 1 > MAX_MESSAGE * 2:
@@ -162,6 +171,25 @@ class Session:
         except Exception as error:
             print(f'STAR/KIT terminal bridge: {error}', flush=True)
             self.close()
+
+
+def on_load(boss, data):
+    """Preserve live transports when a versioned watcher replaces a cached one."""
+    from kitty.launch import watcher_modules
+    global sessions
+    managed = Path(__file__).resolve().parent
+    for path, module in tuple(watcher_modules.items()):
+        if not isinstance(module, dict) or Path(path).resolve() == Path(__file__).resolve():
+            continue
+        candidate = Path(path)
+        if candidate.parent.resolve() != managed or not candidate.name.startswith('star_kit'):
+            continue
+        previous = module.get('sessions')
+        if isinstance(previous, dict) and previous:
+            # Existing timer callbacks keep their original Session implementation.
+            # Share its registry until the frontend reconnects through this version.
+            sessions = previous
+            break
 
 
 def on_set_user_var(boss, window, data):

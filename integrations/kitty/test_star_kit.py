@@ -16,6 +16,7 @@ spec.loader.exec_module(bridge)
 
 class Window:
     id = 1
+    os_window_id = 7
 
     def __init__(self):
         self.replies = []
@@ -73,6 +74,31 @@ class Tests(unittest.TestCase):
             state.peer.close()
             peer.close()
 
+    def test_font_controls_apply_to_the_presenting_kitty_window(self):
+        sizes = []
+        state = bridge.Session.__new__(bridge.Session)
+        state.window = Window()
+        state.initial_font_size = 12.5
+        state.boss = types.SimpleNamespace(_change_font_size=sizes.append)
+        state.output = deque()
+        state.output_size = 0
+        for requested in (13500, 12500, 0):
+            state.frame = bytearray(json.dumps(dict(type='terminal_font', size_millipoints=requested)).encode())
+            state.data('end', None)
+        self.assertEqual(sizes, [{7: 13.5}, {7: 12.5}, {7: 12.5}])
+        state.frame = bytearray(json.dumps(dict(type='terminal_font', size_millipoints=999999)).encode())
+        with self.assertRaises(ValueError):
+            state.data('end', None)
+        self.assertEqual(len(sizes), 3)
+
+    def test_versioned_watcher_preserves_the_live_registry(self):
+        previous = {1: object()}
+        launch = types.ModuleType('kitty.launch')
+        launch.watcher_modules = {str(Path(bridge.__file__).with_name('star_kit-old.py')): {'sessions': previous}}
+        with patch.dict(sys.modules, {'kitty.launch': launch}):
+            bridge.on_load(None, {})
+        self.assertIs(bridge.sessions, previous)
+
     def test_remote_start_cannot_select_a_local_command(self):
         calls = []
         overlay = types.SimpleNamespace(id=2)
@@ -81,6 +107,7 @@ class Tests(unittest.TestCase):
         modules = {'kitty': types.ModuleType('kitty'),
                    'kitty.fast_data_types': types.ModuleType('kitty.fast_data_types'),
                    'kitty.launch': types.ModuleType('kitty.launch')}
+        modules['kitty.fast_data_types'].os_window_font_size = lambda _: 12.5
         modules['kitty.fast_data_types'].add_timer = lambda *args: 1
         modules['kitty.fast_data_types'].remove_timer = lambda _: None
         modules['kitty.launch'].parse_launch_args = lambda _: (None, [])

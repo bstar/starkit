@@ -174,12 +174,29 @@ impl Palette {
     ) -> (Self, String) {
         let (theme, reason) = registry.resolve_named(id);
         let core = theme.core();
-        let palette = if core.id == crate::theme::DEFAULT_ID && !reason.starts_with("user theme ") {
-            Self::default()
-        } else {
+        let palette = if reason.starts_with("user theme ") {
             Self::from_theme(core)
+        } else {
+            Self::for_chrome(core)
         };
         (palette, reason)
+    }
+    /// Shared chrome interpretation of a resolved theme. Reference artwork and
+    /// raised workspace colors are policy here, never in an application's UI.
+    /// `from_theme` remains the literal role-to-palette conversion.
+    pub fn for_chrome(theme: &crate::theme::Theme) -> Self {
+        match theme.id.as_str() {
+            "winamp-classic" => REFERENCE_PALETTE,
+            "winamp-silver" => SILVER_PALETTE,
+            "kanagawa" => {
+                let mut palette = Self::from_theme(theme);
+                palette.bg = [theme.header_bg.r, theme.header_bg.g, theme.header_bg.b];
+                let inset = theme.bg.mix(crate::theme::BLACK, 0.12);
+                palette.inset_bg = Some([inset.r, inset.g, inset.b]);
+                palette
+            }
+            _ => Self::from_theme(theme),
+        }
     }
     /// Resolve a graphical palette from KIT's existing theme roles.
     pub fn from_theme(theme: &crate::theme::Theme) -> Self {

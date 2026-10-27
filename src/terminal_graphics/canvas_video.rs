@@ -22,7 +22,9 @@ struct Active {
     input: Sender<Vec<u8>>,
     output: Receiver<Decoded>,
     outstanding: usize,
-    permitted: bool,
+    permitted: usize,
+    window: usize,
+    pipelined: bool,
     failure: Option<String>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -117,10 +119,30 @@ impl Frontend {
                     input,
                     output,
                     outstanding: 0,
-                    permitted: false,
+                    permitted: 0,
+                    window: FRAME_WINDOW,
+                    pipelined: false,
                     failure: None,
                     worker: Some(worker),
                 });
+            }
+            ToClient::CanvasVideoWindow {
+                session,
+                generation,
+                frames,
+            } => {
+                ensure!(
+                    (1..=FRAME_WINDOW).contains(frames),
+                    "Invalid live video window"
+                );
+                if let Some(a) = self
+                    .active
+                    .as_mut()
+                    .filter(|a| a.session == *session && a.generation == *generation)
+                {
+                    a.window = *frames;
+                    a.pipelined = true;
+                }
             }
             ToClient::CanvasVideoPacket {
                 session,
@@ -133,7 +155,7 @@ impl Frontend {
                     .filter(|a| a.session == *session && a.generation == *generation)
                 {
                     ensure!(
-                        a.permitted && a.outstanding < FRAME_WINDOW,
+                        a.permitted > 0 && a.outstanding < a.window,
                         "Live video exceeded its frame credit"
                     );
                     ensure!(
@@ -149,7 +171,7 @@ impl Frontend {
                         .try_send(bytes)
                         .context("Live video decoder unavailable")?;
                     a.outstanding += 1;
-                    a.permitted = false;
+                    a.permitted -= 1;
                 }
             }
             ToClient::CanvasVideoClose {
@@ -200,8 +222,8 @@ impl Frontend {
             }
             return None;
         }
-        if !a.permitted
-            && a.outstanding < FRAME_WINDOW
+        while a.outstanding + a.permitted < a.window
+            && (a.pipelined || a.permitted == 0)
             && out
                 .try_send(ClientMessage::Media {
                     message: ToHost::CanvasVideoCredit {
@@ -211,7 +233,7 @@ impl Frontend {
                 })
                 .is_ok()
         {
-            a.permitted = true;
+            a.permitted += 1;
         }
         frame
     }
@@ -369,7 +391,9 @@ mod tests {
                 input,
                 output,
                 outstanding: 0,
-                permitted: false,
+                permitted: 0,
+                window: 2,
+                pipelined: false,
                 failure: None,
                 worker: None,
             }),
@@ -423,7 +447,9 @@ mod tests {
                 input,
                 output,
                 outstanding: 2,
-                permitted: false,
+                permitted: 0,
+                window: 2,
+                pipelined: false,
                 failure: None,
                 worker: Some(worker),
             }),
@@ -431,6 +457,59 @@ mod tests {
         // Bound the test itself if reset ever regresses into a join deadlock.
         std::thread::spawn(move || client.reset());
         finished.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn negotiated_window_pipelines_two_frames_and_bounds_credit() {
+        let mut client = Frontend::default();
+        let (out, replies) = bounded(8);
+        client.receive(&open(1)).unwrap();
+        client.tick(&out);
+        assert_eq!(replies.try_iter().count(), 1);
+        client
+            .receive(&ToClient::CanvasVideoWindow {
+                session: 2,
+                generation: 7,
+                frames: 2,
+            })
+            .unwrap();
+        client.tick(&out);
+        assert_eq!(replies.try_iter().count(), 0);
+        client
+            .receive(&ToClient::CanvasVideoWindow {
+                session: 1,
+                generation: 7,
+                frames: 2,
+            })
+            .unwrap();
+        client.tick(&out);
+        assert_eq!(replies.try_iter().count(), 1);
+        client.tick(&out);
+        assert_eq!(replies.try_iter().count(), 0);
+        assert!(client
+            .receive(&ToClient::CanvasVideoWindow {
+                session: 1,
+                generation: 7,
+                frames: 3
+            })
+            .is_err());
+        let data = packets().remove(0);
+        for _ in 0..2 {
+            client
+                .receive(&ToClient::CanvasVideoPacket {
+                    session: 1,
+                    generation: 7,
+                    data: data.clone(),
+                })
+                .unwrap();
+        }
+        assert!(client
+            .receive(&ToClient::CanvasVideoPacket {
+                session: 1,
+                generation: 7,
+                data
+            })
+            .is_err());
     }
 
     #[test]

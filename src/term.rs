@@ -178,6 +178,11 @@ fn enter(out: &mut impl Write) -> io::Result<()> {
 
 /// The inverse of [`enter`], in the opposite order.
 fn leave(out: &mut impl Write) -> io::Result<()> {
+    #[cfg(feature = "terminal-graphics")]
+    // Cancel any in-flight request and unregister the drop target before raw
+    // input is released. Cancelling alone leaves Kitty reporting drag motion
+    // to the next shell. This also covers early errors and panic restoration.
+    out.write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\\x1b]72;t=A:i=1\x1b\\")?;
     // The graphical frontend may have enabled SGR pixel mouse coordinates.
     // Include this in panic restoration as well as its normal mode guard.
     out.write_all(b"\x1b[?1016l")?;
@@ -228,6 +233,16 @@ mod tests {
         let mut out = Vec::new();
         f(&mut out).expect("a vector cannot fail to be written to");
         String::from_utf8(out).expect("escape sequences are ASCII")
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn restoration_unregisters_drag_reporting_before_leaving_the_screen() {
+        let off = written(leave);
+        let cancel = off.find("\u{1b}]72;t=r:o=0:i=1\u{1b}\\").unwrap();
+        let unregister = off.find("\u{1b}]72;t=A:i=1\u{1b}\\").unwrap();
+        let screen = off.find("\u{1b}[?1049l").unwrap();
+        assert!(cancel < unregister && unregister < screen);
     }
 
     /// The bug this whole arrangement exists for. `\e[6n` is a question, and a

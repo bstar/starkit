@@ -31,6 +31,7 @@ pub mod logging;
 pub mod media_controls;
 pub mod media_types;
 pub mod mouse;
+pub mod ui;
 // An HTTP client is not something a UI library should force on a caller who
 // only wanted a theme engine.
 #[cfg(feature = "net")]

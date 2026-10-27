@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"
@@ -41,6 +41,9 @@ update = ["net", "dep:sha2", "dep:serde_json", "dep:semver", "dep:tar", "dep:fla
 # Enable `media` explicitly for video and its audio frontend.
 terminal-graphics = ["dep:tempfile", "dep:memmap2", "gif", "dep:png", "dep:serde_json", "dep:base64", "dep:crossbeam-channel", "dep:tiny-skia", "dep:cosmic-text", "dep:rustix", "dep:sha2", "dep:fast_image_resize"]
 
+# Optional hardware scene rasterization; the terminal transport stays unchanged.
+gpu-renderer = ["terminal-graphics", "dep:vello", "dep:pollster"]
+
 audio-output = ["dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
 
 media = ["audio-output","image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep:crossbeam-channel"]
@@ -49,6 +52,8 @@ media = ["audio-output","image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep
 rustix = { version = "1", features = ["fs", "process", "time", "termios"], optional = true }
 
 [dependencies]
+vello = { version = "0.11", optional = true }
+pollster = { version = "0.4", optional = true }
 fast_image_resize = { version = "5.5", features = ["image"], optional = true }
 semver = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
@@ -87,7 +92,7 @@ image = { version = "0.25", default-features = false, features = [
 ], optional = true }
 
 # Winamp .wsz skins are plain ZIP archives of BMPs plus two text files.
-zip = { version = "2", default-features = false, features = [
+zip = { version = "9", default-features = false, features = [
     "deflate",
 ], optional = true }
 
@@ -152,3 +157,13 @@ required-features = ["terminal-graphics", "audio-output"]
 [[example]]
 name = "pixel-mouse-probe"
 required-features = ["terminal-graphics"]
+
+# Crossterm 0.29.0 underflows on zero mouse/cursor coordinates. This is the
+# upstream parser fix used by AMP/CORD until a crates.io release includes it.
+# Cargo only honors patches in the application root; keep it in copied starters.
+[patch.crates-io]
+crossterm = { git = "https://github.com/crossterm-rs/crossterm", rev = "d4e9929f9a1c4adf91505d54f8527c817ae504cd" }
+
+[[example]]
+name = "gpu-renderer"
+required-features = ["gpu-renderer"]

@@ -48,6 +48,7 @@ impl Arguments {
 pub struct Application {
     name: String,
     root: PathBuf,
+    presentation: Option<client::PresentationPreference>,
 }
 impl Application {
     pub fn new(name: &str) -> Result<Self> {
@@ -65,8 +66,15 @@ impl Application {
             });
         Ok(Self {
             name: name.into(),
+            presentation: None,
             root: runtime.join(format!("starkit-{name}")),
         })
+    }
+    /// Frontend-local presentation preference. The host never interprets this
+    /// path, and a terminal bridge retains its own local display preferences.
+    pub fn with_presentation(mut self, preference: client::PresentationPreference) -> Self {
+        self.presentation = Some(preference);
+        self
     }
     pub fn with_root(mut self, root: PathBuf) -> Self {
         self.root = root;
@@ -335,7 +343,7 @@ impl Application {
         if let Some(bridge) = super::terminal_bridge::probe()? {
             return bridge.relay(&self.ensure_session(&name, attach_only)?);
         }
-        client::run(Launch {
+        let launch = Launch {
             executable: std::env::current_exe()?.to_string_lossy().into_owned(),
             host: None,
             ssh_config: None,
@@ -343,7 +351,18 @@ impl Application {
             directory: None,
             attach_only,
             play: None,
-        })
+        };
+        if let Some(preference) = &self.presentation {
+            client::run_with_preference(
+                launch,
+                |_| None,
+                || None,
+                client::PresentationOptions::default(),
+                preference.clone(),
+            )
+        } else {
+            client::run(launch)
+        }
     }
 }
 

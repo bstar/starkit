@@ -8,6 +8,53 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### STAR/MUX integration candidate
+
+- Stream native terminal cells and font controls alongside independently paced app canvases and PCM audio.
+- Preserve bounded multi-window presentation, file-drop reception, and lossless canvas transport.
+- Skip transparent native-terminal image tiles and batch graphics recovery to reduce idle GPU work while preserving lost-image recovery.
+- Update ZIP and TLS dependencies to versions passing the current advisory gate; retain the explicitly pinned upstream mouse-coordinate parser fix.
+
+### Added (0.13 terminal typography candidate)
+
+- Negotiate the presenting terminal's fractional font size, actual cell dimensions and face-derived zoom metrics without requiring fonts on an SSH host.
+- Opt-in terminal surface typography shapes complete styled runs, anchors glyph clusters to measured columns and preserves cell-joining symbols. Existing editor grids and UI text retain their presentation behavior.
+
+
+### Added (0.13 GPU renderer candidate)
+
+- Optional `gpu-renderer` feature using Vello/wgpu for native vector and image composition, with CPU as the default and explicit GPU or Auto selection through `STAR_GRAPHICS_RENDERER`.
+- Reusable `SceneRenderer` and backend diagnostics, bounded GPU image caching, readback limits, and a changing-scene hardware benchmark. Linux/Vulkan is verified; text coverage and terminal transport remain on CPU.
+
+### Added (0.13 application UI candidate)
+
+- A retained application UI tree shared by cell and graphical presentation, with stable control identities, bounded custom content slots and presentation-specific headings.
+- A validated command registry for controls, scoped shortcuts and help; shared modal focus, text editing, selection, pointer capture and generation-aware cancellation.
+- An event-driven persistent application adapter that retains quiet scenes while preserving existing media, live-canvas, export and SSH transport paths.
+- An independent component gallery using the public application contract in both presentations. The five application migrations remain acceptance work; this candidate is not a framework release.
+
+### Fixed (0.13 terminal drag-and-drop candidate)
+
+- Coalesce hover positions across interleaved mouse reports and frame/effect acknowledgments, preserving ordered interaction boundaries and increasing input IDs. Include bounded message-type counts in queue overflow errors without exposing typed content or file paths.
+
+
+- Coalesce queued OSC 72 drag-hover positions under writer backpressure, retaining the MIME offer and preserving drop, data, chunk, client and enter/leave boundaries. Prevent a held file drag from exhausting the frontend control queue.
+
+
+- Cancel incoming drop requests and unregister OSC 72 drop reporting before restoring the shell, including error and panic restoration. Prevent drag metadata from reaching the parent terminal after the frontend exits.
+
+### Fixed (0.13 GPU renderer candidate)
+
+- Preserve the GPU image atlas through empty and vector-only live-canvas overlay passes, preventing cached workspace text from disappearing after its first frame. Add a hardware regression covering 120 redraws.
+
+### Fixed (0.13 application UI candidate)
+
+- Align graphical heading, label, field and list text; use consistent workspace margins and pane gaps. Honor explicit dialog dimensions in both presentations instead of forcing them to at least half the viewport.
+- Pin the upstream Crossterm coordinate-underflow fix in KIT and standalone example roots, preventing a zero mouse/cursor coordinate from crashing the gallery. Optimize starter dependencies in development and provide a release preview build.
+
+- Retain native surface rasters in a 16 MB / 64-entry cache so live presentation does not rerasterize unchanged chrome. Fractional placements retain their original rendering path.
+- Centralize the reference Classic, Silver and raised Kanagawa chrome palette interpretation inside KIT.
+
 ### Fixed (0.12.2 candidate)
 
 - Backpressure graphical input against available acknowledgment capacity instead of disconnecting a busy frontend and tearing down its paused movie. Keep ordered inputs queued while output catches up, and log attachment timeout diagnostics.

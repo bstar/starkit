@@ -288,7 +288,7 @@ fn emit_data(
     emit(output, Event::Wire(format!("{meta}:m=0;")), cancel)
 }
 #[cfg(target_os = "linux")]
-fn machine_id() -> Option<String> {
+pub(super) fn machine_id() -> Option<String> {
     use sha2::{Digest, Sha256};
     let raw = std::fs::read_to_string("/etc/machine-id").ok()?;
     let key = b"tty-dnd-protocol-machine-id";
@@ -314,7 +314,7 @@ fn machine_id() -> Option<String> {
     ))
 }
 #[cfg(not(target_os = "linux"))]
-fn machine_id() -> Option<String> {
+pub(super) fn machine_id() -> Option<String> {
     None
 }
 

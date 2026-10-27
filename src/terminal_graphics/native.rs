@@ -7,8 +7,9 @@ use base64::Engine as _;
 use cosmic_text::{
     Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Weight, Wrap,
 };
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, Paint, PathBuilder, Stroke, Transform};
 
+use super::canvas::Canvas as Pixmap;
 use super::protocol::{Component, ImageScale, Rect, Scene};
 use crate::image::{ImageDecoder as _, RgbaImage};
 
@@ -23,6 +24,7 @@ const FONTS: [&[u8]; 4] = [
 struct TextKey {
     text: String,
     size: u32,
+    line_height: u32,
     bold: bool,
     mono: bool,
     ui_font: bool,
@@ -46,7 +48,12 @@ struct Asset {
     scaled: Option<((u32, u32, ImageScale), Pixmap)>,
 }
 pub(super) struct Painter {
+    #[cfg(feature = "gpu-renderer")]
+    pub(super) gpu: Option<super::gpu::Gpu>,
     ui_font: bool,
+    terminal_font: Option<f32>,
+    terminal_grid: Option<f32>,
+    terminal_symbols: HashSet<usize>,
     pane_corner_radius: u16,
     fonts: FontSystem,
     font_factor: f32,
@@ -57,6 +64,20 @@ pub(super) struct Painter {
     skin_assets: crate::native_surface::skin::assets::AssetCache,
     skin_scaled: HashMap<SkinKey, Pixmap>,
     wallpapers: HashMap<WallpaperKey, Pixmap>,
+    surfaces: std::collections::VecDeque<CachedSurface>,
+    surface_bytes: usize,
+    surface_rasters: u64,
+}
+
+// Retained chrome is independent of video cadence. The cache is deliberately
+// bounded by both payload bytes and entry count, and does not change the wire.
+const SURFACE_CACHE_BYTES: usize = 16_000_000;
+struct CachedSurface {
+    surface: super::surface::Surface,
+    width: u32,
+    height: u32,
+    pixels: Pixmap,
+    bytes: usize,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -283,6 +304,66 @@ fn resolve_font(db: &cosmic_text::fontdb::Database, requested: Option<&str>) -> 
     "Liberation Mono".into()
 }
 
+fn font_database() -> cosmic_text::fontdb::Database {
+    let mut db = cosmic_text::fontdb::Database::new();
+    for bytes in FONTS {
+        db.load_font_data(bytes.to_vec());
+    }
+    if std::env::var("STAR_GRAPHICS_SYSTEM_FONTS").as_deref() != Ok("0") {
+        db.load_system_fonts();
+    }
+    db
+}
+pub(super) fn terminal_typography(
+    font: &super::font::Font,
+) -> Option<super::capabilities::TerminalTypography> {
+    use cosmic_text::fontdb::{Family as DbFamily, Query};
+    let mut db = font_database();
+    let family = resolve_font(&db, font.name.as_deref());
+    if std::env::var_os("STAR_GRAPHICS_FONT_DEBUG").is_some() {
+        eprintln!("Resolved terminal font family: {family}");
+    }
+    db.set_monospace_family(&family);
+    let id = db.query(&Query {
+        families: &[DbFamily::Monospace],
+        ..Query::default()
+    })?;
+    // FontSystem maps disk-backed faces before loading them. Font::new alone
+    // accepts bundled/in-memory faces but rejects ordinary installed font files.
+    let mut fonts = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let face = fonts.get_font(id)?;
+    let f = face.rustybuzz();
+    let em = f.units_per_em() as f32;
+    let advance = f32::from(f.glyph_hor_advance(f.glyph_index('M')?)?) / em;
+    let line = f32::from(f.ascender() - f.descender() + f.line_gap()) / em;
+    let measure = |size: f32| {
+        [
+            (size * advance).round().max(1.) as u16,
+            (size * line).ceil().max(1.) as u16,
+        ]
+    };
+    let pixels = font
+        .pixels
+        .unwrap_or_else(|| font.cell.map(|(_, h)| f32::from(h) / line).unwrap_or(16.))
+        .clamp(4., 96.);
+    let cell = if std::env::var_os("STAR_GRAPHICS_FONT").is_none()
+        && std::env::var_os("STAR_GRAPHICS_FONT_SIZE").is_none()
+    {
+        font.cell
+            .map(|(w, h)| [w, h])
+            .unwrap_or_else(|| measure(pixels))
+    } else {
+        measure(pixels)
+    };
+    let result = super::capabilities::TerminalTypography {
+        millipixels: (pixels * 1000.).round() as u32,
+        cell,
+        sizes: std::array::from_fn(|i| measure((i + 10) as f32)),
+    };
+    tracing::info!(%family,?result,"Terminal font metrics measured");
+    Some(result)
+}
+
 // Glyph coverage is linear. Blend in linear light, then encode the resulting
 // color back to sRGB, as Kitty's modern text compositor does. Byte-space mixing
 // makes light text on dark backgrounds thin and uneven. LUTs avoid powf in the
@@ -350,10 +431,85 @@ impl Painter {
         surface: &super::surface::Surface,
         area: [f32; 4],
     ) -> Result<()> {
+        let [x, y, width, height] = area;
+        // Fractional placement retains its original antialiasing path. Native
+        // physical chrome normally has exact integral destinations.
+        let integral = area
+            .iter()
+            .all(|value| value.is_finite() && value.fract() == 0.);
+        let width = width.max(0.) as u32;
+        let height = height.max(0.) as u32;
+        let pixels = u64::from(width) * u64::from(height) * 4;
+        let cacheable = !canvas.is_gpu()
+            && integral
+            && width > 0
+            && height > 0
+            && pixels <= SURFACE_CACHE_BYTES as u64;
+        if cacheable {
+            if let Some(index) = self.surfaces.iter().position(|cached| {
+                cached.width == width && cached.height == height && cached.surface == *surface
+            }) {
+                let cached = self.surfaces.remove(index).expect("cache index");
+                canvas.draw_pixmap(
+                    x as i32,
+                    y as i32,
+                    cached.pixels.as_ref(),
+                    &tiny_skia::PixmapPaint::default(),
+                    Transform::identity(),
+                    None,
+                );
+                self.surfaces.push_back(cached);
+                return Ok(());
+            }
+            // Account for the retained scene data too; encoded artwork must
+            // not bypass the pixel budget by hiding in a cache key.
+            let bytes = pixels as usize
+                + serde_json::to_vec(surface)?.len() * 4
+                + std::mem::size_of::<CachedSurface>();
+            if bytes <= SURFACE_CACHE_BYTES {
+                let mut raster = Pixmap::new(width, height).context("Allocate retained chrome")?;
+                fill(
+                    &mut raster,
+                    [0., 0., width as f32, height as f32],
+                    &surface.background,
+                );
+                let previous = std::mem::replace(&mut self.ui_font, surface.ui_font);
+                let result =
+                    self.surface_nodes(&mut raster, surface, [0., 0., width as f32, height as f32]);
+                self.ui_font = previous;
+                result?;
+                self.surface_rasters += 1;
+                canvas.draw_pixmap(
+                    x as i32,
+                    y as i32,
+                    raster.as_ref(),
+                    &tiny_skia::PixmapPaint::default(),
+                    Transform::identity(),
+                    None,
+                );
+                while self.surface_bytes + bytes > SURFACE_CACHE_BYTES || self.surfaces.len() >= 64
+                {
+                    let Some(old) = self.surfaces.pop_front() else {
+                        break;
+                    };
+                    self.surface_bytes -= old.bytes;
+                }
+                self.surface_bytes += bytes;
+                self.surfaces.push_back(CachedSurface {
+                    surface: surface.clone(),
+                    width,
+                    height,
+                    pixels: raster,
+                    bytes,
+                });
+                return Ok(());
+            }
+        }
         fill(canvas, area, &surface.background);
         let previous = std::mem::replace(&mut self.ui_font, surface.ui_font);
         let result = self.surface_nodes(canvas, surface, area);
         self.ui_font = previous;
+        self.surface_rasters += 1;
         result
     }
 
@@ -467,7 +623,10 @@ impl Painter {
                     ..
                 } => {
                     let style = TextStyle {
-                        size: f32::from(*size)
+                        size: surface
+                            .terminal_font_millipixels
+                            .map(|n| n as f32 / 1000.)
+                            .unwrap_or(f32::from(*size))
                             / if surface.text_scale == crate::native_surface::TextScale::Physical {
                                 self.font_factor
                             } else {
@@ -481,6 +640,9 @@ impl Painter {
                             || surface.centered_text.contains(&(node_index as u16)),
                     };
                     if let Some([cw, _]) = surface.cell_size {
+                        let previous = self.terminal_font;
+                        self.terminal_font =
+                            surface.terminal_font_millipixels.map(|n| n as f32 / 1000.);
                         self.grid_text(
                             canvas,
                             text,
@@ -493,8 +655,13 @@ impl Painter {
                             f32::from(cw) * sx,
                             style,
                         );
+                        self.terminal_font = previous;
                     } else {
-                        let edge = self.text(canvas, text, rect, style);
+                        let caret = surface
+                            .text_carets
+                            .iter()
+                            .find(|caret| usize::from(caret.node) == node_index);
+                        let edge = self.text_with_caret(canvas, text, rect, style, caret);
                         if let Some(edge) = edge {
                             for rule in surface
                                 .text_rules
@@ -676,15 +843,7 @@ impl Painter {
         Self::with_pane_corner_radius(font, 9)
     }
     pub(crate) fn with_pane_corner_radius(font: super::font::Font, radius: u16) -> Self {
-        let mut db = cosmic_text::fontdb::Database::new();
-        for bytes in FONTS {
-            db.load_font_data(bytes.to_vec());
-        }
-        // Bundled fonts guarantee a consistent baseline; installed fonts supply
-        // Unicode fallback on both Linux and macOS. No fontconfig C dependency.
-        if std::env::var("STAR_GRAPHICS_SYSTEM_FONTS").as_deref() != Ok("0") {
-            db.load_system_fonts();
-        }
+        let mut db = font_database();
         let family = resolve_font(&db, font.name.as_deref());
         db.set_sans_serif_family(&family);
         db.set_monospace_family(&family);
@@ -697,7 +856,12 @@ impl Painter {
             .unwrap_or(1.);
         tracing::info!(requested = ?font.name, %family, pixels = ?font.pixels, font_factor, "Native terminal font selected");
         Self {
+            #[cfg(feature = "gpu-renderer")]
+            gpu: None,
             ui_font: false,
+            terminal_font: None,
+            terminal_grid: None,
+            terminal_symbols: HashSet::new(),
             pane_corner_radius: radius,
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
             font_factor,
@@ -708,6 +872,9 @@ impl Painter {
             skin_assets: crate::native_surface::skin::assets::AssetCache::new(32_000_000),
             skin_scaled: HashMap::new(),
             wallpapers: HashMap::new(),
+            surfaces: std::collections::VecDeque::new(),
+            surface_bytes: 0,
+            surface_rasters: 0,
         }
     }
 
@@ -720,6 +887,44 @@ impl Painter {
         style: TextStyle<'_>,
     ) {
         let [x, y, w, h] = rect;
+        if self.terminal_font.is_some() {
+            let previous = self.terminal_grid.replace(cw);
+            self.terminal_symbols.clear();
+            let mut at = 0;
+            let mut column = 0;
+            while at < value.len() {
+                let end = crate::wrap::next_boundary(value, at);
+                let glyph = &value[at..end];
+                let columns = crate::wrap::width_of(glyph);
+                let left = x + f32::from(column) * cw;
+                let right = (left + f32::from(columns) * cw).min(x + w);
+                if columns > 0
+                    && right > left
+                    && draw_grid_glyph(
+                        canvas,
+                        glyph,
+                        snap_rect([left, y, right - left, h]),
+                        style.color,
+                    )
+                {
+                    self.terminal_symbols.insert(at);
+                }
+                column += columns;
+                at = end;
+            }
+            self.text(
+                canvas,
+                value,
+                rect,
+                TextStyle {
+                    centered: false,
+                    ..style
+                },
+            );
+            self.terminal_grid = previous;
+            self.terminal_symbols.clear();
+            return;
+        }
         let mut at = 0;
         let mut column = 0;
         while at < value.len() {
@@ -745,6 +950,16 @@ impl Painter {
         rect: [f32; 4],
         style: TextStyle<'_>,
     ) -> Option<f32> {
+        self.text_with_caret(canvas, value, rect, style, None)
+    }
+    fn text_with_caret(
+        &mut self,
+        canvas: &mut Pixmap,
+        value: &str,
+        rect: [f32; 4],
+        style: TextStyle<'_>,
+        caret: Option<&crate::native_surface::TextCaret>,
+    ) -> Option<f32> {
         let TextStyle {
             size,
             color,
@@ -754,13 +969,22 @@ impl Painter {
             centered,
         } = style;
         let [x, y, w, h] = rect;
-        if value.trim().is_empty() || w <= 0. || h <= 0. {
+        if (value.trim().is_empty() && caret.is_none()) || w <= 0. || h <= 0. {
             return None;
         }
         // Placed panel rows may be shorter than the source terminal cells.
         // Shape at a size whose complete line fits the destination, including
         // terminal font scaling; centring an oversized line clips its glyphs.
-        let size = (size * self.font_factor).clamp(1., 128.).min(h / 1.2);
+        let size = if self.terminal_grid.is_some() {
+            (size * self.font_factor).clamp(1., 128.)
+        } else {
+            (size * self.font_factor).clamp(1., 128.).min(h / 1.2)
+        };
+        let line_height = if self.terminal_grid.is_some() {
+            h
+        } else {
+            size * 1.2
+        };
         if self.text.len() >= 2048 || self.text_bytes > 1_000_000 {
             self.text.clear();
             self.text_bytes = 0;
@@ -775,6 +999,7 @@ impl Painter {
                 .take(8192)
                 .collect(),
             size: size.to_bits(),
+            line_height: line_height.to_bits(),
             bold,
             mono,
             ui_font: self.ui_font,
@@ -783,7 +1008,7 @@ impl Painter {
         let cache_bytes = &mut self.text_bytes;
         let buffer = self.text.entry(key.clone()).or_insert_with(|| {
             *cache_bytes += key.text.len();
-            let mut b = Buffer::new(fonts, Metrics::new(size, size * 1.2));
+            let mut b = Buffer::new(fonts, Metrics::new(size, line_height));
             b.set_wrap(fonts, Wrap::None);
             b.set_text(
                 fonts,
@@ -810,10 +1035,42 @@ impl Painter {
         // Single glyph surfaces are used for menu mnemonics. Fractional font
         // advances can exceed their integer cell by a fraction of a pixel;
         // replacing each letter with an ellipsis destroys the entire menu.
-        let clipped = ellipsis && value.chars().count() > 1 && w >= size && text_width > w + 0.5;
+        let clipped = caret.is_none()
+            && ellipsis
+            && value.chars().count() > 1
+            && w >= size
+            && text_width > w + 0.5;
+        let caret_x = caret.map(|caret| {
+            let byte = value[..caret.byte.min(value.len())]
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>()
+                .len();
+            for run in buffer.layout_runs() {
+                for glyph in run.glyphs {
+                    if glyph.start == byte {
+                        return if glyph.level.is_rtl() {
+                            glyph.x + glyph.w
+                        } else {
+                            glyph.x
+                        };
+                    }
+                    if glyph.end == byte {
+                        return if glyph.level.is_rtl() {
+                            glyph.x
+                        } else {
+                            glyph.x + glyph.w
+                        };
+                    }
+                }
+            }
+            text_width
+        });
         let clip_w = if clipped { (w - size).max(0.) } else { w };
-        let offset_y = (h - size * 1.2) / 2.;
-        let offset_x = if centered {
+        let offset_y = (h - line_height) / 2.;
+        let offset_x = if let Some(caret) = caret_x {
+            -(caret - w + 3.).max(0.)
+        } else if centered {
             ((w - text_width) / 2.).max(0.)
         } else {
             0.
@@ -821,58 +1078,147 @@ impl Painter {
         let [r, g, b] = rgb(color);
         let width = canvas.width();
         let height = canvas.height();
-        let pixels = canvas.data_mut();
+        let gpu_text = canvas.is_gpu();
+        let left = (x.ceil() as i32).max(0);
+        let top = (y.ceil() as i32).max(0);
+        let right = ((x + clip_w).floor() as i32).min(width as i32).max(left);
+        let bottom = ((y + h).floor() as i32).min(height as i32).max(top);
+        let mut coverage = if gpu_text {
+            Pixmap::new((right - left).max(1) as u32, (bottom - top).max(1) as u32)
+        } else {
+            None
+        };
+        let coverage_width = coverage.as_ref().map_or(width, Pixmap::width);
+        let pixels = if let Some(mask) = &mut coverage {
+            mask.data_mut()
+        } else {
+            canvas.data_mut()
+        };
         let mut ink_end = None::<f32>;
-        buffer.draw(
-            fonts,
-            &mut self.glyphs,
-            Color::rgb(r, g, b),
-            |px, py, _, _, color| {
-                let dx = (x + offset_x).round() as i32 + px;
-                let dy = (y + offset_y).round() as i32 + py;
-                if dx < x.ceil() as i32
-                    || dy < y.ceil() as i32
-                    || dx >= (x + clip_w).floor() as i32
-                    || dy >= (y + h).floor() as i32
-                    || dx < 0
-                    || dy < 0
-                    || dx >= width as i32
-                    || dy >= height as i32
-                {
+        let mut draw_pixel = |px: i32, py: i32, _: u32, _: u32, color: Color| {
+            let dx = (x + offset_x).round() as i32 + px;
+            let dy = (y + offset_y).round() as i32 + py;
+            if dx < x.ceil() as i32
+                || dy < y.ceil() as i32
+                || dx >= (x + clip_w).floor() as i32
+                || dy >= (y + h).floor() as i32
+                || dx < 0
+                || dy < 0
+                || dx >= width as i32
+                || dy >= height as i32
+            {
+                return;
+            }
+            let offset = if gpu_text {
+                (((dy - top) as u32 * coverage_width + (dx - left) as u32) * 4) as usize
+            } else {
+                ((dy as u32 * width + dx as u32) * 4) as usize
+            };
+            let rgba = color.as_rgba();
+            if rgba[3] > 0 {
+                ink_end = Some(ink_end.unwrap_or(0.).max((dx + 1) as f32));
+            }
+            // The canvas stores premultiplied RGBA. Opaque pane text can
+            // blend directly, but text over terminal gaps must also add
+            // coverage to alpha or Kitty treats the glyph as invisible.
+            let dst_alpha = u32::from(pixels[offset + 3]);
+            let src_alpha = u32::from(rgba[3]);
+            if dst_alpha != 255 {
+                let alpha = src_alpha + (dst_alpha * (255 - src_alpha) + 127) / 255;
+                if alpha == 0 {
                     return;
                 }
-                let offset = ((dy as u32 * width + dx as u32) * 4) as usize;
-                let rgba = color.as_rgba();
-                if rgba[3] > 0 {
-                    ink_end = Some(ink_end.unwrap_or(0.).max((dx + 1) as f32));
-                }
-                // The canvas stores premultiplied RGBA. Opaque pane text can
-                // blend directly, but text over terminal gaps must also add
-                // coverage to alpha or Kitty treats the glyph as invisible.
-                let dst_alpha = u32::from(pixels[offset + 3]);
-                let src_alpha = u32::from(rgba[3]);
-                if dst_alpha != 255 {
-                    let alpha = src_alpha + (dst_alpha * (255 - src_alpha) + 127) / 255;
-                    if alpha == 0 {
-                        return;
-                    }
-                    let coverage = ((src_alpha * 255 + alpha / 2) / alpha) as u8;
-                    for c in 0..3 {
-                        let background = (u32::from(pixels[offset + c]) * 255 + dst_alpha / 2)
-                            .checked_div(dst_alpha)
-                            .unwrap_or(0)
-                            .min(255) as u8;
-                        let straight = blend_text_channel(rgba[c], background, coverage);
-                        pixels[offset + c] = ((u32::from(straight) * alpha + 127) / 255) as u8;
-                    }
-                    pixels[offset + 3] = alpha as u8;
-                    return;
-                }
+                let coverage = ((src_alpha * 255 + alpha / 2) / alpha) as u8;
                 for c in 0..3 {
-                    pixels[offset + c] = blend_text_channel(rgba[c], pixels[offset + c], rgba[3]);
+                    let background = (u32::from(pixels[offset + c]) * 255 + dst_alpha / 2)
+                        .checked_div(dst_alpha)
+                        .unwrap_or(0)
+                        .min(255) as u8;
+                    let straight = blend_text_channel(rgba[c], background, coverage);
+                    pixels[offset + c] = ((u32::from(straight) * alpha + 127) / 255) as u8;
                 }
-            },
-        );
+                pixels[offset + 3] = alpha as u8;
+                return;
+            }
+            for c in 0..3 {
+                pixels[offset + c] = blend_text_channel(rgba[c], pixels[offset + c], rgba[3]);
+            }
+        };
+        if let Some(cw) = self.terminal_grid {
+            // Preserve shaped glyphs/ligatures, but anchor each cluster to its
+            // terminal column instead of centering each grapheme separately.
+            let mut columns = vec![0u16; key.text.len() + 1];
+            let mut at = 0;
+            let mut col = 0;
+            while at < key.text.len() {
+                let end = crate::wrap::next_boundary(&key.text, at);
+                columns[at..end].fill(col);
+                col += crate::wrap::width_of(&key.text[at..end]);
+                columns[end] = col;
+                at = end;
+            }
+            for run in buffer.layout_runs() {
+                let mut origins = HashMap::new();
+                for glyph in run.glyphs {
+                    origins
+                        .entry((glyph.start, glyph.end))
+                        .and_modify(|x: &mut f32| *x = x.min(glyph.x))
+                        .or_insert(glyph.x);
+                }
+                for glyph in run.glyphs {
+                    if self.terminal_symbols.contains(&glyph.start) {
+                        continue;
+                    }
+                    let mut placed = glyph.clone();
+                    placed.x = f32::from(columns[glyph.start.min(key.text.len())]) * cw + glyph.x
+                        - origins[&(glyph.start, glyph.end)];
+                    let physical = placed.physical((0., 0.), 1.);
+                    self.glyphs.with_pixels(
+                        fonts,
+                        physical.cache_key,
+                        glyph.color_opt.unwrap_or(Color::rgb(r, g, b)),
+                        |px, py, color| {
+                            draw_pixel(
+                                physical.x + px,
+                                run.line_y as i32 + physical.y + py,
+                                1,
+                                1,
+                                color,
+                            )
+                        },
+                    );
+                }
+            }
+        } else {
+            buffer.draw(
+                fonts,
+                &mut self.glyphs,
+                Color::rgb(r, g, b),
+                &mut draw_pixel,
+            );
+        }
+        if let Some(mask) = coverage {
+            canvas.draw_pixmap(
+                left,
+                top,
+                mask.as_ref(),
+                &tiny_skia::PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
+        if let (Some(caret), Some(position)) = (caret, caret_x) {
+            fill(
+                canvas,
+                [
+                    (x + offset_x + position).clamp(x, x + (w - 1.).max(0.)),
+                    y + (h * 0.15).floor(),
+                    1.,
+                    (h * 0.7).max(1.),
+                ],
+                &caret.color,
+            );
+        }
         if clipped {
             let ellipsis_end = self.text(
                 canvas,
@@ -1173,6 +1519,13 @@ impl Painter {
         // Match the terminal cell metrics; never expand text beyond its cell advance.
         let font =
             font_override.unwrap_or_else(|| (ch * 0.84).min(cw / 0.6).floor().clamp(1., 64.));
+        #[cfg(feature = "gpu-renderer")]
+        let mut canvas = if let Some(gpu) = &self.gpu {
+            Pixmap::Gpu(Box::new(gpu.canvas(viewport.width, viewport.height)))
+        } else {
+            Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?
+        };
+        #[cfg(not(feature = "gpu-renderer"))]
         let mut canvas =
             Pixmap::new(viewport.width, viewport.height).context("Allocate graphical frame")?;
         let [r, g, b] = rgb(&scene.background);
@@ -1587,13 +1940,32 @@ impl Painter {
                         )?;
                     }
                 }
-                Component::LiveCanvas { .. } | Component::Terminal { .. } => {}
+                Component::Terminal { .. } => {
+                    if let Some(rect) =
+                        tiny_skia::Rect::from_xywh(area[0], area[1], area[2], area[3])
+                    {
+                        let paint = tiny_skia::Paint {
+                            blend_mode: tiny_skia::BlendMode::Clear,
+                            ..Default::default()
+                        };
+                        canvas.fill_rect(rect, &paint, Transform::identity(), None);
+                    }
+                }
+                Component::LiveCanvas { .. } => {}
             }
         }
         if manage_assets {
             self.assets.retain(|id, _| used.contains(id));
         }
-        let mut pixels = canvas.take();
+        let mut pixels = match canvas {
+            Pixmap::Cpu(pixels) => pixels.take(),
+            #[cfg(feature = "gpu-renderer")]
+            Pixmap::Gpu(scene) => self
+                .gpu
+                .as_mut()
+                .context("GPU rasterizer is unavailable")?
+                .render(*scene)?,
+        };
         if scene.background == "transparent" {
             // Kitty expects straight RGBA. Unpremultiply antialiased edges so
             // text and rounded corners don't develop dark halos over the terminal.
@@ -1641,6 +2013,15 @@ fn draw_image(
     } else {
         ratio
     };
+    #[cfg(feature = "gpu-renderer")]
+    if let Pixmap::Gpu(target) = canvas {
+        let transform = Transform::from_scale(ratio, ratio).post_translate(
+            (x + (w - image.width() as f32 * ratio) / 2.).round(),
+            (y + (h - image.height() as f32 * ratio) / 2.).round(),
+        );
+        target.rgba(image.as_ref(), transform, area, scale != ImageScale::Smooth);
+        return Ok(());
+    }
     // Zoomed previews sample the bounded source directly and clip to the viewport.
     // Never allocate an image whose dimensions grow with the zoom factor.
     let width = if zoom != 100 {
@@ -3150,4 +3531,133 @@ mod tests {
         scene.viewport.width = 9000;
         assert!(painter.render(&scene).is_err());
     }
+    #[cfg(feature = "gpu-renderer")]
+    #[test]
+    #[ignore = "requires a hardware GPU adapter"]
+    fn gpu_labels_survive_live_canvas_redraws() {
+        use crate::native_surface::{PixelRect, Surface};
+        let mut painter = Painter::new();
+        painter.gpu = Some(super::super::gpu::Gpu::new().unwrap());
+        let mut scene = scene();
+        scene.viewport.width = 1460;
+        scene.viewport.height = 1640;
+        scene.viewport.columns = 146;
+        scene.viewport.rows = 82;
+        let mut surface = Surface::new(1460, 1640, "#101620".into()).with_physical_text();
+        for (y, label) in [
+            (12, "STAR / MUX"),
+            (82, "SESSIONS"),
+            (122, "Local shell"),
+            (202, "Demo agent"),
+        ] {
+            surface.text(PixelRect::new(20, y, 180, 28), label, "#e1e8f3", 16, true);
+        }
+        scene.components.push(Component::Surface {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 146,
+                height: 82,
+            },
+            surface,
+        });
+        scene.components.push(Component::LiveCanvas {
+            rect: Rect {
+                x: 20,
+                y: 5,
+                width: 124,
+                height: 75,
+            },
+            id: "terminals".into(),
+            view: crate::content_view::ContentView::new(
+                [1200, 700],
+                PixelRect::new(200, 100, 1240, 1500),
+            )
+            .unwrap(),
+            interactive: true,
+        });
+        let expected = painter
+            .render_with_canvases(&scene, &["terminals".into()])
+            .unwrap();
+        let ink = |image: &RgbaImage| {
+            (0..250)
+                .flat_map(|y| (0..190).map(move |x| (x, y)))
+                .filter(|&(x, y)| image.get_pixel(x, y)[0] > 100)
+                .count()
+        };
+        assert!(ink(&expected) > 100, "initial labels missing");
+        for index in 0..120 {
+            // A vector-only pass must not discard cached text masks either.
+            let mut vectors = scene.clone();
+            vectors.components.clear();
+            painter.render(&vectors).unwrap();
+            let actual = painter
+                .render_with_canvases(&scene, &["terminals".into()])
+                .unwrap();
+            assert_eq!(
+                ink(&actual),
+                ink(&expected),
+                "labels vanished at redraw {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn unchanged_surface_reuses_raster_and_cache_is_bounded() {
+        let mut painter = Painter::new();
+        let mut canvas = Pixmap::new(300, 200).unwrap();
+        let style = crate::native_surface::style::Style::default().with_native_skins(false);
+        let surface = style.panel(300, 200, "Retained chrome");
+        painter
+            .surface(&mut canvas, &surface, [0., 0., 300., 200.])
+            .unwrap();
+        let before = canvas.data().to_vec();
+        assert_eq!(painter.surface_rasters, 1);
+        painter
+            .surface(&mut canvas, &surface, [0., 0., 300., 200.])
+            .unwrap();
+        assert_eq!(painter.surface_rasters, 1);
+        assert_eq!(canvas.data(), before);
+        for index in 0..100 {
+            let surface = style.panel(300, 200, &format!("Panel {index}"));
+            painter
+                .surface(&mut canvas, &surface, [0., 0., 300., 200.])
+                .unwrap();
+        }
+        assert!(painter.surface_bytes <= SURFACE_CACHE_BYTES);
+        assert!(painter.surfaces.len() <= 64);
+    }
+    #[test]
+    fn shaped_caret_renders_empty_unicode_and_scrolled_fields() {
+        use crate::native_surface::{PixelRect, Surface, TextCaret};
+        let mut painter = Painter::new();
+        for text in [
+            String::new(),
+            "日本語".into(),
+            "Long field with Unicode 日本語 ".repeat(50),
+        ] {
+            let mut surface = Surface::new(160, 30, "#101010".into()).with_ui_text();
+            surface.text(PixelRect::new(4, 0, 152, 30), &text, "#ffffff", 12, false);
+            surface.text_carets.push(TextCaret {
+                node: 0,
+                byte: text.len(),
+                color: "#00ff00".into(),
+            });
+            surface.validate().unwrap();
+            let mut canvas = Pixmap::new(160, 30).unwrap();
+            painter
+                .surface(&mut canvas, &surface, [0., 0., 160., 30.])
+                .unwrap();
+            assert!(canvas
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[0] == 0 && p[1] == 255 && p[2] == 0));
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "typography_tests.rs"]
+mod typography_tests;

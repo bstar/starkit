@@ -22,6 +22,7 @@
 
         # One version, read rather than repeated.
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        gpuLibraries = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.vulkan-loader pkgs.libGL ];
         alsaPluginDir = if pkgs.stdenv.hostPlatform.isLinux then pkgs.runCommand "star-media-alsa-plugins" {} ''
           mkdir -p $out
           ln -s ${pkgs.pipewire}/lib/alsa-lib/*.so $out/
@@ -42,8 +43,9 @@
           version = cargoToml.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          cargoLock.allowBuiltinFetchGit = true;
           nativeBuildInputs = [ pkgs.pkg-config pkgs.clang ];
-          buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
+          buildInputs = [ pkgs.ffmpeg ] ++ gpuLibraries ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
 
@@ -75,11 +77,12 @@
         formatter = pkgs.nixpkgs-fmt;
 
         devShells.default = pkgs.mkShell {
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath gpuLibraries;
           ALSA_PLUGIN_DIR = alsaPluginDir;
           LIBVA_DRIVERS_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/lib/dri";
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
-          buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
+          buildInputs = [ pkgs.ffmpeg ] ++ gpuLibraries ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
           packages = with pkgs; [
             pkg-config
             clang
@@ -97,6 +100,9 @@
           ];
 
           shellHook = ''
+            ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              export VK_DRIVER_FILES="$(python3 -c 'import glob; print(":".join(glob.glob("${pkgs.mesa}/share/vulkan/icd.d/*.json")))')"
+            ''}
             echo "starkit devshell · rustc $(rustc --version | cut -d' ' -f2)"
           '';
         };

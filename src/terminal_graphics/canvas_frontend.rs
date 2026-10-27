@@ -17,6 +17,7 @@ use tempfile::{NamedTempFile, TempDir};
 static IMAGE_ID: AtomicU32 = AtomicU32::new(0x6c000000);
 struct Layer {
     generation: u64,
+    exact_sequence: Option<u64>,
     pixels: Arc<RgbaImage>,
     dirty: bool,
     image: Option<u32>,
@@ -53,6 +54,46 @@ impl Frontend {
         self.terminal_files = available;
         self
     }
+    pub fn receive_pixels_exact(&mut self, frame: &super::pixel_stream::Pixels) -> Result<bool> {
+        if self
+            .layers
+            .get(&frame.stream)
+            .is_some_and(|l| l.generation > frame.generation)
+        {
+            return Ok(false);
+        }
+        let patch = frame.decode()?;
+        let first = !self.layers.contains_key(&frame.stream);
+        ensure!(
+            !first || self.layers.len() < live_canvas::MAX_STREAMS,
+            "Too many live layers"
+        );
+        if frame.base.is_none() {
+            self.receive_pixels(frame.stream.clone(), frame.generation, Arc::new(patch))?;
+            self.layers.get_mut(&frame.stream).unwrap().exact_sequence = Some(frame.sequence);
+        } else {
+            let layer = self
+                .layers
+                .get_mut(&frame.stream)
+                .filter(|l| {
+                    l.generation == frame.generation
+                        && l.exact_sequence == frame.base
+                        && l.pixels.dimensions() == (frame.width, frame.height)
+                })
+                .ok_or_else(|| anyhow::anyhow!("Lossless patch base is missing"))?;
+            let image = Arc::make_mut(&mut layer.pixels);
+            let [x, y, w, h] = frame.rect;
+            for row in 0..h as usize {
+                let dest = ((y as usize + row) * frame.width as usize + x as usize) * 4;
+                let src = row * w as usize * 4;
+                image.as_mut()[dest..dest + w as usize * 4]
+                    .copy_from_slice(&patch.as_raw()[src..src + w as usize * 4]);
+            }
+            layer.exact_sequence = Some(frame.sequence);
+            layer.dirty = true;
+        }
+        Ok(first)
+    }
     pub fn receive_encoded(&mut self, frame: &live_canvas::EncodedFrame) -> Result<bool> {
         if self
             .layers
@@ -72,6 +113,7 @@ impl Frontend {
             .entry(frame.stream.clone())
             .or_insert_with(|| Layer {
                 generation: frame.generation,
+                exact_sequence: None,
                 pixels: pixels.clone(),
                 dirty: true,
                 image: None,
@@ -114,6 +156,7 @@ impl Frontend {
         let first = !self.layers.contains_key(&stream);
         let layer = self.layers.entry(stream).or_insert_with(|| Layer {
             generation,
+            exact_sequence: None,
             pixels: pixels.clone(),
             dirty: true,
             image: None,
@@ -159,6 +202,7 @@ impl Frontend {
             .layers
             .entry(d.stream.clone())
             .or_insert_with(|| Layer {
+                exact_sequence: None,
                 generation: d.generation,
                 pixels: pixels.clone(),
                 dirty: true,
@@ -339,6 +383,17 @@ impl Frontend {
             layer.presented_at = Some(began);
         }
         if self.stats_began.elapsed() >= std::time::Duration::from_secs(2) {
+            if let Some(path) = std::env::var_os("STAR_CANVAS_STATS_FILE") {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let seconds = self.stats_began.elapsed().as_secs_f64();
+                    let record = serde_json::json!({"frames":self.stats_frames,"seconds":seconds,"fps":self.stats_frames as f64/seconds,"bytes":self.stats_bytes,"inline":!self.terminal_files});
+                    let _ = writeln!(file, "{record}");
+                }
+            }
             tracing::debug!(
                 frames = self.stats_frames,
                 bytes = self.stats_bytes,
@@ -389,6 +444,48 @@ fn resize_preview(
 mod tests {
     use super::*;
     use live_canvas::{Frame, PixelFormat, Transport, Update};
+    #[test]
+    fn exact_pixels_apply_deltas_only_to_the_matching_base() {
+        use super::super::pixel_stream::Pixels;
+        let image =
+            crate::image::RgbaImage::from_pixel(1600, 1000, crate::image::Rgba([10, 20, 30, 255]));
+        let png = super::super::assets::encode_png(&image).unwrap();
+        let mut frontend = Frontend::new().unwrap();
+        let first = Pixels {
+            stream: "terminal".into(),
+            generation: 1,
+            sequence: 1,
+            base: None,
+            width: 1600,
+            height: 1000,
+            rect: [0, 0, 1600, 1000],
+            png,
+        };
+        frontend.receive_pixels_exact(&first).unwrap();
+        assert_eq!(
+            frontend.layers["terminal"].pixels.dimensions(),
+            (1600, 1000)
+        );
+        let dot =
+            crate::image::RgbaImage::from_pixel(1, 1, crate::image::Rgba([101, 102, 103, 255]));
+        let patch = Pixels {
+            sequence: 2,
+            base: Some(1),
+            rect: [1500, 900, 1, 1],
+            png: super::super::assets::encode_png(&dot).unwrap(),
+            ..first
+        };
+        frontend.receive_pixels_exact(&patch).unwrap();
+        assert_eq!(
+            frontend.layers["terminal"].pixels.get_pixel(1500, 900).0,
+            [101, 102, 103, 255]
+        );
+        assert_eq!(
+            frontend.layers["terminal"].pixels.get_pixel(0, 0).0,
+            [10, 20, 30, 255]
+        );
+        assert!(frontend.receive_pixels_exact(&patch).is_err());
+    }
     #[test]
     fn accelerated_preview_retains_bilinear_pixels_and_alpha() {
         let source = RgbaImage::from_fn(13, 9, |x, y| {
@@ -528,6 +625,7 @@ mod tests {
         frontend.layers.insert(
             "demo".into(),
             Layer {
+                exact_sequence: None,
                 generation: 1,
                 pixels: Arc::new(RgbaImage::from_pixel(
                     1,
