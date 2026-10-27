@@ -45,6 +45,7 @@
           cargoLock.lockFile = ./Cargo.lock;
           cargoLock.allowBuiltinFetchGit = true;
           nativeBuildInputs = [ pkgs.pkg-config pkgs.clang ];
+          nativeCheckInputs = [ pkgs.ffmpeg ];
           buildInputs = [ pkgs.ffmpeg ] ++ gpuLibraries ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";

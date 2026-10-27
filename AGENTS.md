@@ -285,3 +285,5 @@ released Crossterm contains the fix. FOLD's vendored parser already guards
 these coordinates and retains its OSC drop extension. Do not silently remove
 these root patches when updating KIT pins. The gallery proof injects zero
 coordinates before exercising shortcuts and theme changes.
+
+Hosted consumer CI currently covers AMP, FOLD, CORD and WIRE. The SCREEN repository is not accessible to the workflow token; keep its fifth-consumer migration gate pending and run it locally until that source is available. Do not count a skipped/inaccessible checkout as a passed migration.

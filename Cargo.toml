@@ -51,6 +51,9 @@ media = ["audio-output","image", "dep:ffmpeg-next", "dep:cpal", "dep:rtrb", "dep
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process", "time", "termios"], optional = true }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [dependencies]
 vello = { version = "0.11", optional = true }
 pollster = { version = "0.4", optional = true }

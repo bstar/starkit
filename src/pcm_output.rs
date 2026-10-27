@@ -289,16 +289,21 @@ impl Converter {
 
 /// Construct the declared speaker layout, using canonical order when unspecified.
 pub fn channel_layout(mask: u64, channels: u16) -> ffmpeg_next::ChannelLayout {
-    let mut value = ffmpeg_next::ChannelLayout::default(i32::from(channels));
     if mask == 0 {
-        return value;
+        return ffmpeg_next::ChannelLayout::default(i32::from(channels));
     }
-    // Native masks have no owned custom channel array. PCM validation checked
-    // the speaker count before constructing the FFmpeg layout.
-    unsafe {
-        ffmpeg_next::ffi::av_channel_layout_from_mask(&mut value.0, mask);
+    #[cfg(not(ffmpeg_channel_layout_v2))]
+    {
+        ffmpeg_next::ChannelLayout::from_bits_truncate(mask)
     }
-    value
+    #[cfg(ffmpeg_channel_layout_v2)]
+    {
+        // A native mask has no owned custom channel array. Use the public
+        // conversion rather than a representation that differs before FFmpeg 7.
+        let mut value = unsafe { std::mem::zeroed() };
+        unsafe { ffmpeg_next::ffi::av_channel_layout_from_mask(&mut value, mask) };
+        ffmpeg_next::ChannelLayout::from(value)
+    }
 }
 
 #[cfg(test)]

@@ -108,13 +108,15 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check --all-targets --all-features
 
+  # SCREEN remains a local integration target until its repository is available
+  # to this workflow token; public CI checks the four published consumers.
   consumers:
     # Rolling integration with each app's latest main. The check prints both
     # revisions, and changes only a disposable copy of the app's manifests.
     strategy:
       fail-fast: false
       matrix:
-        app: [staramp, starfold, starcord, starwire, starscreen]
+        app: [staramp, starfold, starcord, starwire]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

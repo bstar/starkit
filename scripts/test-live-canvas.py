@@ -69,7 +69,7 @@ def handle_result(args, result, target_window_id, boss):
         rc("send-key","--match","id:1","ctrl+l")
         pixels("all-layers-refreshed")
         if a.display_server=="x11":
-            rc("resize-os-window","--action","resize","--width","900","--height","600")
+            rc("resize-os-window","--action","resize","--unit","pixels","--width","900","--height","600")
             resized=pixels("resized");assert resized[:2]!=first[:2],"Resize did not change output geometry"
         else:
             # A tiled Wayland compositor owns outer window size. Font zoom changes
