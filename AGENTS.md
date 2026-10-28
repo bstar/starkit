@@ -275,6 +275,14 @@ Preserve FOLD's existing terminal-lab and `src/ui/layout.rs` working edits.
 The initial candidate deliberately does not tag a release or claim completed
 consumer migrations. See `docs/application-ui.md` for the public API contract.
 
+2026-10-28: shared list paging/activation, scroll/hit synchronization, modifier
+shortcuts, outside slider release and modal/pane focus borders have regression
+coverage. The independent gallery passed real private Kitty input/display
+checks on Linux Wayland and Xvfb (optimized debug and release), including image
+loss recovery. The Linux native-graphics workflow now runs that gallery gate
+and uploads its screenshots/report. This does not complete the control catalog
+or any of the five reference application migrations above.
+
 ## Crossterm coordinate parser
 
 Crossterm 0.29.0 panics on zero SGR mouse/cursor coordinates in debug builds.

@@ -148,8 +148,16 @@ def handle_result(args, result, target_window_id, boss):
         assert max(deliveries) < 250, f'Theme presentation is too slow: {deliveries} ms'
         report['theme_delivery_ms'] = deliveries
         report['theme_observed_seconds'] = latencies
-        rc('send-key', '--match', 'id:1', 'escape')
+        rc('send-key', '--match', 'id:1', 'page_down')
+        wait_for(lambda: difference(previous_theme, pixels('theme-page')) > .0001,
+                 'Page Down did not move the selected theme')
+        paged_theme = stable('theme-page')
+        report['list_page_navigation'] = True
+        rc('send-key', '--match', 'id:1', 'enter')
+        wait_for(lambda: difference(paged_theme, pixels('theme-closed')) > .0001,
+                 'Enter did not activate the selected theme and close its dialog')
         stable('theme-closed')
+        report['list_activation'] = True
         rc('send-key', '--match', 'id:1', 'f9')
         wait_for(lambda: b'LIBRARY' in rc('get-text', '--match', 'id:1'),
                  'Cell presentation did not show compact border headings')

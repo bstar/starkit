@@ -818,3 +818,6 @@ mod tests {
         assert_eq!(before.scroll_interaction, after.scroll_interaction);
     }
 }
+
+#[cfg(test)]
+mod control_tests;

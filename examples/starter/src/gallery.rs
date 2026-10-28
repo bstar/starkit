@@ -184,6 +184,15 @@ impl Gallery {
                 self.choosing_theme = false;
             }
             Event::Selected { id, item } if id.0 == "themes" => self.theme_id = item.0,
+            Event::Activated { id, item } if id.0 == "themes" => {
+                self.theme_id = item.0;
+                self.choosing_theme = false;
+            }
+            Event::Activated { id, item } if id.0 == "tracks" => {
+                self.status = format!("Playing {}", item.0);
+                self.selected = Some(item);
+                self.playing = true;
+            }
             Event::Changed { id, value } if id.0 == "filter" => self.name = value,
             Event::Selected { id, item } if id.0 == "tracks" => {
                 self.status = format!("Selected {}", item.0);

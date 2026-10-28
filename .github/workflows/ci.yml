@@ -168,10 +168,20 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/kitty-proof/python"
           "$RUNNER_TEMP/kitty-proof/python/bin/pip" install Pillow==11.3.0
       - run: python3 scripts/check-live-canvas.py
+      - name: Build independent application UI gallery
+        if: runner.os == 'Linux'
+        run: python3 scripts/check-starter.py --candidate --artifacts ui-gallery
+        env:
+          STAR_KIT_STARTER_NO_MEDIA: "1"
       - name: Interactive Kitty pixels on Linux
         if: runner.os == 'Linux'
         run: |
           export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a python3 scripts/test-application-ui.py \
+            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
+            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
+            --binary "$PWD/target/external-starter/debug/starkit-starter" \
+            --output application-ui-proof --display-server x11
           xvfb-run -a python3 scripts/test-live-canvas.py \
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
@@ -196,3 +206,5 @@ jobs:
             kitty-frontend-loss/
             fractional-background/
             live-canvas-proof/
+            ui-gallery/
+            application-ui-proof/

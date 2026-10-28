@@ -63,9 +63,23 @@ larger documents rather than creating a control per document row.
 
 ## Input and lifecycle
 
+The active pane and modal shell receive the focus border in both presentations,
+including read-only dialogs with no focusable controls.
+
 Tab/Shift+Tab traverse enabled controls. Text fields handle editing before
 application shortcuts; modal content traps focus and background commands.
-Enter and pointer release invoke the same registered control command. Pointer
+Enter and pointer release invoke the same registered control command. Lists,
+tables and indented trees support Up/Down, Home/End and Page Up/Page Down;
+page movement uses visible data rows, excluding a table heading. Disabled rows
+are skipped. Enter emits `Event::Activated` for the selected enabled item,
+separately from `Event::Selected`. Modified navigation keys remain available
+to registered shortcuts. External selection and reordering reveal the selected
+item; wheel scrolling can inspect other rows without changing selection.
+
+A slider retains pointer capture outside its bounds and emits a final bounded
+`Adjusted` value on release. Resize, disabled/removed targets and presentation
+changes cancel capture. Wheel scrolling cancels a pending list click so release
+cannot select a different row than the one pressed. Pointer
 release must match its press target and viewport generation. Changed geometry,
 removed targets, disconnect and presentation switching cancel capture. Visual
 updates that retain targets preserve custom drags. Escape requests modal close.
@@ -106,3 +120,16 @@ capabilities. A cell frontend does not make a desktop capture backend available.
 Keep stream generations, credits, cancellation and audio-device errors in the
 existing media protocols. A failed frontend device must never switch playback
 to the host. Graphics-only consumers must continue to exclude FFmpeg and CPAL.
+
+## Verification
+
+Linux native-graphics CI builds the independent starter and exercises it in a
+private Kitty instance under Xvfb. `scripts/test-application-ui.py` verifies
+commands, page navigation and item activation, modal isolation, theme delivery,
+cell/native switching, display recovery and clean exit. It retains screenshots
+and a JSON report in the `application-ui-proof` artifact. Run it locally with
+`--kitty PATH --kitten PATH --binary PATH --output DIRECTORY`, selecting
+`--display-server wayland` for a Wayland desktop or `x11` for Xvfb.
+
+These checks cover the shared contract and gallery. Reference application
+migrations and physical macOS/Sixel/iTerm2 acceptance remain separate gates.

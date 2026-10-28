@@ -12,6 +12,14 @@ use crate::{
     },
 };
 
+fn pane_focused(frame: &Frame, p: &super::Placement) -> bool {
+    (p.modal && p.parent.is_none())
+        || frame
+            .focus
+            .as_ref()
+            .is_some_and(|id| frame.ancestry(id).contains(&p.id))
+}
+
 fn pixel_rect(area: Rect) -> PixelRect {
     PixelRect::new(area.x, area.y, area.width, area.height)
 }
@@ -97,11 +105,7 @@ impl Runtime {
                         &mut buf,
                         &ChromeFrame {
                             theme,
-                            focused: focused
-                                || frame
-                                    .focus
-                                    .as_ref()
-                                    .is_some_and(|id| frame.ancestry(id).contains(&p.id)),
+                            focused: pane_focused(&frame, p),
                             title: &heading.title,
                             detail: None,
                             heading: false,
@@ -196,13 +200,7 @@ impl Runtime {
                 } => {
                     let header = usize::from(!columns.is_empty());
                     let rows = usize::from(area.height).saturating_sub(header);
-                    let index = selected
-                        .as_ref()
-                        .and_then(|id| items.iter().position(|item| &item.id == id));
-                    let offset = self.scroll.entry(p.id.clone()).or_insert_with(|| {
-                        index.unwrap_or(0).saturating_sub(rows.saturating_sub(1))
-                    });
-                    *offset = (*offset).min(items.len().saturating_sub(rows.max(1)));
+                    let offset = self.scroll.get(&p.id).copied().unwrap_or(0);
                     if header > 0 {
                         line(
                             &mut buf,
@@ -211,7 +209,7 @@ impl Runtime {
                             style.fg(rgb(theme.header_fg)).add_modifier(Modifier::BOLD),
                         );
                     }
-                    for (row, item) in items.iter().skip(*offset).take(rows).enumerate() {
+                    for (row, item) in items.iter().skip(offset).take(rows).enumerate() {
                         let rect = Rect::new(area.x, area.y + (row + header) as u16, area.width, 1);
                         let selected = selected.as_ref() == Some(&item.id);
                         let style = if selected {
@@ -479,17 +477,7 @@ impl Runtime {
                         true,
                     );
                 }
-                let selected_index = selected
-                    .as_ref()
-                    .and_then(|id| items.iter().position(|i| &i.id == id))
-                    .unwrap_or(0);
-                let visible = usize::from(rows.saturating_sub(header));
-                let offset = self
-                    .scroll
-                    .entry(p.id.clone())
-                    .or_insert_with(|| selected_index.saturating_sub(visible.saturating_sub(1)));
-                *offset = (*offset).min(items.len().saturating_sub(visible.max(1)));
-                let offset = *offset;
+                let offset = self.scroll.get(&p.id).copied().unwrap_or(0);
                 for (row, item) in items
                     .iter()
                     .skip(offset)
@@ -569,7 +557,10 @@ impl Runtime {
                 }
             }
         }
-        if focused && rect.width > 2 && rect.height > 2 {
+        if (focused || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p))
+            && rect.width > 2
+            && rect.height > 2
+        {
             surface
                 .nodes
                 .push(crate::native_surface::Primitive::Border {

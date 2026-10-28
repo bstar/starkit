@@ -24,6 +24,11 @@ pub enum Event {
         id: Id,
         item: Id,
     },
+    /// Enter on an enabled selected list/table/tree item.
+    Activated {
+        id: Id,
+        item: Id,
+    },
     CancelModal,
     Adjusted {
         id: Id,
@@ -42,6 +47,13 @@ pub enum Event {
     },
 }
 
+#[derive(PartialEq, Eq)]
+struct ListPosition {
+    selected: Option<Id>,
+    index: Option<usize>,
+    rows: usize,
+}
+
 /// Owns focus, editing, pointer capture, layout and invalidation. Drawing an
 /// unchanged viewport returns the retained frame without solving layout again.
 pub struct Runtime {
@@ -52,6 +64,7 @@ pub struct Runtime {
     pub(super) fields: BTreeMap<Id, TextInput>,
     field_modes: BTreeMap<Id, bool>,
     pub(super) scroll: BTreeMap<Id, usize>,
+    list_positions: BTreeMap<Id, ListPosition>,
     frame: Option<Frame>,
     focus: Option<Id>,
     before_modal: Option<Id>,
@@ -77,6 +90,7 @@ impl Runtime {
             fields: BTreeMap::new(),
             field_modes: BTreeMap::new(),
             scroll: BTreeMap::new(),
+            list_positions: BTreeMap::new(),
             frame: None,
             focus: None,
             before_modal: None,
@@ -206,11 +220,60 @@ impl Runtime {
                 self.focus = order.first().cloned();
             }
             frame.focus = self.focus.clone();
+            self.sync_list_scroll(&frame);
             self.frame = Some(frame);
             self.layout_dirty = false;
             self.dirty = false;
         }
         Ok(self.frame.as_ref().expect("frame installed"))
+    }
+    // Scroll belongs to input/layout state, not either renderer. A selected
+    // item follows external reordering and viewport changes, while deliberate
+    // wheel scrolling remains independent of selection.
+    fn sync_list_scroll(&mut self, frame: &Frame) {
+        for p in &frame.placements {
+            if let Widget::List {
+                items,
+                selected,
+                columns,
+            } = &p.widget
+            {
+                let rows = usize::from(p.body.height / frame.viewport.scale(false))
+                    .saturating_sub(usize::from(!columns.is_empty()))
+                    .max(1);
+                let index = selected
+                    .as_ref()
+                    .and_then(|id| items.iter().position(|item| &item.id == id));
+                let position = ListPosition {
+                    selected: selected.clone(),
+                    index,
+                    rows,
+                };
+                let changed = self.list_positions.get(&p.id) != Some(&position);
+                let offset = self.scroll.entry(p.id.clone()).or_default();
+                let previous = *offset;
+                *offset = (*offset).min(items.len().saturating_sub(rows));
+                if changed {
+                    if let Some(index) = index {
+                        if index < *offset {
+                            *offset = index;
+                        } else if index >= *offset + rows {
+                            *offset = index + 1 - rows;
+                        }
+                    }
+                }
+                if previous != *offset && self.captured() == Some(&p.id) {
+                    self.capture = None;
+                }
+                self.list_positions.insert(p.id.clone(), position);
+            }
+        }
+    }
+    fn prepare_input(&mut self) -> bool {
+        let Some(viewport) = self.frame.as_ref().map(|frame| frame.viewport) else {
+            return false;
+        };
+        self.frame(viewport).is_ok()
     }
     fn sync_fields(&mut self) {
         fn visit(node: &Node, result: &mut BTreeMap<Id, (String, bool)>) {
@@ -224,6 +287,21 @@ impl Runtime {
                 visit(child, result);
             }
         }
+        fn lists(node: &Node, ids: &mut std::collections::BTreeSet<Id>) {
+            if matches!(node.widget, Widget::List { .. }) {
+                ids.insert(node.id.clone());
+            }
+            for child in &node.children {
+                lists(child, ids);
+            }
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        lists(&self.view.root, &mut ids);
+        if let Some(modal) = &self.view.modal {
+            lists(modal, &mut ids);
+        }
+        self.scroll.retain(|id, _| ids.contains(id));
+        self.list_positions.retain(|id, _| ids.contains(id));
         let mut values = BTreeMap::new();
         visit(&self.view.root, &mut values);
         if let Some(modal) = &self.view.modal {
@@ -271,6 +349,9 @@ impl Runtime {
         Event::Changed { id, value }
     }
     pub fn paste(&mut self, text: &str) -> Vec<Event> {
+        if !self.prepare_input() {
+            return vec![];
+        }
         let Some(id) = self.focus.clone() else {
             return vec![];
         };
@@ -324,15 +405,19 @@ impl Runtime {
         if let Some(id) = self.focus.clone() {
             if let Some(p) = frame.get(&id) {
                 if let Widget::Slider { value, max, step } = p.widget {
-                    let next = match key.code {
-                        KeyCode::Left | KeyCode::Down => Some(value.saturating_sub(step)),
-                        KeyCode::Right | KeyCode::Up => Some(value.saturating_add(step).min(max)),
-                        KeyCode::Home => Some(0),
-                        KeyCode::End => Some(max),
-                        _ => None,
-                    };
-                    if let Some(value) = next {
-                        return self.adjust(id, value, true);
+                    if key.modifiers.is_empty() {
+                        let next = match key.code {
+                            KeyCode::Left | KeyCode::Down => Some(value.saturating_sub(step)),
+                            KeyCode::Right | KeyCode::Up => {
+                                Some(value.saturating_add(step).min(max))
+                            }
+                            KeyCode::Home => Some(0),
+                            KeyCode::End => Some(max),
+                            _ => None,
+                        };
+                        if let Some(value) = next {
+                            return self.adjust(id, value, true);
+                        }
                     }
                 }
             }
@@ -356,32 +441,69 @@ impl Runtime {
                     Edit::Ignored => {}
                 }
             }
-            if matches!(
-                key.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
-            ) {
+            if key.modifiers.is_empty() {
                 if let Some(p) = frame.get(&id) {
                     if let Widget::List {
-                        items, selected, ..
+                        items,
+                        selected,
+                        columns,
                     } = &p.widget
                     {
-                        let selectable: Vec<_> = items
-                            .iter()
-                            .filter(|item| item.enabled)
-                            .map(|item| item.id.clone())
-                            .collect();
-                        if !selectable.is_empty() {
-                            let index = selected
-                                .as_ref()
-                                .and_then(|id| selectable.iter().position(|item| item == id))
-                                .unwrap_or(0);
-                            let next = match key.code {
-                                KeyCode::Up => index.saturating_sub(1),
-                                KeyCode::Down => (index + 1).min(selectable.len() - 1),
-                                KeyCode::Home => 0,
-                                _ => selectable.len() - 1,
+                        if key.code == KeyCode::Enter {
+                            if let Some(item) = selected.as_ref().and_then(|id| {
+                                items.iter().find(|item| &item.id == id && item.enabled)
+                            }) {
+                                return vec![Event::Activated {
+                                    id,
+                                    item: item.id.clone(),
+                                }];
+                            }
+                            return vec![];
+                        }
+                        let current = selected
+                            .as_ref()
+                            .and_then(|id| items.iter().position(|item| &item.id == id));
+                        let page = usize::from(p.body.height / frame.viewport.scale(false))
+                            .saturating_sub(usize::from(!columns.is_empty()))
+                            .max(1);
+                        let backwards =
+                            matches!(key.code, KeyCode::Up | KeyCode::PageUp | KeyCode::End);
+                        let target = match key.code {
+                            KeyCode::Up => Some(
+                                current
+                                    .map_or(items.len().saturating_sub(1), |i| i.saturating_sub(1)),
+                            ),
+                            KeyCode::Down => Some(current.map_or(0, |i| i.saturating_add(1))),
+                            KeyCode::PageUp => Some(current.map_or(0, |i| i.saturating_sub(page))),
+                            KeyCode::PageDown => {
+                                Some(current.map_or(0, |i| i.saturating_add(page)))
+                            }
+                            KeyCode::Home => Some(0),
+                            KeyCode::End => Some(items.len().saturating_sub(1)),
+                            _ => None,
+                        };
+                        if let Some(target) = target.filter(|_| !items.is_empty()) {
+                            let target = target.min(items.len() - 1);
+                            let item = if backwards {
+                                items[..=target]
+                                    .iter()
+                                    .rev()
+                                    .find(|item| item.enabled)
+                                    .or_else(|| {
+                                        items[target + 1..].iter().find(|item| item.enabled)
+                                    })
+                            } else {
+                                items[target..]
+                                    .iter()
+                                    .find(|item| item.enabled)
+                                    .or_else(|| {
+                                        items[..target].iter().rev().find(|item| item.enabled)
+                                    })
                             };
-                            return self.select(id, selectable[next].clone());
+                            if let Some(item) = item {
+                                return self.select(id, item.id.clone());
+                            }
+                            return vec![];
                         }
                     }
                 }
@@ -427,10 +549,16 @@ impl Runtime {
                             .saturating_sub(usize::from(!columns.is_empty()))
                             .max(1);
                         let offset = self.scroll.entry(id.clone()).or_default();
+                        let previous = *offset;
                         if index < *offset {
                             *offset = index;
                         } else if index >= *offset + rows {
                             *offset = index + 1 - rows;
+                        }
+                        if previous != *offset
+                            && self.capture.as_ref().is_some_and(|(owner, _)| owner == &id)
+                        {
+                            self.capture = None;
                         }
                     }
                 }
@@ -476,6 +604,9 @@ impl Runtime {
         self.adjust(id, value, finished)
     }
     pub fn drag(&mut self, x: u16, y: u16) -> Vec<Event> {
+        if !self.prepare_input() {
+            return vec![];
+        }
         let Some((id, _)) = &self.capture else {
             return vec![];
         };
@@ -498,6 +629,9 @@ impl Runtime {
         vec![]
     }
     pub fn scroll(&mut self, x: u16, y: u16, lines: i16) {
+        if !self.prepare_input() {
+            return;
+        }
         let Some(frame) = &self.frame else {
             return;
         };
@@ -508,6 +642,8 @@ impl Runtime {
             let rows = usize::from(p.body.height / frame.viewport.scale(false))
                 .saturating_sub(usize::from(!columns.is_empty()))
                 .max(1);
+            // A click started before scrolling must not select another row.
+            self.capture = None;
             let offset = self.scroll.entry(p.id.clone()).or_default();
             *offset = offset
                 .saturating_add_signed(isize::from(lines))
@@ -532,6 +668,9 @@ impl Runtime {
     /// Press/release coordinates use the retained frame's units. A release must
     /// match its original control and viewport generation to invoke a command.
     pub fn pointer(&mut self, x: u16, y: u16, pressed: bool) -> Vec<Event> {
+        if !self.prepare_input() {
+            return vec![];
+        }
         let Some(frame) = self.frame.clone() else {
             return vec![];
         };
@@ -552,18 +691,20 @@ impl Runtime {
             let capture = self.capture.take();
             if let Some((id, generation)) = &capture {
                 if *generation == frame.viewport.generation {
-                    if let Some(p) = frame
-                        .get(id)
-                        .filter(|p| p.enabled && matches!(p.widget, Widget::Custom { .. }))
-                    {
-                        return vec![Event::CustomPointer {
-                            id: id.clone(),
-                            x: x.saturating_sub(p.body.x)
-                                .min(p.body.width.saturating_sub(1)),
-                            y: y.saturating_sub(p.body.y)
-                                .min(p.body.height.saturating_sub(1)),
-                            pressed: false,
-                        }];
+                    if let Some(p) = frame.get(id).filter(|p| p.enabled) {
+                        if matches!(p.widget, Widget::Slider { .. }) {
+                            return self.slider_pointer(id.clone(), x, true);
+                        }
+                        if matches!(p.widget, Widget::Custom { .. }) {
+                            return vec![Event::CustomPointer {
+                                id: id.clone(),
+                                x: x.saturating_sub(p.body.x)
+                                    .min(p.body.width.saturating_sub(1)),
+                                y: y.saturating_sub(p.body.y)
+                                    .min(p.body.height.saturating_sub(1)),
+                                pressed: false,
+                            }];
+                        }
                     }
                 }
             }

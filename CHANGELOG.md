@@ -49,6 +49,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ### Fixed (0.13 application UI candidate)
 
+- Add page-aware list/table navigation and explicit selected-item activation. Preserve modified navigation shortcuts, synchronize retained scroll with data changes and hit geometry, and finish slider drags released outside their bounds.
+- Reconcile focus and enabled state before pasted or pointer input, and cancel pending list clicks when scrolling changes their target.
+- Highlight the active pane and modal shell in both presentations, including read-only dialogs without focusable controls.
+
 - Align graphical heading, label, field and list text; use consistent workspace margins and pane gaps. Honor explicit dialog dimensions in both presentations instead of forcing them to at least half the viewport.
 - Pin the upstream Crossterm coordinate-underflow fix in KIT and standalone example roots, preventing a zero mouse/cursor coordinate from crashing the gallery. Optimize starter dependencies in development and provide a release preview build.
 
