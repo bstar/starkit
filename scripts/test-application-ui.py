@@ -31,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix='kit-ui-proof-') as temporary:
     runtime = private / 'runtime'
     runtime.mkdir(mode=0o700)
     env = {**os.environ, 'XDG_RUNTIME_DIR': str(runtime),
-           'XDG_CONFIG_HOME': str(private / 'config'), 'STAR_GRAPHICS_SYSTEM_FONTS': '0',
+           'XDG_CONFIG_HOME': str(private / 'config'),
+           'XDG_CACHE_HOME': str(private / 'cache'),
+           'XDG_DATA_HOME': str(private / 'data'), 'STAR_GRAPHICS_SYSTEM_FONTS': '0',
            'STAR_KIT_STARTER_DIR': str(output / 'profile')}
     env.pop('NO_COLOR', None)
     env.pop('STAR_KIT_ASCII', None)
@@ -47,7 +49,7 @@ def handle_result(args, result, target_window_id, boss):
 ''')
     log = (output / 'kitty.log').open('w')
     child = subprocess.Popen([args.kitty, '--config', '/dev/null', '--listen-on', address,
-                              '-o', 'allow_remote_control=yes', '-o', f'linux_display_server={args.display_server}',
+                              '-o', 'allow_remote_control=yes', '-o', 'remember_window_size=no', '-o', f'linux_display_server={args.display_server}',
                               '-o', f'initial_window_width={args.window_width}', '-o', f'initial_window_height={args.window_height}',
                               '--title', 'STAR-KIT-UI-PROOF', str(Path(args.binary).resolve()), '--native'],
                              env=env, stdout=log, stderr=log)

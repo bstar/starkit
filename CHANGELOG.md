@@ -47,6 +47,11 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 - Preserve the GPU image atlas through empty and vector-only live-canvas overlay passes, preventing cached workspace text from disappearing after its first frame. Add a hardware regression covering 120 redraws.
 
+### Fixed (0.13 verification candidate)
+
+- Reserve PCM cache space with an MSRV-compatible atomic compare-and-exchange loop; exercise concurrent reservations at the process limit.
+- Isolate Kitty verification state, wait for actual resized pixels, and retain live-canvas logs and terminal text for failures.
+
 ### Fixed (0.13 application UI candidate)
 
 - Add page-aware list/table navigation and explicit selected-item activation. Preserve modified navigation shortcuts, synchronize retained scroll with data changes and hit geometry, and finish slider drags released outside their bounds.

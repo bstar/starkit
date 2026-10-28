@@ -28,22 +28,31 @@ def main(args): pass
 def handle_result(args, result, target_window_id, boss):
     boss.window_id_map[target_window_id].screen.erase_in_display(2, False)
 ''')
-    env={**os.environ,"XDG_RUNTIME_DIR":str(runtime)}
+    env={**os.environ,"XDG_RUNTIME_DIR":str(runtime),
+         "XDG_CONFIG_HOME":str(Path(private)/"config"),
+         "XDG_CACHE_HOME":str(Path(private)/"cache"),
+         "XDG_DATA_HOME":str(Path(private)/"data"),
+         "STAR_KIT_LIVE_DIR":str(output/"profile")}
+    env.pop("NO_COLOR",None)
+    env.pop("STAR_KIT_ASCII",None)
     if a.display_server=="wayland" and os.environ.get("WAYLAND_DISPLAY"):
         env["WAYLAND_DISPLAY"]=str(Path(os.environ["XDG_RUNTIME_DIR"])/os.environ["WAYLAND_DISPLAY"])
     log=(output/"kitty.log").open("w")
     child=None
     def launch(*args):
-        return subprocess.Popen([a.kitty,"--config","/dev/null","--listen-on",address,"-o","allow_remote_control=yes","-o",f"linux_display_server={a.display_server}","-o","initial_window_width=100c","-o","initial_window_height=40c","--title","STAR-KIT-LIVE-PROOF",a.example,*args],env=env,stdout=log,stderr=log)
+        return subprocess.Popen([a.kitty,"--config","/dev/null","--listen-on",address,"-o","allow_remote_control=yes","-o","remember_window_size=no","-o",f"linux_display_server={a.display_server}","-o","initial_window_width=100c","-o","initial_window_height=40c","--title","STAR-KIT-LIVE-PROOF",a.example,*args],env=env,stdout=log,stderr=log)
     def rc(*args):
         return subprocess.check_output([a.kitten,"@","--to",address,*args],stderr=subprocess.PIPE,timeout=10)
-    def pixels(name):
+    def pixels(name, previous_dimensions=None):
         path=output/f"{name}.png";deadline=time.monotonic()+30
         while time.monotonic()<deadline:
             assert child.poll() is None,"Private Kitty exited; inspect kitty.log"
             try:
                 rc("screenshot","--match","id:1",str(path))
                 width,height=struct.unpack(">II",path.read_bytes()[16:24])
+                if (width,height)==previous_dimensions:
+                    time.sleep(.1)
+                    continue
                 raw=subprocess.check_output(["ffmpeg","-v","error","-i",str(path),"-f","rawvideo","-pix_fmt","rgb24","pipe:1"],stderr=subprocess.PIPE)
                 # Both independent producers use blue=110 and changing red/green.
                 left=sum(raw[i+2]==110 and raw[i]!=raw[i+1] for y in range(height//5,3*height//5) for i in range((y*width+width//10)*3,(y*width+4*width//10)*3,3))
@@ -51,7 +60,11 @@ def handle_result(args, result, target_window_id, boss):
                 if left>10000 and right>10000:return width,height,raw
             except (subprocess.SubprocessError,FileNotFoundError):pass
             time.sleep(.1)
-        raise AssertionError("Both live canvases did not become visible")
+        try:
+            (output/f"{name}.txt").write_bytes(rc("get-text","--match","id:1","--extent","all"))
+        except subprocess.SubprocessError:
+            pass
+        raise AssertionError("Both live canvases did not become visible; inspect the retained screenshot, terminal text and profile/cache log")
     try:
         child=launch();first=pixels("initial");time.sleep(.2);second=pixels("animated")
         assert first[2]!=second[2],"Live engine pixels did not advance"
@@ -70,7 +83,7 @@ def handle_result(args, result, target_window_id, boss):
         pixels("all-layers-refreshed")
         if a.display_server=="x11":
             rc("resize-os-window","--action","resize","--unit","pixels","--width","900","--height","600")
-            resized=pixels("resized");assert resized[:2]!=first[:2],"Resize did not change output geometry"
+            resized=pixels("resized",first[:2]);assert resized[:2]!=first[:2],"Resize did not change output geometry"
         else:
             # A tiled Wayland compositor owns outer window size. Font zoom changes
             # terminal rows/columns and emits the same viewport resize contract.

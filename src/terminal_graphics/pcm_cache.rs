@@ -14,12 +14,22 @@ struct Budget {
 }
 impl Budget {
     fn reserve(&self, bytes: u64) -> Result<()> {
-        self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(bytes).filter(|sum| *sum <= self.limit)
-            })
-            .map_err(|_| anyhow::anyhow!("PCM cache process disk budget exceeded"))?;
-        Ok(())
+        // compare_exchange is available at our MSRV; fetch_update was renamed
+        // in newer compilers, while its replacement is unavailable at 1.90.
+        let mut used = self.used.load(Ordering::Acquire);
+        loop {
+            let next = used
+                .checked_add(bytes)
+                .filter(|sum| *sum <= self.limit)
+                .ok_or_else(|| anyhow::anyhow!("PCM cache process disk budget exceeded"))?;
+            match self
+                .used
+                .compare_exchange_weak(used, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return Ok(()),
+                Err(actual) => used = actual,
+            }
+        }
     }
 }
 // A single shared process budget; test budgets are independent.
@@ -203,6 +213,36 @@ mod tests {
             .contains("metadata"));
         drop(other);
         assert_eq!(budget.used.load(Ordering::Acquire), 0);
+    }
+    #[test]
+    fn concurrent_reservations_never_exceed_the_process_budget() {
+        let budget = Arc::new(Budget {
+            used: AtomicU64::new(0),
+            limit: 4096,
+        });
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let budget = budget.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    let mut reserved = 0;
+                    while budget.reserve(1).is_ok() {
+                        reserved += 1;
+                    }
+                    reserved
+                })
+            })
+            .collect();
+        let reserved: u64 = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .sum();
+        assert_eq!(reserved, budget.limit);
+        assert_eq!(budget.used.load(Ordering::Acquire), budget.limit);
+        assert!(budget.reserve(u64::MAX).is_err());
+        assert_eq!(budget.used.load(Ordering::Acquire), budget.limit);
     }
     #[test]
     fn invalid_blocks_and_finished_streams_do_not_consume_budget() {

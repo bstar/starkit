@@ -43,5 +43,7 @@ fn main()->Result<()>{
         else {std::thread::sleep(Duration::from_millis(80));let frames=demo.live_frames();anyhow::ensure!(frames.len()==2,"Both streams must produce independent latest frames");for u in frames{if let Update::Frame{frame,..}=u{frame.validate()?;}}println!("Two independent raw-frame producers passed");}
         demo.shutdown();return Ok(());
     }
+    let paths = starkit::paths::Paths::new("starkit-live-canvas", "STAR_KIT_LIVE_DIR", "STAR_KIT_LIVE_CONFIG_DIR");
+    let _log = starkit::logging::init(&paths, true)?;
     Application::new("live-canvas")?.run(|_|Demo::new())
 }
