@@ -220,11 +220,21 @@ fn attributes() -> (u64, u64, u64, u64, Vec<u8>) {
     // SAFETY: tcgetattr initializes term on success, checked before assume_init.
     assert_eq!(unsafe { libc::tcgetattr(0, term.as_mut_ptr()) }, 0);
     let term = unsafe { term.assume_init() };
+    // Darwin's TIOCSETA sets PENDIN when returning to canonical mode and
+    // preserves it even if the supplied termios clears it. This is kernel
+    // queue state, cleared by ttypend on the next input/read, not a changed
+    // application setting. Compare every other flag and all control bytes;
+    // the subsequent key assertion also verifies the pending input survives.
+    // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/tty.c
+    #[cfg(target_os = "macos")]
+    let local = term.c_lflag & !libc::PENDIN;
+    #[cfg(not(target_os = "macos"))]
+    let local = term.c_lflag;
     (
         term.c_iflag as u64,
         term.c_oflag as u64,
         term.c_cflag as u64,
-        term.c_lflag as u64,
+        local as u64,
         term.c_cc.to_vec(),
     )
 }
