@@ -295,3 +295,16 @@ these root patches when updating KIT pins. The gallery proof injects zero
 coordinates before exercising shortcuts and theme changes.
 
 Hosted consumer CI currently covers AMP, FOLD, CORD and WIRE. The SCREEN repository is not accessible to the workflow token; keep its fifth-consumer migration gate pending and run it locally until that source is available. Do not count a skipped/inaccessible checkout as a passed migration.
+
+## Delayed terminal probe acceptance
+
+2026-10-28 hosted Linux artifacts showed a cold software-rendered Kitty answering
+capability queries after the 250 ms graphics timeout, selecting cells instead
+of native presentation. The private pixel fixtures now warm the terminal to a
+real screenshot before launching the app; that verifies UI behavior after
+terminal readiness, not cold-start negotiation. The upstream ratatui-image
+stdio probe still uses a detached reader which can outlive a timeout and
+restore cooked mode later. Replace this with a bounded query that owns and
+releases its reader before UI startup, and add PTY gates for delayed replies,
+no replies, mode restoration and subsequent keyboard input. This runtime work
+remains pending and is required before a maturity claim.
