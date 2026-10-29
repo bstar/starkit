@@ -9,6 +9,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from terminal_fixture import TerminalStartup
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument("--kitty",required=True)
@@ -19,7 +20,9 @@ p.add_argument("--display-server",default="x11",choices=["x11","wayland"])
 a=p.parse_args()
 output=Path(a.output).resolve();output.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="kit-live-proof-") as private:
-    runtime=Path(private)/"runtime";runtime.mkdir(mode=0o700)
+    private=Path(private)
+    startup=TerminalStartup(private)
+    runtime=private/"runtime";runtime.mkdir(mode=0o700)
     address=f"unix:{private}/kitty.sock"
     fault=Path(private)/"discard_images.py"
     fault.write_text('''from kittens.tui.handler import result_handler
@@ -40,7 +43,7 @@ def handle_result(args, result, target_window_id, boss):
     log=(output/"kitty.log").open("w")
     child=None
     def launch(*args):
-        return subprocess.Popen([a.kitty,"--config","/dev/null","--listen-on",address,"-o","allow_remote_control=yes","-o","remember_window_size=no","-o",f"linux_display_server={a.display_server}","-o","initial_window_width=100c","-o","initial_window_height=40c","--title","STAR-KIT-LIVE-PROOF",a.example,*args],env=env,stdout=log,stderr=log)
+        return subprocess.Popen([a.kitty,"--config","/dev/null","--listen-on",address,"-o","allow_remote_control=yes","-o","remember_window_size=no","-o",f"linux_display_server={a.display_server}","-o","initial_window_width=100c","-o","initial_window_height=40c","--title","STAR-KIT-LIVE-PROOF",*startup.command(str(Path(a.example).resolve()),*args)],env=env,stdout=log,stderr=log)
     def rc(*args):
         return subprocess.check_output([a.kitten,"@","--to",address,*args],stderr=subprocess.PIPE,timeout=10)
     def pixels(name, previous_dimensions=None):
@@ -66,7 +69,7 @@ def handle_result(args, result, target_window_id, boss):
             pass
         raise AssertionError("Both live canvases did not become visible; inspect the retained screenshot, terminal text and profile/cache log")
     try:
-        child=launch();first=pixels("initial");time.sleep(.2);second=pixels("animated")
+        child=launch();startup.release(child,rc,output/"terminal-ready.png");first=pixels("initial");time.sleep(.2);second=pixels("animated")
         assert first[2]!=second[2],"Live engine pixels did not advance"
         # Discard terminal placements while both engines continue animating.
         # The static footer must recover too: merely updating active canvases
@@ -95,7 +98,7 @@ def handle_result(args, result, target_window_id, boss):
         session=sessions[0].name.removesuffix(".args.json")
         child.terminate();child.wait(timeout=10);time.sleep(.3)
         assert sessions[0].exists(),"Frontend loss destroyed controller state"
-        child=launch("--attach",session);pixels("reattached")
+        child=launch("--attach",session);startup.release(child,rc,output/"terminal-ready-reattach.png");pixels("reattached")
         rc("send-key","--match","id:1","q");child.wait(timeout=15)
         deadline=time.monotonic()+10
         while sessions[0].exists() and time.monotonic()<deadline:time.sleep(.05)

@@ -14,6 +14,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from terminal_fixture import TerminalStartup
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--kitty', required=True)
@@ -47,11 +48,12 @@ def main(args): pass
 def handle_result(args, result, target_window_id, boss):
     boss.window_id_map[target_window_id].screen.erase_in_display(2, False)
 ''')
+    startup = TerminalStartup(private)
     log = (output / 'kitty.log').open('w')
     child = subprocess.Popen([args.kitty, '--config', '/dev/null', '--listen-on', address,
                               '-o', 'allow_remote_control=yes', '-o', 'remember_window_size=no', '-o', f'linux_display_server={args.display_server}',
                               '-o', f'initial_window_width={args.window_width}', '-o', f'initial_window_height={args.window_height}',
-                              '--title', 'STAR-KIT-UI-PROOF', str(Path(args.binary).resolve()), '--native'],
+                              '--title', 'STAR-KIT-UI-PROOF', *startup.command(str(Path(args.binary).resolve()), '--native')],
                              env=env, stdout=log, stderr=log)
 
     def rc(*command):
@@ -98,6 +100,7 @@ def handle_result(args, result, target_window_id, boss):
 
     report = {}
     try:
+        startup.release(child, rc, output / 'terminal-ready.png')
         def native_ready():
             current = pixels('initial')
             # Classic panel faces occupy most of both panes. This distinguishes
