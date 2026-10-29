@@ -87,7 +87,7 @@ fn child(case: &str, timeout_ms: u64) -> Running {
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
                 std::ptr::addr_of_mut!(size),
             )
         },
