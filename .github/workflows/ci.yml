@@ -157,6 +157,8 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Isolated terminal capability and input ownership checks
+        run: cargo test --no-default-features --features image --test graphics_probe
       - run: cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
       - run: python3 scripts/check-performance.py
       - if: runner.os == 'Linux'

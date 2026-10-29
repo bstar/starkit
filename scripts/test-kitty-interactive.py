@@ -167,14 +167,12 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
             zoomed = settled_preview("zoomed")
             assert zoomed != selected, "Font resize did not repaint"
             if args.frontend_failure:
-                # Detaching the frontend closes its native worker while the
-                # persistent controller retains navigation and marked files.
-                rc("send-key", "--match", "id:1", "ctrl+q")
-                deadline = time.monotonic() + 15
-                while json.loads(rc("ls"))[0]["tabs"][0]["windows"][0]["in_alternate_screen"]:
-                    assert time.monotonic() < deadline, "Frontend detach did not restore the terminal"
-                    time.sleep(.1)
-                assert session_path.exists(), "Frontend detach destroyed the controller session"
+                # Close only this private terminal. Ctrl+Q is an application
+                # command now; it would test app shutdown rather than frontend
+                # loss and could race controller cleanup with reconnection.
+                rc("close-window", "--match", "id:1")
+                child.wait(timeout=15)
+                assert session_path.exists(), "Frontend loss destroyed the controller session"
                 with socket.socket(socket.AF_UNIX) as connection:
                     connection.settimeout(5)
                     connection.connect(str(session_path))
@@ -196,15 +194,19 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
                                       "generation": 1, "input": {"kind": "key", "code": "char:q",
                                                                 "modifiers": 0}})
                                 break
-                (output / "frontend-loss.txt").write_bytes(rc("get-text", "--match", "id:1"))
+                (output / "frontend-loss.json").write_text(json.dumps({
+                    "reattached": True, "interaction": scene["interaction"],
+                    "marked_components": sum(bool(c.get("marked")) for c in scene["components"]),
+                }, indent=2) + "\n")
             else:
                 rc("send-text", "--match", "id:1", "q")
             deadline = time.monotonic() + 15
             while session_path.exists() and time.monotonic() < deadline:
                 time.sleep(.1)
             assert not session_path.exists(), "Controller session leaked after normal exit"
-            rc("close-window", "--match", "id:1")
-            child.wait(timeout=15)
+            if not args.frontend_failure:
+                rc("close-window", "--match", "id:1")
+                child.wait(timeout=15)
             (output / "result.json").write_text(json.dumps({
                 "keyboard_pixels_changed": True, "menu_pixels_changed": True,
                 "font_resize_pixels_changed": True, "clean_exit": True,
@@ -228,6 +230,22 @@ os.execv(sys.argv[2], [sys.argv[2], '--interactive'])
                 except subprocess.SubprocessError:
                     child.terminate()
                     child.wait(timeout=5)
+            # Failure after closing Kitty still owns a retained private demo.
+            # Shut down only the socket identified from this fixture's frontend.
+            if session_path is not None and session_path.exists():
+                try:
+                    with socket.socket(socket.AF_UNIX) as connection:
+                        connection.settimeout(2)
+                        connection.connect(str(session_path))
+                        viewport = {"columns": 100, "rows": 40, "width": 1200, "height": 800, "generation": 1}
+                        messages = [
+                            {"type": "hello", "version": 1, "client": f"owned-proof-cleanup-{os.getpid()}", "viewport": viewport},
+                            {"type": "input", "id": 1, "revision": 0, "generation": 1,
+                             "input": {"kind": "key", "code": "char:q", "modifiers": 0}},
+                        ]
+                        connection.sendall(b"".join((json.dumps(m) + "\n").encode() for m in messages))
+                except OSError:
+                    pass
             log.close()
             if runtime.exists():
                 shutil.copytree(runtime, output / "runtime", dirs_exist_ok=True)

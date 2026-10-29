@@ -8,6 +8,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.13 terminal and movie compatibility)
+
+- Retain bounded keyboard/paste input while resize or presentation frames are pending, preserving command order without replay after disconnect. Verify frontend loss by closing the fixture's terminal rather than invoking the application's Quit shortcut.
+
+- Bound Unix graphics probing to one synchronous terminal owner, preserving terminal attributes and following keyboard input without a detached reader. Distinguish measured cell geometry from image-picker estimates; allow an explicit bounded query deadline for slow SSH links.
+- Preserve container-declared anamorphic pixel aspect in native playback, posters and SSH proxies when decoder frames report square or missing metadata. Fit proxies by display dimensions, retain source data without an extra pixel copy, and reject excessive normalized frame sizes before filter allocation.
+
 ### STAR/MUX integration candidate
 
 - Stream native terminal cells and font controls alongside independently paced app canvases and PCM audio.

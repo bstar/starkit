@@ -158,8 +158,13 @@ impl Capabilities {
     }
     pub fn detected(graphics: &crate::graphics::Graphics) -> Self {
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-        let measured = crate::crossterm::terminal::window_size()
-            .is_ok_and(|size| size.width > 0 && size.height > 0);
+        let measured = graphics.cell_size().is_some()
+            || crate::crossterm::terminal::window_size().is_ok_and(|size| {
+                size.columns > 0
+                    && size.rows > 0
+                    && size.width >= size.columns
+                    && size.height >= size.rows
+            });
         let remote_terminal =
             std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
         Self::for_terminal(graphics, interactive, measured, remote_terminal)

@@ -2829,6 +2829,7 @@ dependencies = [
  "ffmpeg-next",
  "flate2",
  "image",
+ "libc",
  "memmap2",
  "pkg-config",
  "png 0.18.1",

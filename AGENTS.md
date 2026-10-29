@@ -78,16 +78,17 @@ native pixels before replacing an application's layout.
 
 ## Probe before raw mode
 
-`Graphics::probe` writes capability queries to the terminal and reads the
-replies back off stdin. It has to run **before** `term::init` enables raw mode
-and the alternate screen, and the late replies that arrive after it returns are
-discarded by `drain_stdin`. Probing afterwards reads the user's keystrokes as
-capability replies and reports whatever they typed as the terminal's answer.
+`Graphics::probe` owns a bounded, synchronous nonblocking `/dev/tty` query on
+Unix before `term::init`. It restores the actual terminal attributes and never
+leaves a reader thread alive. Do not restore the old crossterm drain: it could
+consume user input and block on fragmented reports. The final device-status
+response ends the query; following bytes remain available to the app.
 
-The ordering is not expressible in the type system across a crate boundary, so
-`term::init` records that it ran and `probe` debug-asserts against it: a debug
-build panics, and a release build degrades to `Graphics::disabled()` with a
-warning rather than corrupting the session.
+The ordering remains enforced by `term::entered`: a debug build asserts and a
+release build degrades to disabled graphics if probing happens after UI entry.
+The default deadline is two seconds, overridden by
+`STAR_GRAPHICS_PROBE_TIMEOUT_MS` (50–10,000 ms). Only queried or valid ioctl
+geometry is measured; the image picker's fallback font size is an estimate.
 
 ## Themes are shared assets
 
@@ -299,12 +300,24 @@ Hosted consumer CI currently covers AMP, FOLD, CORD and WIRE. The SCREEN reposit
 ## Delayed terminal probe acceptance
 
 2026-10-28 hosted Linux artifacts showed a cold software-rendered Kitty answering
-capability queries after the 250 ms graphics timeout, selecting cells instead
-of native presentation. The private pixel fixtures now warm the terminal to a
-real screenshot before launching the app; that verifies UI behavior after
-terminal readiness, not cold-start negotiation. The upstream ratatui-image
-stdio probe still uses a detached reader which can outlive a timeout and
-restore cooked mode later. Replace this with a bounded query that owns and
-releases its reader before UI startup, and add PTY gates for delayed replies,
-no replies, mode restoration and subsequent keyboard input. This runtime work
-remains pending and is required before a maturity claim.
+after the former 250 ms timeout. The private pixel fixtures still warm the
+terminal before launching the app, verifying UI behavior after terminal readiness.
+The runtime now uses a synchronous, bounded Unix query with no detached reader.
+`tests/graphics_probe.rs` runs isolated PTYs for delayed, fragmented, missing,
+incomplete and late replies, exact raw/custom-mode restoration, descriptor flags,
+subsequent/trailing keys, protocol choice and measured geometry. Linux also
+checks that no reader thread survives. Keep those tests on Linux and macOS;
+physical Mac/Sixel/iTerm2 acceptance remains separate.
+
+The 0.13 compatibility checks also exposed dropped keyboard input during a
+resize between displayed generations. The frontend now holds bounded keys and
+paste until the new geometry is shown, retaining order and clearing on focus
+loss/disconnect. The interactive frontend-loss gate closes its private Kitty
+window; Ctrl+Q belongs to the app while connected. Its fresh controller
+connection must still report selection and marks before clean shutdown.
+
+The hosted FFmpeg 6 movie gate exposed decoder frames with square/unknown SAR
+for an anamorphic container. Processing now applies valid stream SAR before
+frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata
+without copying source pixels, and fits proxy output by display dimensions.
+Both 6.1.6 and 9.0.1 passed movie and forced-frame-metadata regressions locally.

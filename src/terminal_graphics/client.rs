@@ -861,6 +861,7 @@ fn run_impl(
     let mut focused = true;
     let mut mouse_down = false;
     let mut pending_event = None;
+    let mut pending_keyboard = PendingKeyboard::default();
     let mut resize_handles = Vec::new();
     let mut hidden_pointer_canvas: Option<String> = None;
     let mut desktop_pointer_position: Option<[f64; 2]> = None;
@@ -1471,6 +1472,7 @@ fn run_impl(
             io::stdout().flush()?;
             connection = None;
             connected = false;
+            pending_keyboard.clear();
             pointer.reset(&mut io::stdout().lock())?;
             resize_handles.clear();
             pointer_regions.clear();
@@ -1692,14 +1694,30 @@ fn run_impl(
         if !accepts_input {
             std::thread::sleep(Duration::from_millis(2));
         }
+        let scene_ready = last_scene.as_ref().is_some_and(|scene| scene.revision > 0)
+            && shown.is_some_and(|(revision, generation)| {
+                revision > 0 && generation == size.generation
+            });
+        let dispatch_keyboard = connected
+            && scene_ready
+            && !pending_keyboard.events.is_empty()
+            && !matches!(pending_event, Some(Event::Resize(..) | Event::FocusLost));
         if accepts_input
-            && (pending_event.is_some() || event::poll(Duration::from_millis(poll_ms))?)
+            && (dispatch_keyboard
+                || pending_event.is_some()
+                || event::poll(Duration::from_millis(poll_ms))?)
         {
             last_input = Instant::now();
             window.cursor(false);
-            let first = match pending_event.take() {
-                Some(event) => event,
-                None => event::read()?,
+            let first = if dispatch_keyboard {
+                pending_keyboard
+                    .pop_ready(true)
+                    .expect("queued keyboard event")
+            } else {
+                match pending_event.take() {
+                    Some(event) => event,
+                    None => event::read()?,
+                }
             };
             let (event, boundary) = coalesce_motion(first, || {
                 if event::poll(Duration::ZERO)? {
@@ -1708,7 +1726,20 @@ fn run_impl(
                     Ok(None)
                 }
             })?;
-            pending_event = boundary;
+            if !dispatch_keyboard {
+                pending_event = boundary;
+            }
+            let event = if connected && !scene_ready {
+                let Some(event) = pending_keyboard.defer(event)? else {
+                    continue;
+                };
+                event
+            } else {
+                event
+            };
+            if matches!(event, Event::FocusLost) {
+                pending_keyboard.clear();
+            }
             if let Event::Mouse(mouse) = &event {
                 desktop_pointer_position = Some(if capabilities.pixel_mouse {
                     [f64::from(mouse.column), f64::from(mouse.row)]
@@ -2041,6 +2072,46 @@ fn run_impl(
     Ok(())
 }
 
+/// Keystrokes and paste wait for authoritative display geometry during resize
+/// or presentation changes. Pointer coordinates cannot be reused this way.
+#[derive(Default)]
+struct PendingKeyboard {
+    events: std::collections::VecDeque<Event>,
+    paste_bytes: usize,
+}
+impl PendingKeyboard {
+    fn defer(&mut self, event: Event) -> Result<Option<Event>> {
+        if !matches!(event, Event::Key(_) | Event::Paste(_)) {
+            return Ok(Some(event));
+        }
+        let bytes = match &event {
+            Event::Paste(text) => text.len(),
+            _ => 0,
+        };
+        anyhow::ensure!(
+            self.events.len() < 256 && self.paste_bytes.saturating_add(bytes) <= 1_048_576,
+            "Keyboard input exceeded the bounded pending-display buffer"
+        );
+        self.paste_bytes += bytes;
+        self.events.push_back(event);
+        Ok(None)
+    }
+    fn pop_ready(&mut self, ready: bool) -> Option<Event> {
+        if !ready {
+            return None;
+        }
+        let event = self.events.pop_front()?;
+        if let Event::Paste(text) = &event {
+            self.paste_bytes -= text.len();
+        }
+        Some(event)
+    }
+    fn clear(&mut self) {
+        self.events.clear();
+        self.paste_bytes = 0;
+    }
+}
+
 // Geometry and capability negotiation must continue while waiting for a frame.
 // File actions still require an authoritative scene and its displayed geometry.
 fn control_input(input: &Input) -> bool {
@@ -2087,6 +2158,39 @@ fn coalesce_motion(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keyboard_waits_for_display_and_retains_order_without_replaying_after_disconnect() {
+        use super::*;
+        use crate::crossterm::event::{KeyEvent, KeyModifiers};
+        let mut pending = PendingKeyboard::default();
+        let key = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        pending.defer(key.clone()).unwrap();
+        pending.defer(Event::Paste("日本語".into())).unwrap();
+        assert!(pending.pop_ready(false).is_none());
+        assert_eq!(pending.pop_ready(true), Some(key.clone()));
+        assert_eq!(pending.pop_ready(true), Some(Event::Paste("日本語".into())));
+        assert_eq!(pending.paste_bytes, 0);
+        pending.defer(key).unwrap();
+        pending.clear();
+        assert!(pending.pop_ready(true).is_none());
+        assert_eq!(
+            pending.defer(Event::Resize(100, 30)).unwrap(),
+            Some(Event::Resize(100, 30))
+        );
+    }
+    #[test]
+    fn pending_display_keyboard_and_paste_have_explicit_resource_bounds() {
+        use super::*;
+        let mut pending = PendingKeyboard::default();
+        pending.defer(Event::Paste("x".repeat(1_048_576))).unwrap();
+        assert!(pending.defer(Event::Paste("x".into())).is_err());
+        pending.clear();
+        for _ in 0..256 {
+            pending.defer(Event::Paste(String::new())).unwrap();
+        }
+        assert!(pending.defer(Event::Paste(String::new())).is_err());
+        assert_eq!(pending.events.len(), 256);
+    }
     #[test]
     fn slow_transport_backpressures_image_chunks_without_losing_bytes_or_controls() {
         use base64::Engine as _;

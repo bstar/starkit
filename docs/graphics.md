@@ -23,18 +23,23 @@ crate boundary, so `term::init` records that it ran and `Graphics::probe`
 asserts against it — a debug build panics, a release build degrades to
 `Graphics::disabled()` with a warning.
 
-`probe_if_tty` also refuses when stdout or stdin is not a terminal, because a
-query written into a pipe waits for a reply that will never come, and drains
-whatever the terminal said afterwards. Late replies left in the input buffer
-are read as keystrokes by the next thing that reads stdin, which is the
-backend's own cursor-position query; that then fails and takes startup with it.
+`probe_if_tty` also refuses when stdout or stdin is not a terminal. On Unix,
+the query owns a separate nonblocking `/dev/tty` descriptor, reads synchronously,
+and restores the original terminal attributes before returning. No reader
+thread can outlive the deadline or restore cooked mode after the UI starts.
+It stops at the final device-status response, leaving subsequent keyboard input
+queued for the application. Reads are capped at 8,192 bytes.
 
-The probe only asks when something suggests anyone is listening — the
-environment names a terminal with a protocol, or this is a multiplexer or an
-ssh session, where the outer terminal is invisible from here. The cost being
-avoided is not the query. It is the pty with nobody behind it: a bare `script`,
-some CI harnesses. There the probe's reader thread is still sitting on stdin
-when it gives up, and the first frame never comes.
+The default deadline is two seconds; terminals that answer promptly return
+immediately. `STAR_GRAPHICS_PROBE_TIMEOUT_MS` accepts 50–10,000 milliseconds
+for a particularly slow connection or an automated fixture. Automatic mode
+queries terminals with graphics hints and SSH sessions; inside tmux or screen
+it keeps the cell fallback. Explicit `kitty` mode can query configured
+multiplexer passthrough. Unsupported native platforms use the cell fallback.
+
+A positive cell-size response or a valid pixel window measurement establishes
+measured geometry. The image picker's default 10×20 cell estimate is not
+reported as a measurement and cannot enable pixel mouse input.
 
 ## Modes
 

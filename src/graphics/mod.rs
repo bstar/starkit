@@ -24,6 +24,7 @@
 //! is the difference between refusing a lie and allocating for it.
 
 pub mod cache;
+mod probe;
 pub mod raster;
 
 pub use cache::{ImageCache, ImageId, Key};
@@ -34,7 +35,6 @@ use std::sync::Arc;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::{Color, Style};
-use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::{FontSize, Resize};
@@ -124,6 +124,7 @@ pub struct Graphics {
     /// back without asking again -- which cannot be done once the alternate
     /// screen is up, since the reply would arrive as keystrokes.
     probed: Option<Picker>,
+    measured_cell: Option<FontSize>,
     /// `None` when the terminal has no protocol, or the user asked for none.
     picker: Option<Picker>,
     cache: ImageCache,
@@ -158,21 +159,9 @@ impl Graphics {
         // only thing drawn this way: an application's own rasterised icons are
         // too, and turning covers off is not a statement about them.
         let probed = match mode {
-            // Only ask something that will answer.
-            //
-            // Not squeamishness about the cost: a terminal that answers the
-            // query does it in single-digit milliseconds, and one that answers
-            // *anything* -- even "no graphics here" -- costs nothing either,
-            // because the reply ends the probe. The danger is the thing that
-            // answers nothing at all, which is not a terminal so much as a pty
-            // with nobody behind it: a bare `script`, some CI harnesses. There
-            // the probe's reader thread is still sitting on stdin when it gives
-            // up, and it eats the backend's own cursor-position reply, and the
-            // first frame never comes. Measured: 0.11s to draw when the far end
-            // answers anything, and no frame at all when it answers nothing.
-            //
-            // So the question is not "can this terminal draw pixels" but "is
-            // anyone listening", and the environment is read for that.
+            // Automatic probing avoids multiplexers and terminals with no
+            // advertised graphics support. Explicit Kitty mode still queries
+            // through configured passthrough. Every query has a bounded owner.
             Mode::Auto | Mode::Off | Mode::Blocks if behind_multiplexer() => {
                 tracing::info!(
                     "graphics: inside tmux, drawing half blocks; set graphics = \"kitty\" to ask through it"
@@ -183,16 +172,9 @@ impl Graphics {
                 tracing::debug!("graphics: nothing in the environment suggests a protocol");
                 None
             }
-            _ => match Picker::from_query_stdio_with_options(QueryStdioOptions {
-                // A quarter of a second. The library's own default is two, and
-                // a terminal that is going to answer does so in single-digit
-                // milliseconds -- the wait is only ever paid by one that will
-                // not answer at all, and paying two seconds of it before the
-                // first frame is worse than drawing half blocks.
-                timeout: std::time::Duration::from_millis(250),
-                ..Default::default()
-            }) {
-                Ok(p) => {
+            _ => match probe::query() {
+                Ok(result) => {
+                    let p = &result.picker;
                     // Said out loud, because a terminal that answers the query
                     // and then names half blocks looks exactly like one that
                     // never answered: everything comes out as text, and nothing
@@ -203,7 +185,7 @@ impl Graphics {
                         p.font_size().width,
                         p.font_size().height
                     );
-                    Some(p)
+                    Some(result)
                 }
                 Err(e) => {
                     tracing::debug!("no graphics protocol: {e}");
@@ -211,9 +193,12 @@ impl Graphics {
                 }
             },
         };
+        let (probed, measured_cell) =
+            probed.map_or((None, None), |result| (Some(result.picker), result.cell));
         let mut g = Self {
             mode,
             probed,
+            measured_cell,
             picker: None,
             cache: ImageCache::default(),
         };
@@ -235,9 +220,7 @@ impl Graphics {
         if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
             return Self::disabled();
         }
-        let g = Self::probe(mode);
-        drain_stdin();
-        g
+        Self::probe(mode)
     }
 
     /// Half blocks with no probe at all, for tests and for `graphics = "off"`.
@@ -245,6 +228,7 @@ impl Graphics {
         Self {
             mode: Mode::Off,
             probed: None,
+            measured_cell: None,
             picker: None,
             cache: ImageCache::default(),
         }
@@ -284,6 +268,9 @@ impl Graphics {
                 // inside a multiplexer the outer terminal cannot be seen from
                 // here. The font size comes from the probe when there was one.
                 let mut p = self.probed.clone().unwrap_or_else(Picker::halfblocks);
+                if let Some(cell) = self.measured_cell {
+                    p = with_cell(&p, cell);
+                }
                 p.set_protocol_type(ProtocolType::Kitty);
                 Some(p)
             }
@@ -308,6 +295,7 @@ impl Graphics {
         let Some(cell) = cell_size(ws.columns, ws.rows, ws.width, ws.height) else {
             return;
         };
+        self.measured_cell = Some(cell);
         let mut changed = false;
         for p in [&mut self.probed, &mut self.picker].into_iter().flatten() {
             let had = p.font_size();
@@ -367,8 +355,8 @@ impl Graphics {
     /// `None` when nothing has measured it, in which case two is as good a
     /// guess as any.
     pub fn cell_aspect(&self) -> Option<f32> {
-        let f = self.picker.as_ref()?.font_size();
-        (f.width > 0 && f.height > 0).then(|| f.height as f32 / f.width as f32)
+        let (width, height) = self.cell_size()?;
+        Some(f32::from(height) / f32::from(width))
     }
 
     /// How big a terminal cell is, in pixels: width, then height.
@@ -382,8 +370,9 @@ impl Graphics {
     /// itself. [`Resize::Fit`] never upsizes, so growing a small picture is
     /// the caller's own work, and it cannot be done without this.
     pub fn cell_size(&self) -> Option<(u16, u16)> {
-        let f = self.picker.as_ref()?.font_size();
-        (f.width > 0 && f.height > 0).then_some((f.width, f.height))
+        self.picker.as_ref()?;
+        let f = self.measured_cell?;
+        Some((f.width, f.height))
     }
 
     /// What is actually in use, for the help overlay.
@@ -600,7 +589,7 @@ pub fn mend_unit_placeholder(buf: &mut Buffer, x: u16, y: u16) {
 /// `None` when either is unknown: a terminal that does not report pixels
 /// says zero, and dividing by it would say the same.
 fn cell_size(columns: u16, rows: u16, width_px: u16, height_px: u16) -> Option<FontSize> {
-    if columns == 0 || rows == 0 || width_px == 0 || height_px == 0 {
+    if columns == 0 || rows == 0 || width_px < columns || height_px < rows {
         return None;
     }
     Some(FontSize {
@@ -659,52 +648,9 @@ fn looks_capable() -> bool {
     || var("SSH_CONNECTION").is_ok()
 }
 
-/// Whether a multiplexer sits between this process and the terminal.
-///
-/// Inside tmux the query is not asked at all under `auto`, and that is a
-/// safety rule rather than a capability judgement. tmux only relays the
-/// query when `allow-passthrough` is on, and a query nobody relays is one
-/// nobody answers. The library that asks it does so on a thread that puts
-/// the terminal into raw mode itself and puts it *back* when it finishes --
-/// and when the answer never comes, that thread outlives the probe, sits on
-/// stdin until the person types something, and then restores the cooked
-/// mode it saved: after the application has taken the terminal. The screen
-/// stops updating and keystrokes echo. Measured in tmux with the query
-/// timing out every time; never without it. A person who has turned
-/// passthrough on can still say `graphics = "kitty"` and get the query.
+/// Multiplexer passthrough is opt-in; automatic mode keeps cell fallbacks.
 fn behind_multiplexer() -> bool {
-    std::env::var("TMUX").is_ok()
-}
-
-/// Throw away whatever the terminal said back.
-///
-/// A capability query is a conversation, and terminals are not obliged to
-/// answer only the questions asked -- a reply that arrives late, or one the
-/// probe did not consume, is still sitting in the input buffer afterwards.
-/// Left there it is read as keystrokes, and the first thing that reads it is
-/// the backend's own cursor-position query, which then fails and takes startup
-/// with it.
-fn drain_stdin() {
-    use crossterm::event::{poll, read};
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-    use std::time::Duration;
-
-    if enable_raw_mode().is_err() {
-        return;
-    }
-    // A bounded number of reads: a terminal that talks forever must not be
-    // able to hold startup open.
-    for _ in 0..64 {
-        match poll(Duration::from_millis(20)) {
-            Ok(true) => {
-                if read().is_err() {
-                    break;
-                }
-            }
-            _ => break,
-        }
-    }
-    let _ = disable_raw_mode();
+    std::env::var("TMUX").is_ok() || std::env::var("STY").is_ok()
 }
 
 #[cfg(test)]
@@ -796,6 +742,14 @@ mod tests {
             height: 16,
         });
         g.picker = Some(picker);
+        assert!(
+            g.cell_size().is_none(),
+            "a picker fallback is not a measurement"
+        );
+        g.measured_cell = Some(FontSize {
+            width: 7,
+            height: 16,
+        });
         assert_eq!(g.cell_size(), Some((7, 16)));
         assert_eq!(g.cell_aspect(), Some(16.0 / 7.0));
     }

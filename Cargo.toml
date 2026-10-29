@@ -22,7 +22,7 @@ path = "src/lib.rs"
 # terminal that cannot is detected at runtime, not at compile time. Turning
 # them off is for a build that must not link an image decoder at all.
 default = ["image"]
-image = ["dep:ratatui-image", "dep:image"]
+image = ["dep:ratatui-image", "dep:image", "dep:rustix"]
 # Animated attachments and file previews share this optional decoder.
 gif = ["image", "image/gif"]
 # BMP previews are used by STAR/FOLD as well as Winamp skin import.
@@ -170,3 +170,6 @@ crossterm = { git = "https://github.com/crossterm-rs/crossterm", rev = "d4e9929f
 [[example]]
 name = "gpu-renderer"
 required-features = ["gpu-renderer"]
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

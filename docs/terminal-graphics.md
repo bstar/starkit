@@ -34,6 +34,13 @@ pass directly to the presenter: there is no full-frame PNG encode/decode hop.
 Only changed terminal regions are encoded and uploaded; old placements retire
 within a synchronized terminal update. Presentation acknowledgements follow
 terminal writes, preserve generation guards and coalesce remote scenes.
+Keys and paste received while a resize or presentation switch is awaiting its
+first displayed frame are retained in order until that geometry is visible.
+The buffer is bounded to 256 events and 1 MiB of pasted text; overflow is an
+explicit frontend error. Disconnect or focus loss clears it, so queued input
+cannot replay into a reattached session. Pointer coordinates keep their existing
+generation/capture rules.
+
 
 The presenting client queries Kitty's current PostScript font name and point size
 using [XTGETTCAP](https://sw.kovidgoyal.net/kitty/kittens/query_terminal/), and
@@ -88,8 +95,10 @@ The benchmark changes a selected row; its renderer timing is distinct from
 full application input-to-display latency.
 
 `scripts/test-kitty-interactive.py` verifies actual image pixels, keyboard and
-pointer input, menus, font resize, clean exit, and frontend detachment retaining
-session state. It requires Kitty >=0.49 for its screenshot API, Python and
+pointer input, menus, font resize, clean exit, and terminal closure retaining
+session state. Its frontend-loss case closes only the private Kitty window and
+verifies navigation/marks through a fresh controller connection; application
+Quit shortcuts keep their normal meaning. It requires Kitty >=0.49 for its screenshot API, Python and
 Pillow. Linux CI runs it under Xvfb; Xvfb is needed by Kitty, not the renderer.
 Mac headless raster tests run in CI. Interactive Kitty on macOS still requires
 a real logged-in Mac: hosted macOS cannot provide Kitty's OpenGL surface.
