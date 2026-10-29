@@ -28,6 +28,10 @@ impl Video {
                 continue;
             }
             self.last = pts;
+            self.processor.fit_output(
+                &f,
+                (u64::from(self.encoder.width()) << 32) | u64::from(self.encoder.height()),
+            );
             let processed = self.processor.process(&f)?;
             let mut pixels = rgba(
                 &processed,
@@ -174,12 +178,16 @@ pub fn encode_selected_to_fit(
         u64::from(decoder.width()) * u64::from(decoder.height()) <= 32_000_000,
         "Video exceeds preview limits"
     );
+    let processor =
+        processing::Processor::new(path, &input, &options.subtitle, time, start, cancel.clone())?;
+    let display =
+        processor.display_dimensions(decoder.width(), decoder.height(), decoder.aspect_ratio())?;
     let (height, fps, rate) = quality.parameters();
-    let width_height = (f64::from(bounds.0.max(2)) * f64::from(decoder.height())
-        / f64::from(decoder.width().max(1))) as u32;
+    let width_height =
+        (f64::from(bounds.0.max(2)) * f64::from(display.1) / f64::from(display.0.max(1))) as u32;
     let (w, h) = dimensions(
-        decoder.width(),
-        decoder.height(),
+        display.0,
+        display.1,
         height.min(bounds.1.max(2)).min(width_height.max(2)),
     );
     let io = format::context::StreamIo::from_write(writer)?;
@@ -220,16 +228,8 @@ pub fn encode_selected_to_fit(
         last: -1,
         start,
         fps,
-        processor: processing::Processor::new(
-            path,
-            &input,
-            &options.subtitle,
-            time,
-            start,
-            cancel.clone(),
-        )?,
+        processor,
     };
-    video.processor.set_preview_bounds(w, h);
     let mut audio = if let Some(s) =
         tracks::audio_index(&input, &options.audio).and_then(|i| input.stream(i))
     {

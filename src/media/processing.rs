@@ -36,6 +36,8 @@ pub struct Processor {
     time: av::Rational,
     rotation: i32,
     preview_bounds: Option<(u32, u32)>,
+    stream_aspect: Option<av::Rational>,
+    graph_aspect: Option<av::Rational>,
 }
 impl Processor {
     pub fn new(
@@ -64,7 +66,14 @@ impl Processor {
             }
         }
         let mut rotation = 0;
+        let mut stream_aspect = None;
         if let Some(s) = input.streams().best(media::Type::Video) {
+            // Match av_guess_sample_aspect_ratio: valid container metadata
+            // precedes frame metadata. Some FFmpeg decoders report square or
+            // unknown pixels even when the container declares anamorphic video.
+            // SAFETY: the selected stream is borrowed from this live input.
+            let aspect = unsafe { av::Rational::from((*s.as_ptr()).sample_aspect_ratio) };
+            stream_aspect = (aspect.numerator() > 0 && aspect.denominator() > 0).then_some(aspect);
             for data in s.side_data() {
                 if data.kind() == av::packet::side_data::Type::DisplayMatrix
                     && data.data().len() >= 36
@@ -88,6 +97,8 @@ impl Processor {
             time,
             rotation,
             preview_bounds: None,
+            stream_aspect,
+            graph_aspect: None,
         })
     }
     pub(super) fn set_preview_bounds(&mut self, width: u32, height: u32) {
@@ -96,6 +107,39 @@ impl Processor {
             self.preview_bounds = bounds;
             self.graph = None;
         }
+    }
+    fn aspect_ratio(&self, source: &frame::Video) -> av::Rational {
+        let frame = source.aspect_ratio();
+        self.stream_aspect.unwrap_or_else(|| {
+            if frame.numerator() > 0 && frame.denominator() > 0 {
+                frame
+            } else {
+                (1, 1).into()
+            }
+        })
+    }
+    pub(super) fn display_dimensions(
+        &self,
+        width: u32,
+        height: u32,
+        fallback: av::Rational,
+    ) -> Result<(u32, u32)> {
+        let aspect = self.stream_aspect.unwrap_or(fallback);
+        let aspect = if aspect.numerator() > 0 && aspect.denominator() > 0 {
+            f64::from(aspect)
+        } else {
+            1.0
+        };
+        let width = (f64::from(width) * aspect).round();
+        anyhow::ensure!(
+            width.is_finite() && width >= 1.0 && width <= f64::from(u32::MAX),
+            "Invalid display aspect ratio"
+        );
+        let mut dimensions = (width as u32, height);
+        if matches!(self.rotation.rem_euclid(360), 90 | 270) {
+            std::mem::swap(&mut dimensions.0, &mut dimensions.1);
+        }
+        Ok(dimensions)
     }
     /// Fit before float HDR conversion, retaining source pixels for fullscreen.
     /// Bounds are presentation hints, not a change to the original media stream.
@@ -110,12 +154,7 @@ impl Processor {
         if matches!(self.rotation.rem_euclid(360), 90 | 270) {
             std::mem::swap(&mut width, &mut height);
         }
-        let sar = source.aspect_ratio();
-        let aspect = if sar.numerator() > 0 && sar.denominator() > 0 {
-            f64::from(sar)
-        } else {
-            1.0
-        };
+        let aspect = f64::from(self.aspect_ratio(source));
         let factor = (f64::from(width) / (f64::from(source.width()) * aspect))
             .min(f64::from(height) / f64::from(source.height()))
             .min(1.0);
@@ -124,13 +163,28 @@ impl Processor {
         self.set_preview_bounds(width, height);
     }
     pub fn process(&mut self, source: &frame::Video) -> Result<frame::Video> {
+        let sar = self.aspect_ratio(source);
+        let height = self
+            .preview_bounds
+            .map_or(source.height(), |(_, height)| height);
+        let width = f64::from(source.width()) * f64::from(sar) * f64::from(height)
+            / f64::from(source.height().max(1));
+        anyhow::ensure!(
+            width >= 1.0 && height > 0 && width * f64::from(height) <= 32_000_000.0,
+            "Normalized video dimensions exceed preview limits"
+        );
+        if self.graph_aspect != Some(sar) {
+            self.graph = None;
+        }
         if self.graph.is_none() {
             let hdr = matches!(
                 source.color_transfer_characteristic(),
                 av::color::TransferCharacteristic::SMPTE2084
                     | av::color::TransferCharacteristic::ARIB_STD_B67
             );
-            let mut filters = vec![];
+            // Set metadata in the graph without cloning the source pixel data.
+            // Buffer input metadata alone does not override a frame's own SAR.
+            let mut filters = vec![format!("setsar={sar}")];
             // Small previews must reduce 4K frames before HDR tone mapping and
             // RGBA/subtitle composition, rather than doing all work at source size.
             if let Some((width, height)) = self.preview_bounds {
@@ -171,9 +225,7 @@ impl Processor {
                 }
             }
             // Normalize sample aspect ratio before Kitty scales square pixels.
-            let sar = source.aspect_ratio();
-            if sar.numerator() > 0 && sar.denominator() > 0 && sar.numerator() != sar.denominator()
-            {
+            if sar.numerator() != sar.denominator() {
                 filters.push("scale=w=trunc(iw*sar):h=ih:flags=lanczos,setsar=1".into());
             }
             match self.rotation.rem_euclid(360) {
@@ -186,11 +238,6 @@ impl Processor {
                 filters.push("null".into());
             }
             let mut graph = av::filter::Graph::new();
-            let sar = if sar.numerator() > 0 && sar.denominator() > 0 {
-                sar
-            } else {
-                (1, 1).into()
-            };
             graph.add(
                 &av::filter::find("buffer").context("Video filters unavailable")?,
                 "in",
@@ -214,6 +261,7 @@ impl Processor {
                 .parse(&filters.join(","))?;
             graph.validate()?;
             self.graph = Some(graph);
+            self.graph_aspect = Some(sar);
         }
         let graph = self.graph.as_mut().unwrap();
         graph.get("in").unwrap().source().add(source)?;
@@ -374,5 +422,63 @@ impl BitmapSubtitles {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn processor(stream_aspect: Option<av::Rational>) -> Processor {
+        Processor {
+            path: "unused".into(),
+            selection: Selection::Off,
+            graph: None,
+            bitmap: None,
+            time: (1, 24).into(),
+            rotation: 0,
+            preview_bounds: None,
+            stream_aspect,
+            graph_aspect: None,
+        }
+    }
+    fn source(aspect: av::Rational) -> frame::Video {
+        let mut source = frame::Video::new(av::format::Pixel::YUV420P, 320, 180);
+        for plane in 0..source.planes() {
+            source.data_mut(plane).fill(128);
+        }
+        // SAFETY: this frame exclusively owns its AVFrame metadata.
+        unsafe {
+            (*source.as_mut_ptr()).sample_aspect_ratio = aspect.into();
+        }
+        source
+    }
+    #[test]
+    fn container_aspect_is_applied_when_decoder_reports_square_or_unknown_pixels() {
+        av::init().unwrap();
+        for aspect in [(0, 1), (1, 1), (2, 1)] {
+            let mut processor = processor(Some((2, 1).into()));
+            let output = processor.process(&source(aspect.into())).unwrap();
+            assert_eq!((output.width(), output.height()), (640, 180));
+            assert_eq!(output.aspect_ratio(), (1, 1).into());
+        }
+    }
+    #[test]
+    fn hostile_aspect_metadata_is_refused_before_filter_allocation() {
+        let mut processor = processor(Some((i32::MAX, 1).into()));
+        let Err(error) = processor.process(&source((1, 1).into())) else {
+            panic!("Hostile aspect metadata reached the filter graph");
+        };
+        assert!(error.to_string().contains("dimensions exceed"));
+        assert!(processor.graph.is_none());
+    }
+    #[test]
+    fn frame_aspect_changes_rebuild_the_graph_when_container_is_unspecified() {
+        av::init().unwrap();
+        let mut processor = processor(None);
+        for (aspect, width) in [((2, 1), 640), ((1, 1), 320), ((0, 1), 320)] {
+            let output = processor.process(&source(aspect.into())).unwrap();
+            assert_eq!((output.width(), output.height()), (width, 180));
+            assert_eq!(output.aspect_ratio(), (1, 1).into());
+        }
     }
 }

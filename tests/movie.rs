@@ -182,7 +182,7 @@ fn hdr_is_tone_mapped_and_anamorphic_pixels_are_normalized() {
         .unwrap()
         .success());
     let player = Player::file_with_options(
-        path,
+        path.clone(),
         0.0,
         PlaybackOptions {
             audio: Selection::Off,
@@ -201,6 +201,36 @@ fn hdr_is_tone_mapped_and_anamorphic_pixels_are_normalized() {
         });
     assert_eq!(frame.pixels.dimensions(), (640, 180));
     assert!(frame.pixels.pixels().any(|p| p.0[0] > 0));
+    drop(player);
+    // The SSH proxy must preserve the same display aspect within its bounds.
+    for (bounds, expected) in [((640, 360), (640, 180)), ((320, 180), (320, 90))] {
+        let output = root.path().join(format!("anamorphic-{}.ts", bounds.0));
+        proxy::encode_selected_to_fit(
+            &path,
+            0.0,
+            Quality::Low,
+            bounds,
+            std::fs::File::create(&output).unwrap(),
+            Arc::new(AtomicBool::new(false)),
+            PlaybackOptions {
+                audio: Selection::Off,
+                subtitle: Selection::Off,
+            },
+        )
+        .unwrap();
+        let player = Player::file_with_options(
+            output,
+            0.0,
+            PlaybackOptions {
+                audio: Selection::Off,
+                subtitle: Selection::Off,
+            },
+        )
+        .unwrap();
+        let frame = player.frames.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(frame.pixels.dimensions(), expected);
+        assert!(frame.pixels.pixels().any(|p| p.0[0] > 0));
+    }
 }
 
 #[test]
