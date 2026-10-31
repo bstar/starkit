@@ -32,6 +32,8 @@ On 0.x, an API change is a minor bump and a fix is a patch.
   Explicit `cpu` remains available; offscreen GPU benchmarks stay strict.
 - A small frontend GPU/CPU indicator follows the actual renderer, including
   fallback, without changing controller geometry or the transport protocol.
+- Composite that indicator once after pane, modal and live-canvas layers, so
+  each window has one indicator rather than one in every surface.
 
 ### Fixed (0.13 text control candidate)
 

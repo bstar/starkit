@@ -1641,6 +1641,78 @@ mod backend_tests {
     }
 
     #[test]
+    fn renderer_indicator_is_composited_once_after_modal_layers() {
+        use super::super::{
+            placement::Placement,
+            protocol::{Rect, Scene, Viewport},
+        };
+        use crate::native_surface::{style::Style, PixelRect};
+        let viewport = Viewport {
+            width: 240,
+            height: 160,
+            columns: 30,
+            rows: 10,
+            ..Default::default()
+        };
+        let style = Style::default();
+        let mut scene: Scene = style.scene(viewport);
+        scene.placements.push(Placement::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 10,
+            },
+            PixelRect::new(0, 0, 240, 160),
+        ));
+        scene.placements.push(Placement::new(
+            Rect {
+                x: 5,
+                y: 2,
+                width: 20,
+                height: 6,
+            },
+            PixelRect::new(40, 32, 160, 96),
+        ));
+        let mut painter = super::super::native::Painter::new();
+        let reference = painter.render_with_canvases(&scene, &[]).unwrap();
+        painter.show_backend = true;
+        let labeled = painter.render_with_canvases(&scene, &[]).unwrap();
+        assert_ne!(reference, labeled);
+        for (x, y, pixel) in labeled.enumerate_pixels() {
+            if !(196..238).contains(&x) || !(142..158).contains(&y) {
+                assert_eq!(
+                    pixel,
+                    reference.get_pixel(x, y),
+                    "Indicator appeared inside a layer"
+                );
+            }
+        }
+        assert_eq!(labeled.get_pixel(200, 148).0, [143, 168, 199, 255]);
+        scene.components.push(super::super::Component::LiveCanvas {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 10,
+            },
+            id: "video".into(),
+            view: crate::content_view::ContentView::new([240, 160], PixelRect::new(0, 0, 240, 160))
+                .unwrap(),
+            interactive: false,
+        });
+        let live = painter
+            .render_with_canvases(&scene, &["video".into()])
+            .unwrap();
+        assert_eq!(live.get_pixel(20, 20).0, [0; 4]);
+        assert_eq!(
+            live.get_pixel(200, 148).0,
+            [143, 168, 199, 255],
+            "Live content erased the indicator"
+        );
+    }
+
+    #[test]
     fn offscreen_renderers_can_be_moved_to_a_worker() {
         fn send<T: Send>() {}
         send::<super::SceneRenderer>();

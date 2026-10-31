@@ -1383,7 +1383,72 @@ impl Painter {
         RgbaImage::from_raw(base.width(), base.height(), pixels).context("Overlay output")
     }
 
+    fn backend_indicator(&mut self, frame: &mut RgbaImage) -> Result<()> {
+        if !self.show_backend || frame.width() < 64 || frame.height() < 32 {
+            return Ok(());
+        }
+        // The indicator belongs to the completed terminal frame. Drawing it in
+        // render_grid duplicates it in every modal/pane and live-canvas layer.
+        let mut canvas = Pixmap::new(44, 18).context("Allocate renderer indicator")?;
+        #[cfg(feature = "gpu-renderer")]
+        let accelerated = self.gpu.is_some();
+        #[cfg(not(feature = "gpu-renderer"))]
+        let accelerated = false;
+        let x = 0.;
+        let y = 0.;
+        rounded(&mut canvas, [x, y, 42., 16.], 3., "#20242b", false);
+        fill(
+            &mut canvas,
+            [x + 4., y + 6., 4., 4.],
+            if accelerated { "#7bd88f" } else { "#8fa8c7" },
+        );
+        let factor = std::mem::replace(&mut self.font_factor, 1.);
+        let grid = self.terminal_grid.take();
+        let ui = std::mem::replace(&mut self.ui_font, true);
+        self.text(
+            &mut canvas,
+            if accelerated { "GPU" } else { "CPU" },
+            [x + 11., y, 29., 16.],
+            TextStyle {
+                size: 10.,
+                color: "#d8dee9",
+                bold: false,
+                mono: true,
+                ellipsis: false,
+                centered: false,
+                right: false,
+            },
+        );
+        self.font_factor = factor;
+        self.terminal_grid = grid;
+        self.ui_font = ui;
+        let mut pixels = canvas.take();
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            if pixel[3] > 0 {
+                for channel in 0..3 {
+                    pixel[channel] = ((u32::from(pixel[channel]) * 255 + u32::from(pixel[3]) / 2)
+                        / u32::from(pixel[3]))
+                    .min(255) as u8;
+                }
+            }
+        }
+        let badge = RgbaImage::from_raw(44, 18, pixels).context("Renderer indicator pixels")?;
+        crate::image::imageops::overlay(
+            frame,
+            &badge,
+            i64::from(frame.width() - 44),
+            i64::from(frame.height() - 18),
+        );
+        Ok(())
+    }
+
     pub fn render(&mut self, scene: &Scene) -> Result<RgbaImage> {
+        let mut frame = self.render_layers(scene)?;
+        self.backend_indicator(&mut frame)?;
+        Ok(frame)
+    }
+
+    fn render_layers(&mut self, scene: &Scene) -> Result<RgbaImage> {
         let v = scene.viewport.validate()?;
         anyhow::ensure!(
             scene.spans.len() <= super::protocol::MAX_CELLS
@@ -1452,7 +1517,7 @@ impl Painter {
         scene: &Scene,
         active: &[String],
     ) -> Result<RgbaImage> {
-        let mut frame = self.render(scene)?;
+        let mut frame = self.render_layers(scene)?;
         for (index, component) in scene.components.iter().enumerate() {
             let Component::LiveCanvas { id, view, .. } = component else {
                 continue;
@@ -1513,6 +1578,7 @@ impl Painter {
                 }
             }
         }
+        self.backend_indicator(&mut frame)?;
         Ok(frame)
     }
 
@@ -1987,40 +2053,6 @@ impl Painter {
         }
         if manage_assets {
             self.assets.retain(|id, _| used.contains(id));
-        }
-        if self.show_backend && viewport.width >= 64 && viewport.height >= 32 {
-            #[cfg(feature = "gpu-renderer")]
-            let accelerated = self.gpu.is_some();
-            #[cfg(not(feature = "gpu-renderer"))]
-            let accelerated = false;
-            let x = viewport.width as f32 - 44.;
-            let y = viewport.height as f32 - 18.;
-            rounded(&mut canvas, [x, y, 42., 16.], 3., "#20242b", false);
-            fill(
-                &mut canvas,
-                [x + 4., y + 6., 4., 4.],
-                if accelerated { "#7bd88f" } else { "#8fa8c7" },
-            );
-            let factor = std::mem::replace(&mut self.font_factor, 1.);
-            let grid = self.terminal_grid.take();
-            let ui = std::mem::replace(&mut self.ui_font, true);
-            self.text(
-                &mut canvas,
-                if accelerated { "GPU" } else { "CPU" },
-                [x + 11., y, 29., 16.],
-                TextStyle {
-                    size: 10.,
-                    color: "#d8dee9",
-                    bold: false,
-                    mono: true,
-                    ellipsis: false,
-                    centered: false,
-                    right: false,
-                },
-            );
-            self.font_factor = factor;
-            self.terminal_grid = grid;
-            self.ui_font = ui;
         }
         let mut pixels = match canvas {
             Pixmap::Cpu(pixels) => pixels.take(),
