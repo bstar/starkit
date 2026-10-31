@@ -350,6 +350,13 @@ presentation switching available in modals while background domain shortcuts
 remain blocked. Full app migrations and the remaining catalog/media gates
 are still pending.
 
+The hosted macOS PTY gate reached KEY_OK but sometimes waited forever for child
+exit. The harness must keep draining output until exit; a 256 KiB post-marker
+stress case reproduces the old backpressure stall without changing probe/key
+assertions or their deadlines. The large Linux feature/starter CI job uses
+debug-free, non-incremental check artifacts to stay within runner disk; retain
+all feature, starter and media gates.
+
 The hosted FFmpeg 6 movie gate exposed decoder frames with square/unknown SAR
 for an anamorphic container. Processing now applies valid stream SAR before
 frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata

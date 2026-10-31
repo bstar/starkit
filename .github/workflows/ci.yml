@@ -23,6 +23,12 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The matrix builds the engine and two independent consumers in several
+    # feature combinations. Full debug/incremental artifacts exceed runner disk.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable

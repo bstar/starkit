@@ -16,6 +16,7 @@ struct Running {
     child: Child,
     master: Option<File>,
     output: Vec<u8>,
+    case: String,
 }
 impl Drop for Running {
     fn drop(&mut self) {
@@ -63,13 +64,28 @@ impl Running {
         self.until(b"KEY_OK");
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
+            // KEY_OK proves the input assertions, not that libtest has finished
+            // writing its report. Keep draining the PTY until process exit.
+            let mut buffer = [0; 4096];
+            if let Ok(n) = self.master.as_mut().unwrap().read(&mut buffer) {
+                self.output.extend_from_slice(&buffer[..n]);
+            }
             if let Some(status) = self.child.try_wait().unwrap() {
-                assert!(status.success());
+                assert!(
+                    status.success(),
+                    "PTY case {} exited {status}: {}",
+                    self.case,
+                    String::from_utf8_lossy(&self.output)
+                );
                 return;
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        panic!("PTY child did not exit");
+        panic!(
+            "PTY case {} did not exit after KEY_OK: {}",
+            self.case,
+            String::from_utf8_lossy(&self.output[self.output.len().saturating_sub(4096)..])
+        );
     }
 }
 fn child(case: &str, timeout_ms: u64) -> Running {
@@ -143,6 +159,7 @@ fn child(case: &str, timeout_ms: u64) -> Running {
         child,
         master: Some(master),
         output: vec![],
+        case: case.into(),
     }
 }
 fn probe_case(case: &str, reply: &[u8], delay: Duration, timeout_ms: u64) {
@@ -214,6 +231,11 @@ fn automatic_multiplexer_fallback_does_not_query_or_consume_input() {
     assert!(!run.output.windows(4).any(|bytes| bytes == b"\x1b[5n"));
     run.send(b"q");
     run.finish();
+}
+
+#[test]
+fn completion_drains_output_after_the_keyboard_assertions() {
+    probe_case("completion-output", REPLY, Duration::ZERO, 1000);
 }
 fn attributes() -> (u64, u64, u64, u64, Vec<u8>) {
     let mut term = std::mem::MaybeUninit::<libc::termios>::uninit();
@@ -345,4 +367,8 @@ fn probe_child() {
     terminal::disable_raw_mode().unwrap();
     println!("KEY_OK");
     io::stdout().flush().unwrap();
+    if case == "completion-output" {
+        io::stdout().write_all(&vec![b'.'; 256 * 1024]).unwrap();
+        io::stdout().flush().unwrap();
+    }
 }
