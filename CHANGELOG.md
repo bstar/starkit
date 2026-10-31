@@ -8,6 +8,16 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.13 shared list scrollbars)
+
+- Overflowing lists, tables and trees share bounded cell/native tracks and
+  draggable thumbs, with space reserved beside text and table columns.
+  Scrolling retains selection; resizing, modal changes and removed targets
+  cancel capture. Short lists reclaim the track without a new pane solve.
+- Resolved list geometry is available through `Placement::list_layout`.
+- Cell modals clear the covered backing cells before painting their own chrome,
+  preventing background borders, text and selection styles from showing through.
+
 ### Added (0.13 application migration hooks)
 
 - Controlled focus requests and user focus events retain modal isolation and

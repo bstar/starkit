@@ -82,6 +82,7 @@ pub struct Runtime {
     before_modal: Option<Id>,
     requested_focus: Option<Id>,
     capture: Option<(Id, u64)>,
+    scroll_grab: Option<(Id, crate::chrome::scrollbar::Grab)>,
     revision: u64,
     dirty: bool,
     layout_count: u64,
@@ -108,6 +109,7 @@ impl Runtime {
             before_modal: None,
             requested_focus: None,
             capture: None,
+            scroll_grab: None,
             revision: 0,
             dirty: true,
             layout_count: 0,
@@ -162,7 +164,7 @@ impl Runtime {
             || !layout::same_targets(&self.view, &view)
             || !self.registry.same_targets(&registry)
         {
-            self.capture = None;
+            self.cancel_pointer();
         }
         self.layout_dirty |= geometry_changed;
         self.view = view;
@@ -193,6 +195,7 @@ impl Runtime {
     }
     pub fn cancel_pointer(&mut self) {
         self.capture = None;
+        self.scroll_grab = None;
     }
     /// Request a mounted control, including one temporarily hidden or disabled.
     /// The active modal still traps focus. A hidden request is remembered while
@@ -220,7 +223,7 @@ impl Runtime {
             .as_ref()
             .is_none_or(|frame| frame.viewport != viewport)
         {
-            self.capture = None;
+            self.cancel_pointer();
             self.dirty = true;
             self.layout_dirty = true;
         }
@@ -231,7 +234,7 @@ impl Runtime {
                 layout::solve(&self.view, viewport, self.revision, self.focus.clone())?
             } else {
                 let mut frame = self.frame.clone().expect("retained layout");
-                layout::refresh(&self.view, &mut frame);
+                layout::refresh(&self.view, &mut frame)?;
                 frame.revision = self.revision;
                 frame
             };
@@ -303,7 +306,7 @@ impl Runtime {
                     }
                 }
                 if previous != *offset && self.captured() == Some(&p.id) {
-                    self.capture = None;
+                    self.cancel_pointer();
                 }
                 self.list_positions.insert(p.id.clone(), position);
             }
@@ -605,7 +608,7 @@ impl Runtime {
                         if previous != *offset
                             && self.capture.as_ref().is_some_and(|(owner, _)| owner == &id)
                         {
-                            self.capture = None;
+                            self.cancel_pointer();
                         }
                     }
                 }
@@ -650,6 +653,21 @@ impl Runtime {
             / u32::from(p.body.width.saturating_sub(1).max(1))) as u16;
         self.adjust(id, value, finished)
     }
+    fn list_scroll_to(&mut self, id: Id, above: u32) {
+        let Some(frame) = &self.frame else { return };
+        let Some(p) = frame.get(&id) else { return };
+        let Widget::List { items, .. } = &p.widget else {
+            return;
+        };
+        let rows = p
+            .list_layout(frame.viewport)
+            .expect("list geometry")
+            .rows
+            .max(1);
+        self.scroll
+            .insert(id, (above as usize).min(items.len().saturating_sub(rows)));
+        self.invalidate();
+    }
     pub fn drag(&mut self, x: u16, y: u16) -> Vec<Event> {
         if !self.prepare_input() {
             return vec![];
@@ -657,6 +675,10 @@ impl Runtime {
         let Some((id, _)) = &self.capture else {
             return vec![];
         };
+        if let Some((owner, grab)) = self.scroll_grab.as_ref().filter(|(owner, _)| owner == id) {
+            self.list_scroll_to(owner.clone(), crate::chrome::scrollbar::drag(grab, y));
+            return vec![];
+        }
         let Some(p) = self.frame.as_ref().and_then(|frame| frame.get(id)) else {
             return vec![];
         };
@@ -697,12 +719,14 @@ impl Runtime {
             let rows = usize::from(p.body.height / frame.viewport.scale(false))
                 .saturating_sub(usize::from(!columns.is_empty()))
                 .max(1);
+            let id = p.id.clone();
+            let maximum = items.len().saturating_sub(rows);
             // A click started before scrolling must not select another row.
-            self.capture = None;
-            let offset = self.scroll.entry(p.id.clone()).or_default();
+            self.cancel_pointer();
+            let offset = self.scroll.entry(id).or_default();
             *offset = offset
                 .saturating_add_signed(isize::from(lines))
-                .min(items.len().saturating_sub(rows));
+                .min(maximum);
             self.invalidate();
         }
         vec![]
@@ -733,6 +757,7 @@ impl Runtime {
         let hit = frame.hit(x, y).cloned();
         let mut events = vec![];
         if pressed {
+            self.scroll_grab = None;
             self.capture = hit
                 .as_ref()
                 .map(|p| (p.id.clone(), frame.viewport.generation));
@@ -743,6 +768,30 @@ impl Runtime {
                 self.focus = Some(p.id.clone());
                 self.requested_focus = self.focus.clone();
                 self.invalidate();
+                if let Some(list) = p.list_layout(frame.viewport) {
+                    if let Some(track) = list.track {
+                        let Widget::List { items, .. } = &p.widget else {
+                            unreachable!()
+                        };
+                        if let Some((grab, above)) = crate::chrome::scrollbar::viewport_grab(
+                            track,
+                            items.len().min(u32::MAX as usize) as u32,
+                            self.scroll
+                                .get(&p.id)
+                                .copied()
+                                .unwrap_or(0)
+                                .min(u32::MAX as usize) as u32,
+                            x,
+                            y,
+                            list.rows as u32,
+                            frame.viewport.scale(true),
+                        ) {
+                            self.scroll_grab = Some((p.id.clone(), grab));
+                            self.list_scroll_to(p.id.clone(), above);
+                            return events;
+                        }
+                    }
+                }
                 if matches!(p.widget, Widget::Slider { .. }) {
                     events.extend(self.slider_pointer(p.id.clone(), x, false));
                     return events;
@@ -750,9 +799,19 @@ impl Runtime {
             }
         } else {
             let capture = self.capture.take();
+            let scroll_grab = self.scroll_grab.take();
             if let Some((id, generation)) = &capture {
                 if *generation == frame.viewport.generation {
                     if let Some(p) = frame.get(id).filter(|p| p.enabled) {
+                        if let Some((_, grab)) =
+                            scroll_grab.as_ref().filter(|(owner, _)| owner == id)
+                        {
+                            self.list_scroll_to(
+                                id.clone(),
+                                crate::chrome::scrollbar::drag(grab, y),
+                            );
+                            return vec![];
+                        }
                         if matches!(p.widget, Widget::Slider { .. }) {
                             return self.slider_pointer(id.clone(), x, true);
                         }

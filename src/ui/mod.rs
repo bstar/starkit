@@ -11,7 +11,7 @@ mod render;
 mod runtime;
 
 pub use crate::panes::{Overflow, Size, Visibility, Wrap};
-pub use layout::{ColumnPlacement, Frame, Placement, Presentation, Viewport};
+pub use layout::{ColumnPlacement, Frame, ListLayout, Placement, Presentation, Viewport};
 pub use runtime::{Event, Runtime};
 
 /// Stable within an application's UI, including across filtering and reordering.

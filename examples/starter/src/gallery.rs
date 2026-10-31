@@ -126,7 +126,7 @@ impl Gallery {
                     ),
                 )
                 .width(Size::fixed(40))
-                .height(Size::fixed(20)),
+                .height(Size::fixed(16)),
             );
         }
         if self.modal {

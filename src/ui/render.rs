@@ -163,6 +163,14 @@ impl Runtime {
             let style = Style::default()
                 .fg(rgb(if p.enabled { theme.fg } else { theme.dim }))
                 .bg(rgb(theme.panel_bg));
+            if p.modal && p.parent.is_none() {
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        buf[(x, y)].reset();
+                        buf[(x, y)].set_style(style);
+                    }
+                }
+            }
             if matches!(p.widget, Widget::Custom { .. }) {
                 let mut local = Buffer::empty(Rect::new(0, 0, p.body.width, p.body.height));
                 local.set_style(local.area, style);
@@ -293,6 +301,8 @@ impl Runtime {
                     selected,
                     columns,
                 } => {
+                    let layout = p.list_layout(frame.viewport).expect("list geometry");
+                    let area = layout.content;
                     let header = usize::from(!columns.is_empty());
                     let rows = usize::from(area.height).saturating_sub(header);
                     let offset = self.scroll.get(&p.id).copied().unwrap_or(0);
@@ -351,6 +361,20 @@ impl Runtime {
                                 style,
                             );
                         }
+                    }
+                    if let Some(track) = layout.track {
+                        crate::chrome::scrollbar::render(
+                            track,
+                            &mut buf,
+                            theme,
+                            crate::chrome::scrollbar::viewport_thumb(
+                                track.height,
+                                items.len().min(u32::MAX as usize) as u32,
+                                offset.min(u32::MAX as usize) as u32,
+                                layout.rows as u32,
+                                1,
+                            ),
+                        );
                     }
                 }
                 Widget::Slider { value, max, .. } | Widget::Meter { value, max } => {
@@ -574,6 +598,8 @@ impl Runtime {
                 selected,
                 columns,
             } => {
+                let layout = p.list_layout(frame.viewport).expect("list geometry");
+                let rect = pixel_rect(layout.content);
                 let height = 24u16;
                 let header = u16::from(!columns.is_empty());
                 let rows = rect.height / height;
@@ -639,6 +665,22 @@ impl Runtime {
                             if item.enabled { ink } else { &style.colors.dim },
                             12,
                             false,
+                        );
+                    }
+                }
+                if let Some(track) = layout.track {
+                    if let Some(thumb) = crate::chrome::scrollbar::viewport_thumb(
+                        track.height,
+                        items.len().min(u32::MAX as usize) as u32,
+                        offset.min(u32::MAX as usize) as u32,
+                        layout.rows as u32,
+                        frame.viewport.scale(true),
+                    ) {
+                        surface.fill(pixel_rect(track), &style.colors.title, 0);
+                        surface.fill(
+                            PixelRect::new(track.x, track.y + thumb.start, track.width, thumb.len),
+                            &crate::native_surface::style::hex(style.palette.accent),
+                            0,
                         );
                     }
                 }

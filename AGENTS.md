@@ -284,6 +284,19 @@ loss recovery. The Linux native-graphics workflow now runs that gallery gate
 and uploads its screenshots/report. This does not complete the control catalog
 or any of the five reference application migrations above.
 
+2026-10-31: retained UI lists/tables/trees now own scrollbar drawing and drag
+capture in both presentations. `Placement::list_layout` is the shared content,
+track and visible-row contract. Rows and headings must stay outside the track;
+scrolling does not rewrite selection or snap back on repaint. Preserve outside
+release and cancellation on resize, modal/target changes and wheel input.
+This closes the shared list control gap; custom article/editor scrollbars and
+the five application migrations remain separate work.
+The private Kitty/Xvfb gallery passed real cell thumb dragging, native scrollbar
+pixels, modal/presentation preservation and display recovery (17–19 ms theme
+delivery in this run). Minimal and all-feature suites, strict Clippy and all
+five disposable consumer checks passed. Cell modal backing is cleared before
+painting to prevent background text/borders and selection styles leaking in.
+
 ## Crossterm coordinate parser
 
 Crossterm 0.29.0 panics on zero SGR mouse/cursor coordinates in debug builds.

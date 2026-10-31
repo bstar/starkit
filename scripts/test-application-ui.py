@@ -219,10 +219,49 @@ def handle_result(args, result, target_window_id, boss):
                  'Enter did not activate the selected theme and close its dialog')
         stable('theme-closed')
         report['list_activation'] = True
+        # Font zoom reduces the cell viewport even on tiled Wayland desktops.
+        # Use actual terminal grid/pixels to inject the same SGR gesture a mouse
+        # sends, rather than reaching into the persistent controller's state.
+        rc('send-key', '--match', 'id:1', 'alt+t')
+        stable('scrollbar-dialog-native')
         rc('send-key', '--match', 'id:1', 'f9')
-        wait_for(lambda: b'LIBRARY' in rc('get-text', '--match', 'id:1'),
-                 'Cell presentation did not show compact border headings')
-        table_text = rc('get-text', '--match', 'id:1').decode()
+        original_lines = json.loads(rc('ls'))[0]['tabs'][0]['windows'][0]['lines']
+        rc('set-font-size', '32')
+        wait_for(lambda: json.loads(rc('ls'))[0]['tabs'][0]['windows'][0]['lines'] < original_lines,
+                 'Private terminal font zoom did not reduce its cell grid')
+        def scrollbar_text():
+            text = rc('get-text', '--match', 'id:1').decode()
+            (output / 'scrollbar-cells.txt').write_text(text)
+            return text if '█' in text and 'theme' in text.casefold() else None
+        wait_for(scrollbar_text, 'Overflowing theme list has no cell scrollbar')
+        rc('send-key', '--match', 'id:1', 'home')
+        stable('scrollbar-before')
+        scroll_text = scrollbar_text()
+        window = json.loads(rc('ls'))[0]['tabs'][0]['windows'][0]
+        dimensions, _ = pixels('scrollbar-grid')
+        bar_y, bar_x = next((y, row.index('█')) for y, row in enumerate(scroll_text.splitlines()) if '█' in row)
+        pixel_mouse = 'pixel_mouse: true' in application_log.read_text()
+        def mouse(code, column, row, release=False):
+            if pixel_mouse:
+                x = int((column + .5) * dimensions[0] / window['columns']) + 1
+                y = int((row + .5) * dimensions[1] / window['lines']) + 1
+            else:
+                x, y = column + 1, row + 1
+            rc('send-text', '--match', 'id:1', f'\x1b[<{code};{x};{y}{"m" if release else "M"}')
+        mouse(0, bar_x, bar_y)
+        mouse(32, 0, window['lines'] - 1)
+        mouse(0, 0, window['lines'] - 1, True)
+        scrolled = wait_for(lambda: (text if (text := scrollbar_text()) and text != scroll_text else None),
+                            'Dragging the real scrollbar did not scroll the theme list')
+        pixels('scrollbar-after')
+        assert 'theme' in scrolled.casefold(), 'Scrollbar release activated a row or escaped its modal'
+        rc('send-key', '--match', 'id:1', 'escape')
+        rc('set-font-size', '0')
+        report['list_scrollbar_drag'] = True
+        def restored_table():
+            text = rc('get-text', '--match', 'id:1').decode()
+            return text if all(value in text for value in ('LIBRARY', 'Time', '3:04', '12:09', '1:42')) else None
+        table_text = wait_for(restored_table, 'Scrollbar proof did not restore the complete cell table')
         column_edges = []
         for value in ('Time', '3:04', '12:09', '1:42'):
             row = next((row for row in table_text.splitlines() if value in row), None)

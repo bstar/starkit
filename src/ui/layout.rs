@@ -67,6 +67,41 @@ pub struct Placement {
     pub modal: bool,
     pub columns: Vec<ColumnPlacement>,
 }
+
+/// List text and its optional scrollbar in the resolved frame's coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListLayout {
+    pub content: Rect,
+    pub track: Option<Rect>,
+    /// Complete data rows, excluding a table's heading.
+    pub rows: usize,
+}
+
+impl Placement {
+    pub fn list_layout(&self, viewport: Viewport) -> Option<ListLayout> {
+        list_layout(&self.widget, self.body, viewport)
+    }
+}
+
+fn list_layout(widget: &Widget, body: Rect, viewport: Viewport) -> Option<ListLayout> {
+    let Widget::List { items, columns, .. } = widget else {
+        return None;
+    };
+    let row = viewport.scale(false);
+    let header = u16::from(!columns.is_empty()) * row;
+    let rows = body.height.saturating_sub(header) / row;
+    let width = viewport.scale(true);
+    let track = (rows > 0 && items.len() > usize::from(rows) && body.width > width)
+        .then(|| Rect::new(body.right() - width, body.y + header, width, rows * row));
+    Some(ListLayout {
+        content: Rect {
+            width: body.width - track.map_or(0, |r| r.width),
+            ..body
+        },
+        track,
+        rows: usize::from(rows),
+    })
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub viewport: Viewport,
@@ -320,6 +355,9 @@ fn table_columns(
     if columns.is_empty() {
         return Ok(vec![]);
     }
+    let body = list_layout(&node.widget, body, viewport)
+        .expect("list geometry")
+        .content;
     let area = if viewport.presentation == Presentation::Graphics {
         text_area(body)
     } else {
@@ -457,7 +495,7 @@ pub(super) fn same_geometry(a: &View, b: &View) -> bool {
             _ => false,
         }
 }
-pub(super) fn refresh(view: &View, frame: &mut Frame) {
+pub(super) fn refresh(view: &View, frame: &mut Frame) -> anyhow::Result<()> {
     fn visit<'a>(
         node: &'a Node,
         enabled: bool,
@@ -476,9 +514,13 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) {
     }
     for p in &mut frame.placements {
         if let Some((node, enabled)) = nodes.get(&p.id) {
+            let previous = p.list_layout(frame.viewport);
             p.widget = node.widget.clone();
             p.enabled = *enabled;
             p.focusable = node.focusable();
+            if previous != p.list_layout(frame.viewport) {
+                p.columns = table_columns(node, p.body, frame.viewport)?;
+            }
             for (index, column) in p.columns.iter_mut().enumerate() {
                 column.align = node
                     .table_columns
@@ -487,6 +529,7 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) {
             }
         }
     }
+    Ok(())
 }
 
 pub(super) fn same_targets(a: &View, b: &View) -> bool {

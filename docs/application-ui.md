@@ -109,6 +109,15 @@ separately from `Event::Selected`. Modified navigation keys remain available
 to registered shortcuts. External selection and reordering reveal the selected
 item; wheel scrolling can inspect other rows without changing selection.
 
+Overflowing lists, tables and trees reserve a scrollbar beside their text.
+`Placement::list_layout` exposes the content rectangle, track and complete row
+count from the same frame used for drawing and hit tests. Dragging and track
+clicks scroll independently of selection; keyboard navigation reveals the
+selected row again. A held thumb retains its grip outside the track and releases
+at either end. Resize, modal changes, disabled/removed targets and wheel input
+cancel the drag. Short lists reclaim the column without solving the pane layout
+again. Native thumbs have an eight-pixel minimum; cells use one row.
+
 A slider retains pointer capture outside its bounds and emits a final bounded
 `Adjusted` value on release. Resize, disabled/removed targets and presentation
 changes cancel capture. Wheel scrolling cancels a pending list click so release
@@ -166,6 +175,12 @@ It retains screenshots
 and a JSON report in the `application-ui-proof` artifact. Run it locally with
 `--kitty PATH --kitten PATH --binary PATH --output DIRECTORY`, selecting
 `--display-server wayland` for a Wayland desktop or `x11` for Xvfb.
+
+The gallery includes an overflowing theme list. Its terminal proof uses real
+SGR mouse input to drag the cell scrollbar after font zoom, restores the grid,
+and then verifies table alignment and display recovery. Cell modal interiors
+clear the covered background before drawing, so underlying borders and row
+selection styles cannot leak through an empty dialog area.
 
 These checks cover the shared contract and gallery. Reference application
 migrations and physical macOS/Sixel/iTerm2 acceptance remain separate gates.

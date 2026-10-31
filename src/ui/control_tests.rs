@@ -30,6 +30,154 @@ fn viewports() -> [Viewport; 2] {
 }
 
 #[test]
+fn cell_modal_clears_background_text_borders_and_styles_inside_its_bounds() {
+    let view = View::new(Node::list(
+        "background",
+        (0..20)
+            .map(|i| Item::new(format!("row-{i}"), "BACKGROUND".repeat(8)))
+            .collect(),
+        Some("row-0".into()),
+    ))
+    .modal(
+        Node::pane("modal", Heading::new("Dialog"), Node::label("empty", ""))
+            .width(Size::fixed(20))
+            .height(Size::fixed(5)),
+    );
+    let mut ui = Runtime::new(view, Registry::default(), theme()).unwrap();
+    let viewport = Viewport::cells(40, 12);
+    let body = ui
+        .frame(viewport)
+        .unwrap()
+        .get(&"modal".into())
+        .unwrap()
+        .body;
+    let buffer = ui.render_cells(viewport).unwrap();
+    for y in body.y..body.bottom() {
+        for x in body.x..body.right() {
+            assert_eq!(buffer[(x, y)].symbol(), " ");
+            assert_eq!(buffer[(x, y)].bg, crate::chrome::rgb(ui.theme.panel_bg));
+            assert!(buffer[(x, y)].modifier.is_empty());
+        }
+    }
+    assert_eq!(
+        buffer[(0, 0)].symbol(),
+        "B",
+        "background outside modal survives"
+    );
+}
+
+#[test]
+fn list_scrollbar_drag_uses_reserved_geometry_without_selecting_rows() {
+    for viewport in viewports() {
+        let mut ui =
+            Runtime::new(list(Some("row-0".into())), Registry::default(), theme()).unwrap();
+        let placement = ui
+            .frame(viewport)
+            .unwrap()
+            .get(&"list".into())
+            .unwrap()
+            .clone();
+        let layout = placement.list_layout(viewport).unwrap();
+        let track = layout.track.expect("overflowing list scrollbar");
+        assert_eq!(layout.content.right(), track.x);
+        assert!(placement
+            .columns
+            .iter()
+            .all(|column| column.area.right() <= track.x));
+        assert_eq!(track.y, placement.body.y + viewport.scale(false));
+        assert!(ui.pointer(track.x, track.bottom() - 1, true).is_empty());
+        assert_eq!(ui.captured(), Some(&Id::from("list")));
+        assert!(ui.scroll[&Id::from("list")] > 0);
+        let after_jump = ui.scroll[&Id::from("list")];
+        ui.frame(viewport).unwrap();
+        assert_eq!(
+            ui.scroll[&Id::from("list")],
+            after_jump,
+            "painting must not reveal selection again"
+        );
+        assert!(ui.drag(0, u16::MAX).is_empty());
+        assert_eq!(ui.scroll[&Id::from("list")], 20 - layout.rows);
+        assert!(ui.pointer(0, 0, false).is_empty());
+        assert_eq!(ui.scroll[&Id::from("list")], 0);
+        assert!(ui.captured().is_none());
+        assert!(
+            matches!(&ui.view.root.widget, Widget::List {selected: Some(id),..} if id.0=="row-0")
+        );
+        if viewport.presentation == Presentation::Cells {
+            let buffer = ui.render_cells(viewport).unwrap();
+            assert_eq!(
+                buffer[(track.x, track.y)].symbol(),
+                crate::chrome::scrollbar::GLYPH
+            );
+        } else {
+            ui.render_surface(viewport).unwrap().validate().unwrap();
+        }
+    }
+}
+
+#[test]
+fn list_scrollbar_capture_cancels_on_resize_removal_wheel_and_modal_changes() {
+    let viewport = Viewport::cells(40, 5);
+    let mut ui = Runtime::new(list(Some("row-0".into())), Registry::default(), theme()).unwrap();
+    let track = ui
+        .frame(viewport)
+        .unwrap()
+        .get(&"list".into())
+        .unwrap()
+        .list_layout(viewport)
+        .unwrap()
+        .track
+        .unwrap();
+    ui.pointer(track.x, track.y, true);
+    assert!(ui.captured().is_some());
+    ui.frame(Viewport::cells(50, 6)).unwrap();
+    assert!(ui.captured().is_none());
+    let before = ui.scroll[&Id::from("list")];
+    assert!(ui.drag(0, u16::MAX).is_empty());
+    assert_eq!(ui.scroll[&Id::from("list")], before);
+    ui.frame(viewport).unwrap();
+    ui.pointer(track.x, track.y, true);
+    ui.scroll(1, 1, 3);
+    assert!(ui.captured().is_none());
+    ui.pointer(track.x, track.y, true);
+    ui.set_view(list(Some("row-0".into())).modal(Node::field("modal", "")))
+        .unwrap();
+    assert!(ui.captured().is_none());
+    assert!(ui.drag(0, u16::MAX).is_empty());
+    ui.set_view(list(Some("row-0".into()))).unwrap();
+    ui.frame(viewport).unwrap();
+    ui.pointer(track.x, track.y, true);
+    ui.set_view(View::new(Node::label("empty", "No rows")))
+        .unwrap();
+    assert!(ui.captured().is_none());
+}
+
+#[test]
+fn list_scrollbar_presence_and_columns_refresh_without_a_new_pane_layout() {
+    let mut ui = Runtime::new(list(None), Registry::default(), theme()).unwrap();
+    let viewport = Viewport::cells(40, 5);
+    ui.frame(viewport).unwrap();
+    let layouts = ui.layout_count();
+    let mut short = list(None);
+    if let Widget::List { items, .. } = &mut short.root.widget {
+        *items = vec![Item::new("single", "Only row")].into();
+    }
+    ui.set_view(short).unwrap();
+    let placement = ui.frame(viewport).unwrap().get(&"list".into()).unwrap();
+    assert!(placement.list_layout(viewport).unwrap().track.is_none());
+    assert_eq!(placement.columns[0].area.right(), placement.body.right());
+    assert_eq!(ui.layout_count(), layouts);
+    ui.set_view(list(None)).unwrap();
+    let placement = ui.frame(viewport).unwrap().get(&"list".into()).unwrap();
+    assert_eq!(
+        placement.columns[0].area.right(),
+        placement.body.right() - 1
+    );
+    assert!(placement.list_layout(viewport).unwrap().track.is_some());
+    assert_eq!(ui.layout_count(), layouts);
+}
+
+#[test]
 fn explicit_focus_survives_hiding_and_modal_input_stays_trapped() {
     let view = |hidden| {
         View::new(Node::column(
@@ -298,7 +446,7 @@ fn table_clipping_preserves_clusters_and_the_neighboring_column() {
         items[1].columns[0] = "👩‍💻abc".into();
     }
     let mut ui = Runtime::new(view, Registry::default(), theme()).unwrap();
-    let buffer = ui.render_cells(Viewport::cells(11, 4)).unwrap();
+    let buffer = ui.render_cells(Viewport::cells(12, 4)).unwrap();
     assert_eq!(buffer[(0, 1)].symbol(), "a\u{301}");
     assert_eq!(buffer[(1, 1)].symbol(), "日");
     assert_eq!(buffer[(3, 1)].symbol(), "…");
@@ -307,6 +455,7 @@ fn table_clipping_preserves_clusters_and_the_neighboring_column() {
     assert_eq!(buffer[(3, 2)].symbol(), "…");
     assert_eq!(buffer[(4, 1)].symbol(), " ");
     assert_eq!(buffer[(10, 1)].symbol(), "1");
+    assert_eq!(buffer[(11, 1)].symbol(), crate::chrome::scrollbar::GLYPH);
 }
 
 #[test]
@@ -344,7 +493,7 @@ fn table_columns_stay_bounded_in_tiny_viewports_and_legacy_tables_remain_support
         .get(&"list".into())
         .unwrap()
         .columns;
-    assert_eq!((columns[0].area.width, columns[1].area.width), (10, 10));
+    assert_eq!((columns[0].area.width, columns[1].area.width), (9, 10));
 }
 
 #[test]

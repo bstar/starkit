@@ -129,9 +129,17 @@ fn start_for(track: Rect, room: u16, grip: u16, y: u16) -> u16 {
 /// or there is no track to draw on -- which callers take as "do not draw a
 /// scrollbar" rather than a zero-length one.
 pub fn thumb(track: u16, total: u32, above: u32) -> Option<Thumb> {
-    thumb_visible(track, total, above, u32::from(track), 1)
+    viewport_thumb(track, total, above, u32::from(track), 1)
 }
-fn thumb_visible(track: u16, total: u32, above: u32, visible: u32, minimum: u16) -> Option<Thumb> {
+/// Thumb geometry with independent track units and visible content rows.
+/// Pixel callers should use a minimum large enough to grab.
+pub fn viewport_thumb(
+    track: u16,
+    total: u32,
+    above: u32,
+    visible: u32,
+    minimum: u16,
+) -> Option<Thumb> {
     let g = geometry_visible(track, total, visible, minimum)?;
     let above = std::cmp::min(u64::from(above), g.scrolled);
     // Rounded to the nearest row rather than truncated, so that `above ==
@@ -307,9 +315,10 @@ pub struct Grab {
 /// -- and `above` is that jump applied now, in the same call, rather than
 /// waiting for the drag that will usually follow immediately after.
 pub fn grab(track: Rect, total: u32, above: u32, x: u16, y: u16) -> Option<(Grab, u32)> {
-    grab_visible(track, total, above, x, y, u32::from(track.height), 1)
+    viewport_grab(track, total, above, x, y, u32::from(track.height), 1)
 }
-fn grab_visible(
+/// Start a drag using the same viewport and minimum as [`viewport_thumb`].
+pub fn viewport_grab(
     track: Rect,
     total: u32,
     above: u32,
@@ -322,7 +331,7 @@ fn grab_visible(
         return None;
     }
     let g = geometry_visible(track.height, total, visible, minimum)?;
-    let t = thumb_visible(track.height, total, above, visible, minimum)?;
+    let t = viewport_thumb(track.height, total, above, visible, minimum)?;
     let row = y - track.y;
 
     if row >= t.start && row < t.start + t.len {
@@ -480,7 +489,7 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// Visible track and thumb geometry, shared with native pixel presentation.
     pub fn visible(&self) -> impl Iterator<Item = (Rect, Thumb)> + '_ {
         self.drawn.iter().filter_map(|bar| {
-            thumb_visible(
+            viewport_thumb(
                 bar.track.height,
                 bar.total,
                 bar.above,
@@ -503,7 +512,7 @@ impl<K: Copy + Eq> Scrollbars<K> {
     /// the press is not this scrollbar's to answer.
     pub fn press(&mut self, x: u16, y: u16) -> Option<(K, u32)> {
         for bar in &self.drawn {
-            if let Some((g, above)) = grab_visible(
+            if let Some((g, above)) = viewport_grab(
                 bar.track,
                 bar.total,
                 bar.above,
