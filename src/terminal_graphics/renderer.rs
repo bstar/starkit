@@ -345,9 +345,7 @@ pub struct KittyPresenter {
     cached: Option<(String, u16, u16)>,
     regions: Option<RegionCache>,
     invalidated: bool,
-    repair_cursor: usize,
     repaired_at: std::time::Instant,
-    repair_batch_at: std::time::Instant,
 }
 struct RegionCache {
     pixels: Arc<RgbaImage>,
@@ -365,9 +363,7 @@ impl Default for KittyPresenter {
             cached: None,
             regions: None,
             invalidated: false,
-            repair_cursor: 0,
             repaired_at: std::time::Instant::now(),
-            repair_batch_at: std::time::Instant::now(),
         }
     }
 }
@@ -401,31 +397,32 @@ impl KittyPresenter {
         }
         self.next = self.next.wrapping_add(1);
         let id = self.next;
-        write!(out, "\x1b[?2026h\x1b[H")?;
-        let chunks: Vec<_> = png.as_bytes().chunks(4096).collect();
-        for (index, chunk) in chunks.iter().enumerate() {
-            let more = usize::from(index + 1 < chunks.len());
-            if index == 0 {
-                write!(
-                    out,
-                    "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={columns},r={rows},m={more};"
-                )?;
-            } else {
-                write!(out, "\x1b_Gm={more};")?;
-            }
-            out.write_all(chunk)?;
-            out.write_all(b"\x1b\\")?;
-        }
+        write_image(out, id, png)?;
+        let mut commit = Vec::new();
+        commit.write_all(b"\x1b[?2026h")?;
+        place_region(
+            &mut commit,
+            id,
+            super::protocol::Rect {
+                x: 0,
+                y: 0,
+                width: columns,
+                height: rows,
+            },
+        )?;
         if let Some(old) = self.previous {
-            write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
+            write!(commit, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
         }
-        if let Some(regions) = self.regions.take() {
-            for (_, old) in regions.placements.into_iter().filter(|(_, id)| *id != 0) {
-                write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
+        if let Some(regions) = &self.regions {
+            for (_, old) in regions.placements.iter().filter(|(_, id)| *id != 0) {
+                write!(commit, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
             }
         }
-        out.write_all(b"\x1b[?2026l")?;
+        commit.write_all(b"\x1b[?2026l")?;
+        out.write_all(&commit)?;
         out.flush()?;
+        self.regions = None;
+        self.repaired_at = std::time::Instant::now();
         self.previous = Some(id);
         self.cached = Some((png.to_owned(), columns, rows));
         self.invalidated = false;
@@ -434,107 +431,89 @@ impl KittyPresenter {
     pub fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
         self.cached = None;
         self.invalidated = false;
+        let mut retired = Vec::new();
         if let Some(id) = self.previous.take() {
-            write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
+            retired.push(id);
         }
         if let Some(regions) = self.regions.take() {
-            for (_, id) in regions.placements.into_iter().filter(|(_, id)| *id != 0) {
-                write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
+            retired.extend(
+                regions
+                    .placements
+                    .into_iter()
+                    .map(|(_, id)| id)
+                    .filter(|id| *id != 0),
+            );
+        }
+        if !retired.is_empty() {
+            let mut commit = Vec::new();
+            commit.write_all(b"\x1b[?2026h")?;
+            for id in retired {
+                write!(commit, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
             }
+            commit.write_all(b"\x1b[?2026l")?;
+            out.write_all(&commit)?;
         }
         out.flush()
     }
 
-    /// Terminal placements are disposable. Restore from the retained framebuffer
-    /// without asking the application to rebuild state or restarting its renderer.
+    /// Restore all placements in one transaction from retained encodings.
+    /// Uploads remain invisible until the complete replacement is ready.
     pub fn repaint(&mut self, out: &mut impl Write) -> anyhow::Result<usize> {
-        self.invalidated = true;
-        if let Some(old) = &self.regions {
-            let pixels = old.pixels.clone();
-            let viewport = super::protocol::Viewport {
-                columns: old.columns,
-                rows: old.rows,
-                width: pixels.width(),
-                height: pixels.height(),
-                generation: old.generation,
-            };
-            self.present_pixels(pixels, viewport, out)
+        if let Some(regions) = &mut self.regions {
+            let mut placements = Vec::with_capacity(regions.placements.len());
+            let mut retired = Vec::new();
+            let mut payload = 0;
+            for (index, (rect, old)) in regions.placements.iter().copied().enumerate() {
+                if old == 0 {
+                    placements.push((rect, 0));
+                    continue;
+                }
+                self.next = self.next.wrapping_add(1);
+                write_image(out, self.next, &regions.encoded[index])?;
+                payload += regions.encoded[index].len();
+                placements.push((rect, self.next));
+                retired.push(old);
+            }
+            if !retired.is_empty() {
+                let mut commit = Vec::new();
+                commit.write_all(b"\x1b[?2026h")?;
+                for (rect, id) in placements.iter().filter(|(_, id)| *id != 0) {
+                    place_region(&mut commit, *id, *rect)?;
+                }
+                for id in retired {
+                    write!(commit, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\")?;
+                }
+                commit.write_all(b"\x1b[?2026l")?;
+                out.write_all(&commit)?;
+                out.flush()?;
+                regions.placements = placements;
+            }
+            self.repaired_at = std::time::Instant::now();
+            Ok(payload)
         } else if let Some((png, columns, rows)) = self.cached.clone() {
+            self.invalidated = true;
             Ok(self.present(&png, columns, rows, out)?)
         } else {
             Ok(0)
         }
     }
 
-    /// Refresh a bounded portion of the terminal's backing store, including
-    /// unchanged regions. Quiet panels must recover even while another animates.
-    /// Reuse encoded pixels rather than rerasterizing or reencoding the desktop.
+    /// Recover quiet terminal placements as one complete frame. A rolling tile
+    /// sweep visibly repaints a static UI and wakes the compositor every 100 ms.
+    /// Reuse cached PNGs, without rasterizing or encoding the frame again.
     pub fn maintain(&mut self, out: &mut impl Write) -> anyhow::Result<usize> {
         self.maintain_at(std::time::Instant::now(), out)
     }
-
     fn maintain_at(
         &mut self,
         now: std::time::Instant,
         out: &mut impl Write,
     ) -> anyhow::Result<usize> {
-        let count = self.regions.as_ref().map_or(1, |r| {
-            r.placements.iter().filter(|(_, id)| *id != 0).count()
-        });
-        if count == 0 {
-            self.repaired_at = now;
+        if now.saturating_duration_since(self.repaired_at) < std::time::Duration::from_secs(2) {
             return Ok(0);
         }
-        let interval = std::time::Duration::from_secs(2) / count as u32;
-        // Batch recovery rather than waking Kitty/the desktop compositor for
-        // each tile (a large window can have over 150). Live app video and
-        // changed chrome still present immediately through their own paths.
-        if now.saturating_duration_since(self.repaired_at) < interval
-            || now.saturating_duration_since(self.repair_batch_at)
-                < std::time::Duration::from_millis(100)
-        {
-            return Ok(0);
-        }
-        self.repair_batch_at = now;
-        let Some(regions) = &mut self.regions else {
-            self.repaired_at = now;
-            return self.repaint(out);
-        };
-        // Catch up after expensive raster/live-frame work without an unbounded
-        // upload burst. A slow event loop must not starve quiet regions forever.
-        let due = (now.saturating_duration_since(self.repaired_at).as_nanos() / interval.as_nanos())
-            .min(count as u128)
-            .min(8) as usize;
-        let mut payload = 0;
-        let mut repaired = 0;
-        let mut retired = Vec::new();
-        out.write_all(b"\x1b[?2026h")?;
-        for _ in 0..due {
-            let index = loop {
-                let index = self.repair_cursor % regions.placements.len();
-                self.repair_cursor = self.repair_cursor.wrapping_add(1);
-                if regions.placements[index].1 != 0 {
-                    break index;
-                }
-            };
-            let (rect, old) = regions.placements[index];
-            self.next = self.next.wrapping_add(1);
-            let image = self.next;
-            write_region(out, image, rect, &regions.encoded[index])?;
-            retired.push(old);
-            regions.placements[index].1 = image;
-            payload += regions.encoded[index].len();
-            repaired += 1;
-            if payload >= 256_000 {
-                break;
-            }
-        }
-        for old in retired {
-            write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
-        }
-        out.write_all(b"\x1b[?2026l")?;
-        out.flush()?;
-        self.repaired_at += interval * repaired;
+        let payload = self.repaint(out)?;
+        self.repaired_at = now;
         Ok(payload)
     }
 
@@ -710,7 +689,8 @@ impl KittyPresenter {
             retired.push(id);
         }
         if !changes.is_empty() {
-            out.write_all(b"\x1b[?2026h")?;
+            let mut commit = Vec::new();
+            commit.write_all(b"\x1b[?2026h")?;
             for (index, rect, encoded) in changes {
                 if same_geometry && placements[index].1 != 0 {
                     retired.push(placements[index].1);
@@ -719,7 +699,8 @@ impl KittyPresenter {
                     0
                 } else {
                     self.next = self.next.wrapping_add(1);
-                    write_region(out, self.next, rect, &encoded)?;
+                    write_image(out, self.next, &encoded)?;
+                    place_region(&mut commit, self.next, rect)?;
                     self.next
                 };
                 placements[index] = (rect, id);
@@ -728,10 +709,14 @@ impl KittyPresenter {
             // All replacement regions are placed before retiring any old
             // region, including after resize or a complete-frame fallback.
             for old in retired {
-                write!(out, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
+                write!(commit, "\x1b_Ga=d,d=I,i={old},q=2;\x1b\\")?;
             }
-            out.write_all(b"\x1b[?2026l")?;
+            commit.write_all(b"\x1b[?2026l")?;
+            out.write_all(&commit)?;
             out.flush()?;
+        }
+        if !same_geometry {
+            self.repaired_at = std::time::Instant::now();
         }
         self.previous = None;
         self.cached = None;
@@ -748,23 +733,15 @@ impl KittyPresenter {
     }
 }
 
-fn write_region(
-    out: &mut impl Write,
-    id: u32,
-    rect: super::protocol::Rect,
-    encoded: &str,
-) -> io::Result<()> {
-    write!(out, "\x1b[{};{}H", rect.y + 1, rect.x + 1)?;
+// Transmit-only keeps the current frame visible even if payload transfer spans
+// several terminal refreshes or outlives synchronized-output's safety timeout.
+fn write_image(out: &mut impl Write, id: u32, encoded: &str) -> io::Result<()> {
     let chunks = encoded.as_bytes().chunks(4096);
     let count = chunks.len();
     for (part, chunk) in chunks.enumerate() {
         let more = usize::from(part + 1 < count);
         if part == 0 {
-            write!(
-                out,
-                "\x1b_Ga=T,f=100,t=d,z=2,i={id},p=1,q=2,C=1,c={},r={},m={more};",
-                rect.width, rect.height
-            )?;
+            write!(out, "\x1b_Ga=t,f=100,t=d,i={id},q=2,m={more};")?;
         } else {
             write!(out, "\x1b_Gm={more};")?;
         }
@@ -772,6 +749,16 @@ fn write_region(
         out.write_all(b"\x1b\\")?;
     }
     Ok(())
+}
+fn place_region(out: &mut impl Write, id: u32, rect: super::protocol::Rect) -> io::Result<()> {
+    write!(
+        out,
+        "\x1b[{};{}H\x1b_Ga=p,i={id},p=1,z=2,q=2,C=1,c={},r={};\x1b\\",
+        rect.y + 1,
+        rect.x + 1,
+        rect.width,
+        rect.height
+    )
 }
 
 pub fn encode_pixels(pixels: &RgbaImage) -> anyhow::Result<String> {
@@ -1026,14 +1013,15 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
-    // Interpret emitted image uploads/deletions independently of the cache.
-    // Compose the remaining placements to catch missing/incorrect patches.
+    // Interpret transmitted images separately from their visible placements.
+    // Uploading data must never alter the displayed frame before the commit.
     fn apply_wire(wire: &[u8], images: &mut BTreeMap<u32, (u32, u32, RgbaImage)>) {
         let wire = std::str::from_utf8(wire).unwrap();
         let mut rest = wire;
         let mut position = (0, 0);
         let mut id = 0;
         let mut payload = String::new();
+        let mut loaded = BTreeMap::new();
         while let Some(start) = rest.find("\x1b_G") {
             if let Some(cursor) = rest[..start]
                 .rsplit("\x1b[")
@@ -1053,28 +1041,129 @@ mod tests {
                 .split(',')
                 .filter_map(|s| s.split_once('='))
                 .collect();
-            if fields.get("a") == Some(&"d") {
-                images.remove(&fields["i"].parse().unwrap());
-            } else {
-                if let Some(value) = fields.get("i") {
-                    id = value.parse().unwrap();
-                    payload.clear();
+            match fields.get("a").copied() {
+                Some("d") => {
+                    images.remove(&fields["i"].parse().unwrap());
                 }
-                payload.push_str(chunk);
-                if fields.get("m") == Some(&"0") {
-                    let png = base64::engine::general_purpose::STANDARD
-                        .decode(&payload)
-                        .unwrap();
-                    let image = crate::image::load_from_memory(&png).unwrap().into_rgba8();
+                Some("p") => {
+                    let id = fields["i"].parse().unwrap();
+                    let image = loaded
+                        .remove(&id)
+                        .expect("placement before completed upload");
                     images.insert(id, (position.0 * 4, position.1 * 8, image));
+                }
+                _ => {
+                    if let Some(value) = fields.get("i") {
+                        id = value.parse().unwrap();
+                        payload.clear();
+                    }
+                    payload.push_str(chunk);
+                    if fields.get("m") == Some(&"0") {
+                        let png = base64::engine::general_purpose::STANDARD
+                            .decode(&payload)
+                            .unwrap();
+                        loaded.insert(
+                            id,
+                            crate::image::load_from_memory(&png).unwrap().into_rgba8(),
+                        );
+                    }
                 }
             }
             rest = &rest[end + 2..];
         }
     }
+    fn assert_atomic_swap(wire: &[u8], count: usize) -> usize {
+        let wire = std::str::from_utf8(wire).unwrap();
+        let split = wire
+            .find("\x1b[?2026h")
+            .expect("missing synchronized commit");
+        let (uploads, commit) = wire.split_at(split);
+        assert_eq!(uploads.matches("a=t,").count(), count);
+        assert!(
+            !uploads.contains("a=T,") && !uploads.contains("a=p,") && !uploads.contains("a=d,"),
+            "upload phase changed visible placements"
+        );
+        assert!(
+            !commit.contains("a=t,") && !commit.contains("_Gm="),
+            "large payloads must not consume synchronized-output's timeout"
+        );
+        assert_eq!(commit.matches("a=p,").count(), count);
+        assert_eq!(commit.matches("\x1b[?2026h").count(), 1);
+        assert_eq!(commit.matches("\x1b[?2026l").count(), 1);
+        assert!(commit.ends_with("\x1b[?2026l"));
+        if let Some(retire) = commit.find("a=d,") {
+            assert!(
+                commit.rfind("a=p,").unwrap() < retire,
+                "retired the old frame before placing replacements"
+            );
+        }
+        assert!(
+            commit.len() < 64 * 1024,
+            "commit grew beyond a bounded control-only batch"
+        );
+        split
+    }
 
     #[test]
-    fn large_idle_windows_batch_recovery_instead_of_waking_for_each_tile() {
+    fn slow_uploads_keep_the_previous_frame_visible_until_the_whole_swap() {
+        let viewport = super::super::protocol::Viewport {
+            columns: 80,
+            rows: 20,
+            width: 320,
+            height: 160,
+            generation: 1,
+        };
+        let mut presenter = KittyPresenter::default();
+        let mut images = BTreeMap::new();
+        let mut wire = Vec::new();
+        let frame = Arc::new(RgbaImage::from_pixel(
+            320,
+            160,
+            crate::image::Rgba([20, 30, 40, 255]),
+        ));
+        presenter
+            .present_pixels(frame, viewport, &mut wire)
+            .unwrap();
+        assert_atomic_swap(&wire, 9);
+        let initial_wire = wire.clone();
+        apply_wire(&wire, &mut images);
+        let original = images.clone();
+        wire.clear();
+        let next = Arc::new(RgbaImage::from_pixel(
+            320,
+            160,
+            crate::image::Rgba([200, 100, 50, 255]),
+        ));
+        presenter
+            .present_pixels(next.clone(), viewport, &mut wire)
+            .unwrap();
+        let split = assert_atomic_swap(&wire, 9);
+        if let Some(directory) = std::env::var_os("STAR_KIT_REFRESH_FIXTURE") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("initial.bin"), initial_wire).unwrap();
+            std::fs::write(directory.join("replacement.bin"), &wire).unwrap();
+            std::fs::write(
+                directory.join("viewport.json"),
+                serde_json::to_vec(&viewport).unwrap(),
+            )
+            .unwrap();
+        }
+        // A terminal can process these uploads across many refreshes. They
+        // carry no placement/deletion commands, even outside sync protection.
+        apply_wire(&wire[..split], &mut images);
+        assert_eq!(images, original);
+        apply_wire(&wire, &mut images);
+        let mut composed = RgbaImage::new(320, 160);
+        for (x, y, image) in images.values() {
+            crate::image::imageops::replace(&mut composed, image, i64::from(*x), i64::from(*y));
+        }
+        assert_eq!(composed, *next);
+        assert!(original.keys().all(|id| !images.contains_key(id)));
+    }
+
+    #[test]
+    fn large_idle_windows_recover_whole_frames_without_rolling_visible_updates() {
         let viewport = super::super::protocol::Viewport {
             columns: 264,
             rows: 130,
@@ -1092,29 +1181,40 @@ mod tests {
         presenter
             .present_pixels(frame, viewport, &mut wire)
             .unwrap();
+        let regions = presenter.regions.as_ref().unwrap();
+        let count = regions.placements.len();
+        assert!(count > 100 && count <= 256);
+        let encoded = regions.encoded.clone();
         let start = std::time::Instant::now();
         presenter.repaired_at = start;
-        presenter.repair_batch_at = start;
+        for millis in [60, 100, 110, 1000, 1999] {
+            wire.clear();
+            assert_eq!(
+                presenter
+                    .maintain_at(start + std::time::Duration::from_millis(millis), &mut wire)
+                    .unwrap(),
+                0
+            );
+            assert!(
+                wire.is_empty(),
+                "idle maintenance started a rolling partial repaint"
+            );
+        }
+        wire.clear();
+        let sent = presenter
+            .maintain_at(start + std::time::Duration::from_secs(2), &mut wire)
+            .unwrap();
+        assert_eq!(sent, encoded.iter().map(String::len).sum::<usize>());
+        assert_eq!(presenter.regions.as_ref().unwrap().encoded, encoded);
+        assert_atomic_swap(&wire, count);
         wire.clear();
         assert_eq!(
             presenter
-                .maintain_at(start + std::time::Duration::from_millis(60), &mut wire)
+                .maintain_at(start + std::time::Duration::from_millis(2100), &mut wire)
                 .unwrap(),
             0
         );
         assert!(wire.is_empty());
-        presenter
-            .maintain_at(start + std::time::Duration::from_millis(100), &mut wire)
-            .unwrap();
-        assert!((2..=8).contains(&String::from_utf8_lossy(&wire).matches("a=T").count()));
-        wire.clear();
-        presenter
-            .maintain_at(start + std::time::Duration::from_millis(110), &mut wire)
-            .unwrap();
-        assert!(
-            wire.is_empty(),
-            "Recovery must not spin to catch up between batches"
-        );
     }
 
     #[test]
@@ -1162,7 +1262,7 @@ mod tests {
             1,
             "Visible overlays must still recover after image loss"
         );
-        assert_eq!(String::from_utf8_lossy(&wire).matches("a=T").count(), 1);
+        assert_eq!(String::from_utf8_lossy(&wire).matches("a=t").count(), 1);
 
         // Closing the overlay deletes its texture, revealing native text.
         frame.put_pixel(20, 20, crate::image::Rgba([0, 0, 0, 0]));
@@ -1172,7 +1272,7 @@ mod tests {
             .unwrap();
         apply_wire(&wire, &mut images);
         assert!(images.is_empty());
-        assert!(!String::from_utf8_lossy(&wire).contains("a=T"));
+        assert!(!String::from_utf8_lossy(&wire).contains("a=t"));
         wire.clear();
         presenter
             .maintain_at(now + std::time::Duration::from_secs(6), &mut wire)
@@ -1208,9 +1308,9 @@ mod tests {
             .unwrap();
         assert!(delta < full / 2, "delta {delta}, full {full}");
         let commands = std::str::from_utf8(&wire).unwrap();
-        assert_eq!(commands.matches("a=T").count(), 1);
+        assert_eq!(commands.matches("a=t").count(), 1);
         assert_eq!(commands.matches("a=d").count(), 1);
-        assert!(commands.find("a=T").unwrap() < commands.find("a=d").unwrap());
+        assert!(commands.find("a=t").unwrap() < commands.find("a=d").unwrap());
         apply_wire(&wire, &mut images);
         assert_eq!(images.len(), 9);
         let mut composed = RgbaImage::new(320, 160);
@@ -1319,10 +1419,10 @@ mod tests {
             assert!(presenter.maintain_at(now, &mut wire).unwrap() > 0);
             let commands = String::from_utf8_lossy(&wire);
             assert!(
-                (1..=8).contains(&commands.matches("a=T").count()),
-                "Repair must stay bounded"
+                commands.matches("a=t").count() == count,
+                "Repair must restore the entire cached frame"
             );
-            assert!(commands.find("a=T").unwrap() < commands.find("a=d").unwrap());
+            assert!(commands.find("a=t").unwrap() < commands.find("a=d").unwrap());
             apply_wire(&wire, &mut images);
             assert!(images.len() <= count);
         }
@@ -1447,7 +1547,7 @@ mod tests {
         wire.clear();
         presenter.present_regions(&png, resized, &mut wire).unwrap();
         assert_eq!(
-            std::str::from_utf8(&wire).unwrap().matches("a=T").count(),
+            std::str::from_utf8(&wire).unwrap().matches("a=t").count(),
             6
         );
         apply_wire(&wire, &mut images);
@@ -1579,7 +1679,7 @@ mod tests {
         out.clear();
         p.present("BBBB", 80, 24, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.find("a=T").unwrap() < s.find("a=d").unwrap());
+        assert!(s.find("a=t").unwrap() < s.find("a=d").unwrap());
         assert!(p.present("\x1b", 80, 24, &mut vec![]).is_err());
     }
 }

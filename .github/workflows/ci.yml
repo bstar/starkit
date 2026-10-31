@@ -204,6 +204,16 @@ jobs:
             --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
             --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
             --example "$PWD/target/debug/examples/terminal-graphics" --frontend-failure --output kitty-frontend-loss
+      - name: Atomic presentation during slow uploads
+        if: runner.os == 'Linux'
+        env:
+          STAR_KIT_REFRESH_FIXTURE: atomic-refresh-fixture
+        run: |
+          cargo test --features terminal-graphics --lib slow_uploads_keep_the_previous_frame_visible_until_the_whole_swap
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a python3 scripts/test-atomic-refresh.py \
+            --kitty "$RUNNER_TEMP/kitty-proof/runtime/bin/kitty" \
+            --kitten "$RUNNER_TEMP/kitty-proof/runtime/bin/kitten" \
+            --frames atomic-refresh-fixture --output atomic-refresh-proof
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -216,3 +226,4 @@ jobs:
             live-canvas-proof/
             ui-gallery/
             application-ui-proof/
+            atomic-refresh-proof/
