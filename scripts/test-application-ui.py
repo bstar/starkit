@@ -153,6 +153,17 @@ def handle_result(args, result, target_window_id, boss):
         wait_for(lambda: difference(submitted, pixels('password-edited')) > .0001,
                  'Password editing did not update the masked field/caret')
         password = stable('password-edited')
+        rc('send-key', '--match', 'id:1', 'f9')
+        live_cells = wait_for(lambda: (text if b'Third line' in (text := rc('get-text', '--match', 'id:1')) else None),
+                              'F9 could not switch while a modal password field had focus')
+        assert b'private-fixture' not in live_cells and b'PW-PROBE-739' not in live_cells, \
+            'Modal presentation switch exposed password plaintext'
+        pixels('text-controls-live-cells')
+        rc('send-key', '--match', 'id:1', 'f9')
+        wait_for(lambda: b'Third line' not in rc('get-text', '--match', 'id:1'),
+                 'Modal editor could not return to graphical presentation')
+        password = stable('password-returned')
+        report['modal_presentation_switch'] = True
         rc('send-key', '--match', 'id:1', 'escape')
         wait_for(lambda: difference(password, pixels('text-controls-closed')) > .0001,
                  'Text controls dialog did not close')

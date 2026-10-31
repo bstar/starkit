@@ -78,6 +78,23 @@ including read-only dialogs with no focusable controls.
 
 Tab/Shift+Tab traverse enabled controls. Text fields handle editing before
 application shortcuts; modal content traps focus and background commands.
+User Tab/pointer focus changes emit `Event::Focused`. Apps with controlled
+focus return their current target from `Application::focus_request` and update
+it from that event, including when users focus a toolbar or dialog button.
+`Runtime::request_focus` also supports direct hosts. Hidden or disabled targets
+retain their request while visible controls remain usable; a modal still traps
+focus. Unknown targets and non-interactive nodes are errors.
+
+`Application::layout` observes the resolved frame for domain paging without
+solving another layout. `intercept_key` supports stateful domain chords before
+standard controls; the host filters key releases first. Ordinary shortcuts
+belong in the command registry. Custom slots receive bounded local
+`CustomScroll` events through both cell and native hosts; lists retain their
+own scroll and stable selection.
+Inline editors emit `Cancelled` on Escape so an application can close a filter
+or restore its draft. Modal Escape still emits `CancelModal`. F9 presentation
+switching remains available inside modal editors without discarding their values.
+
 `Node::multiline` creates a message composer: Enter submits and Shift/Alt+Enter
 inserts a newline. Vertical movement follows wrapped rows in cells and logical
 lines in native proportional text, including before a delayed paint and after

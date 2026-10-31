@@ -3,10 +3,11 @@ use super::{
     command::{Command, Registry},
     Event, Frame, Runtime, View,
 };
+use crate::crossterm::event::{KeyEvent, KeyEventKind};
 use crate::theme::Theme;
 #[cfg(all(feature = "terminal-graphics", unix))]
 use crate::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    crossterm::event::{KeyCode, KeyModifiers},
     terminal_graphics::{
         capabilities::Capabilities,
         protocol::{Input, Scene, ServerMessage, Viewport},
@@ -20,6 +21,18 @@ pub trait Application: super::content::Content {
     fn view(&self) -> View;
     fn commands(&self) -> Vec<Command>;
     fn event(&mut self, event: Event);
+    /// The application's requested control; hidden controls retain their request.
+    fn focus_request(&self) -> Option<super::Id> {
+        None
+    }
+    /// Stateful domain chords can consume a key before standard editing/navigation.
+    /// Releases are filtered by the host. Ordinary shortcuts belong in commands.
+    fn intercept_key(&mut self, _key: KeyEvent) -> bool {
+        false
+    }
+    /// Inspect resolved geometry for domain paging/custom content.
+    /// This callback must not rebuild the UI or start another layout solver.
+    fn layout(&mut self, _frame: &Frame) {}
     fn theme(&self) -> Option<Theme> {
         None
     }
@@ -82,7 +95,10 @@ pub struct Host<A: Application> {
 }
 impl<A: Application> Host<A> {
     pub fn new(app: A, theme: Theme) -> anyhow::Result<Self> {
-        let ui = Runtime::new(app.view(), Registry::new(app.commands())?, theme)?;
+        let mut ui = Runtime::new(app.view(), Registry::new(app.commands())?, theme)?;
+        if let Some(id) = app.focus_request() {
+            ui.request_focus(id)?;
+        }
         Ok(Self {
             app,
             ui,
@@ -120,6 +136,9 @@ impl<A: Application> Host<A> {
         let captured = self.ui.captured().is_some();
         let result = Registry::new(self.app.commands()).and_then(|commands| {
             self.ui.update(self.app.view(), commands)?;
+            if let Some(id) = self.app.focus_request() {
+                self.ui.request_focus(id)?;
+            }
             Ok(())
         });
         if captured && self.ui.captured().is_none() {
@@ -150,6 +169,17 @@ impl<A: Application> Host<A> {
             self.app.event(event);
         }
         self.refresh();
+    }
+    fn key(&mut self, key: KeyEvent) -> Vec<Event> {
+        if key.kind == KeyEventKind::Release {
+            return vec![];
+        }
+        if self.app.intercept_key(key) {
+            self.refresh();
+            vec![]
+        } else {
+            self.ui.key(key)
+        }
     }
 }
 impl<A: Application> Host<A> {
@@ -192,6 +222,9 @@ impl<A: Application> Host<A> {
                         .is_none_or(|frame| frame.viewport != viewport)
                 {
                     let mut buffer = self.ui.render_cells_with(viewport, &mut self.app)?;
+                    if let Some(frame) = self.ui.current_frame() {
+                        self.app.layout(frame);
+                    }
                     profile.adapt_buffer(&mut buffer);
                     terminal.draw(|frame| *frame.buffer_mut() = buffer)?;
                 }
@@ -199,7 +232,7 @@ impl<A: Application> Host<A> {
                     continue;
                 }
                 let events = match event::read()? {
-                    InputEvent::Key(key) => self.ui.key(key),
+                    InputEvent::Key(key) => self.key(key),
                     InputEvent::Paste(text) => self.ui.paste(&text),
                     InputEvent::Mouse(mouse) => match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
@@ -211,18 +244,15 @@ impl<A: Application> Host<A> {
                         MouseEventKind::Drag(MouseButton::Left) => {
                             self.ui.drag(mouse.column, mouse.row)
                         }
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                            self.ui.scroll(
-                                mouse.column,
-                                mouse.row,
-                                if mouse.kind == MouseEventKind::ScrollUp {
-                                    -3
-                                } else {
-                                    3
-                                },
-                            );
-                            vec![]
-                        }
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.ui.scroll(
+                            mouse.column,
+                            mouse.row,
+                            if mouse.kind == MouseEventKind::ScrollUp {
+                                -3
+                            } else {
+                                3
+                            },
+                        ),
                         _ => vec![],
                     },
                     InputEvent::Resize(_, _) => {
@@ -285,7 +315,12 @@ impl<A: Application> Controller for Host<A> {
                 .ui
                 .render_scene_with(viewport, self.cells, &mut self.app)
             {
-                Ok(scene) => self.scene = Some(scene),
+                Ok(scene) => {
+                    if let Some(frame) = self.ui.current_frame() {
+                        self.app.layout(frame);
+                    }
+                    self.scene = Some(scene);
+                }
                 Err(error) => {
                     tracing::error!(%error, "Application UI scene failed");
                     self.failure = Some(format!("{error:#}"));
@@ -302,7 +337,7 @@ impl<A: Application> Controller for Host<A> {
                 ref code,
                 modifiers,
             } => decode_key(code, modifiers)
-                .map(|key| self.ui.key(key))
+                .map(|key| self.key(key))
                 .unwrap_or_default(),
             Input::Paste { ref text } => self.ui.paste(text),
             Input::Pointer {
@@ -338,8 +373,7 @@ impl<A: Application> Controller for Host<A> {
                     "drag" => self.ui.drag(x, y),
                     "scroll_up" | "scroll_down" => {
                         self.ui
-                            .scroll(x, y, if action == "scroll_up" { -3 } else { 3 });
-                        vec![]
+                            .scroll(x, y, if action == "scroll_up" { -3 } else { 3 })
                     }
                     _ => self.ui.pointer(x, y, action == "down"),
                 }
@@ -459,4 +493,130 @@ fn decode_key(code: &str, modifiers: u8) -> Option<KeyEvent> {
         key,
         KeyModifiers::from_bits_truncate(modifiers),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        crossterm::event::{KeyCode, KeyModifiers},
+        theme::{ThemeFile, BUILTINS},
+        ui::{Id, Node, Viewport as UiViewport, Widget},
+    };
+    struct Example {
+        focus: Id,
+        value: String,
+        interceptions: usize,
+        layout_width: u16,
+        wheel: i16,
+    }
+    impl super::super::content::Content for Example {}
+    impl Application for Example {
+        fn view(&self) -> View {
+            View::new(Node::column(
+                "root",
+                vec![
+                    Node::field("field", &self.value),
+                    Node::new(
+                        "article",
+                        Widget::Custom {
+                            fallback: "Article".into(),
+                            revision: 0,
+                        },
+                    ),
+                ],
+            ))
+        }
+        fn commands(&self) -> Vec<Command> {
+            vec![]
+        }
+        fn event(&mut self, event: Event) {
+            match event {
+                Event::Focused(id) => self.focus = id,
+                Event::CustomScroll { lines, .. } => self.wheel += lines,
+                _ => {}
+            }
+        }
+        fn focus_request(&self) -> Option<Id> {
+            Some(self.focus.clone())
+        }
+        fn intercept_key(&mut self, key: KeyEvent) -> bool {
+            if key.code == KeyCode::F(2) {
+                self.interceptions += 1;
+                self.value = "Chord".into();
+                true
+            } else {
+                false
+            }
+        }
+        fn layout(&mut self, frame: &Frame) {
+            self.layout_width = frame.viewport.width;
+        }
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+    fn host() -> Host<Example> {
+        Host::new(
+            Example {
+                focus: "field".into(),
+                value: String::new(),
+                interceptions: 0,
+                layout_width: 0,
+                wheel: 0,
+            },
+            Theme::resolve(&ThemeFile::parse(BUILTINS[0].toml).unwrap()),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn host_delivers_focus_changes_and_consumed_chords_without_replaying_key_releases() {
+        let mut host = host();
+        host.ui.frame(UiViewport::cells(80, 24)).unwrap();
+        let events = host.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        host.dispatch(events);
+        assert_eq!(host.app.focus, Id::from("article"));
+        assert_eq!(
+            host.ui.frame(UiViewport::cells(80, 24)).unwrap().focus,
+            Some("article".into())
+        );
+        let mut release = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(host.key(release).is_empty());
+        assert_eq!(host.app.interceptions, 0);
+        assert!(host
+            .key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE))
+            .is_empty());
+        assert_eq!(host.app.interceptions, 1);
+        assert!(
+            matches!(&host.ui.view().root.children[0].widget,Widget::Field { value,.. } if value=="Chord")
+        );
+    }
+    #[cfg(all(feature = "terminal-graphics", unix))]
+    #[test]
+    fn native_host_reports_display_geometry_and_routes_bounded_wheel_input() {
+        let mut host = host();
+        let viewport = Viewport {
+            width: 800,
+            height: 600,
+            ..Default::default()
+        };
+        host.scene(viewport);
+        assert_eq!(host.app.layout_width, 800);
+        let area = host.frame().unwrap().get(&"article".into()).unwrap().body;
+        host.input(Input::Pointer {
+            action: "scroll_down".into(),
+            button: 0,
+            x: 0,
+            y: 0,
+            pixel: Some([u32::from(area.x + 1), u32::from(area.y + 1)]),
+            modifiers: 0,
+        });
+        assert_eq!(host.app.wheel, 3);
+        host.scene(Viewport {
+            width: 400,
+            ..viewport
+        });
+        assert_eq!(host.app.layout_width, 400);
+    }
 }

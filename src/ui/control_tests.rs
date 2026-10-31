@@ -29,6 +29,150 @@ fn viewports() -> [Viewport; 2] {
     [Viewport::cells(40, 5), Viewport::graphics(336, 136)]
 }
 
+#[test]
+fn explicit_focus_survives_hiding_and_modal_input_stays_trapped() {
+    let view = |hidden| {
+        View::new(Node::column(
+            "root",
+            vec![
+                Node::field("first", ""),
+                Node::field("second", "").hidden(hidden),
+            ],
+        ))
+    };
+    let mut ui = Runtime::new(view(false), Registry::default(), theme()).unwrap();
+    assert!(ui.request_focus("second".into()).unwrap());
+    let viewport = Viewport::cells(80, 24);
+    assert_eq!(ui.frame(viewport).unwrap().focus, Some("second".into()));
+    ui.set_view(view(true)).unwrap();
+    assert_eq!(ui.frame(viewport).unwrap().focus, Some("first".into()));
+    ui.set_view(view(false)).unwrap();
+    assert_eq!(ui.frame(viewport).unwrap().focus, Some("second".into()));
+    ui.set_view(view(false).modal(Node::field("dialog", "")))
+        .unwrap();
+    ui.request_focus("first".into()).unwrap();
+    assert_eq!(ui.frame(viewport).unwrap().focus, Some("dialog".into()));
+    assert!(ui.request_focus("missing".into()).is_err());
+    assert!(ui.request_focus("root".into()).is_err());
+    assert_eq!(
+        ui.key(key(KeyCode::Char('x'))),
+        vec![Event::Changed {
+            id: "dialog".into(),
+            value: "x".into()
+        }]
+    );
+    ui.set_view(view(false)).unwrap();
+    assert_eq!(ui.frame(viewport).unwrap().focus, Some("second".into()));
+}
+
+#[test]
+fn inline_editor_cancellation_reports_its_owner_and_retains_the_draft() {
+    let mut ui = Runtime::new(
+        View::new(Node::field("filter", "Draft")),
+        Registry::default(),
+        theme(),
+    )
+    .unwrap();
+    ui.frame(Viewport::cells(40, 1)).unwrap();
+    assert_eq!(
+        ui.key(key(KeyCode::Esc)),
+        vec![Event::Cancelled {
+            id: "filter".into()
+        }]
+    );
+    assert_eq!(ui.fields[&Id::from("filter")].text(), "Draft");
+}
+
+#[test]
+fn tab_and_pointer_report_user_focus_before_content_input() {
+    let mut ui = Runtime::new(
+        View::new(Node::row(
+            "root",
+            vec![
+                Node::field("first", ""),
+                Node::new(
+                    "content",
+                    Widget::Custom {
+                        fallback: "Article".into(),
+                        revision: 0,
+                    },
+                ),
+            ],
+        )),
+        Registry::default(),
+        theme(),
+    )
+    .unwrap();
+    let viewport = Viewport::cells(80, 24);
+    ui.frame(viewport).unwrap();
+    assert_eq!(
+        ui.key(key(KeyCode::Tab)),
+        vec![Event::Focused("content".into())]
+    );
+    assert_eq!(
+        ui.key(key(KeyCode::BackTab)),
+        vec![Event::Focused("first".into())]
+    );
+    let area = ui
+        .frame(viewport)
+        .unwrap()
+        .get(&"content".into())
+        .unwrap()
+        .body;
+    assert_eq!(
+        ui.pointer(area.x + 2, area.y + 3, true),
+        vec![
+            Event::Focused("content".into()),
+            Event::CustomPointer {
+                id: "content".into(),
+                x: 2,
+                y: 3,
+                pressed: true
+            },
+        ]
+    );
+    assert_eq!(
+        ui.scroll(area.x + 2, area.y + 3, 3),
+        vec![Event::CustomScroll {
+            id: "content".into(),
+            x: 2,
+            y: 3,
+            lines: 3
+        }]
+    );
+    assert!(ui.scroll(area.x + 2, area.y + 3, 0).is_empty());
+    assert_eq!(ui.layout_count(), 1);
+}
+
+#[cfg(all(feature = "terminal-graphics", unix))]
+#[test]
+fn presentation_switch_is_available_inside_modal_fields_without_losing_their_value() {
+    let view =
+        View::new(Node::field("background", "Background")).modal(Node::field("dialog", "Draft"));
+    let mut ui = Runtime::new(view, Registry::new(command::standard()).unwrap(), theme()).unwrap();
+    ui.render_surface(Viewport::graphics(800, 600)).unwrap();
+    assert_eq!(
+        ui.key(key(KeyCode::F(9))),
+        vec![Event::Command("kit.presentation".into())]
+    );
+    ui.render_cells(Viewport::cells(100, 40)).unwrap();
+    assert_eq!(ui.current_frame().unwrap().focus, Some("dialog".into()));
+    assert_eq!(ui.fields[&Id::from("dialog")].text(), "Draft");
+    assert_eq!(
+        ui.key(key(KeyCode::Char('x'))),
+        vec![Event::Changed {
+            id: "dialog".into(),
+            value: "Draftx".into()
+        }]
+    );
+    assert_eq!(
+        ui.key(key(KeyCode::F(9))),
+        vec![Event::Command("kit.presentation".into())]
+    );
+    ui.render_surface(Viewport::graphics(800, 600)).unwrap();
+    assert_eq!(ui.fields[&Id::from("dialog")].text(), "Draftx");
+}
+
 fn table(width: u16, align: Align) -> View {
     View::new(Node::table_with_columns(
         "list",

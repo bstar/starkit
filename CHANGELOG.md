@@ -8,6 +8,16 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.13 application migration hooks)
+
+- Controlled focus requests and user focus events retain modal isolation and
+  restore temporarily hidden controls. Custom slots receive local wheel events
+  in cells and native sessions.
+- Hosts expose resolved geometry for domain paging and a release-filtered key
+  interceptor for stateful chords, while ordinary commands/editing stay shared.
+- Inline cancellation reports its editor, and presentation switching remains
+  available inside modal fields without losing their values or focus.
+
 ### Added (0.13 table control candidate)
 
 - Shared bounded table columns with fixed, fill and weighted widths, left/center/

@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Command(Id),
+    /// A user moved keyboard focus with Tab or a pointer press.
+    Focused(Id),
     Changed {
         id: Id,
         value: String,
@@ -19,6 +21,10 @@ pub enum Event {
     Submitted {
         id: Id,
         value: String,
+    },
+    /// Escape in an inline editor. Modal Escape remains `CancelModal`.
+    Cancelled {
+        id: Id,
     },
     Selected {
         id: Id,
@@ -44,6 +50,12 @@ pub enum Event {
         x: u16,
         y: u16,
         pressed: bool,
+    },
+    CustomScroll {
+        id: Id,
+        x: u16,
+        y: u16,
+        lines: i16,
     },
 }
 
@@ -181,6 +193,26 @@ impl Runtime {
     }
     pub fn cancel_pointer(&mut self) {
         self.capture = None;
+    }
+    /// Request a mounted control, including one temporarily hidden or disabled.
+    /// The active modal still traps focus. A hidden request is remembered while
+    /// the runtime chooses an available control, then restored when it returns.
+    pub fn request_focus(&mut self, id: Id) -> anyhow::Result<bool> {
+        let target = self
+            .node_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown focus target {}", id.0))?;
+        anyhow::ensure!(
+            target.accepts_focus(),
+            "Control {} cannot receive focus",
+            id.0
+        );
+        if self.requested_focus.as_ref() == Some(&id) {
+            return Ok(false);
+        }
+        self.requested_focus = Some(id);
+        self.cancel_pointer();
+        self.invalidate();
+        Ok(true)
     }
     pub fn frame(&mut self, viewport: Viewport) -> anyhow::Result<&Frame> {
         if self
@@ -404,9 +436,13 @@ impl Runtime {
                     (Some(i), true) => (i + order.len() - 1) % order.len(),
                     _ => 0,
                 };
+                let changed = self.focus.as_ref() != Some(&order[next]);
                 self.focus = Some(order[next].clone());
                 self.requested_focus = self.focus.clone();
                 self.invalidate();
+                if changed {
+                    return vec![Event::Focused(order[next].clone())];
+                }
             }
             return vec![];
         }
@@ -445,7 +481,7 @@ impl Runtime {
                             value: field.text().into(),
                         }]
                     }
-                    Edit::Cancel => return vec![],
+                    Edit::Cancel => return vec![Event::Cancelled { id }],
                     Edit::Ignored => {}
                 }
             }
@@ -525,7 +561,10 @@ impl Runtime {
         if let Some(command) = self.registry.resolve(key, &ancestry) {
             let allowed = self.view.modal.is_none()
                 || matches!(command.scope, Scope::View(_))
-                || matches!(command.id.0.as_str(), "kit.repaint" | "kit.help");
+                || matches!(
+                    command.id.0.as_str(),
+                    "kit.repaint" | "kit.help" | "kit.presentation"
+                );
             if allowed {
                 return vec![Event::Command(command.id.clone())];
             }
@@ -636,16 +675,24 @@ impl Runtime {
         }
         vec![]
     }
-    pub fn scroll(&mut self, x: u16, y: u16, lines: i16) {
+    pub fn scroll(&mut self, x: u16, y: u16, lines: i16) -> Vec<Event> {
         if !self.prepare_input() {
-            return;
+            return vec![];
         }
         let Some(frame) = &self.frame else {
-            return;
+            return vec![];
         };
         let Some(p) = frame.hit(x, y) else {
-            return;
+            return vec![];
         };
+        if matches!(p.widget, Widget::Custom { .. }) && lines != 0 {
+            return vec![Event::CustomScroll {
+                id: p.id.clone(),
+                x: x - p.body.x,
+                y: y - p.body.y,
+                lines,
+            }];
+        }
         if let Widget::List { items, columns, .. } = &p.widget {
             let rows = usize::from(p.body.height / frame.viewport.scale(false))
                 .saturating_sub(usize::from(!columns.is_empty()))
@@ -658,6 +705,7 @@ impl Runtime {
                 .min(items.len().saturating_sub(rows));
             self.invalidate();
         }
+        vec![]
     }
     fn activate(&mut self, id: &Id) -> Vec<Event> {
         let Some(p) = self.frame.as_ref().and_then(|f| f.get(id)) else {
@@ -683,16 +731,21 @@ impl Runtime {
             return vec![];
         };
         let hit = frame.hit(x, y).cloned();
+        let mut events = vec![];
         if pressed {
             self.capture = hit
                 .as_ref()
                 .map(|p| (p.id.clone(), frame.viewport.generation));
             if let Some(p) = &hit {
+                if self.focus.as_ref() != Some(&p.id) {
+                    events.push(Event::Focused(p.id.clone()));
+                }
                 self.focus = Some(p.id.clone());
                 self.requested_focus = self.focus.clone();
                 self.invalidate();
                 if matches!(p.widget, Widget::Slider { .. }) {
-                    return self.slider_pointer(p.id.clone(), x, false);
+                    events.extend(self.slider_pointer(p.id.clone(), x, false));
+                    return events;
                 }
             }
         } else {
@@ -746,13 +799,13 @@ impl Runtime {
             }
         }
         if let Some(p) = hit.filter(|p| pressed && matches!(p.widget, Widget::Custom { .. })) {
-            return vec![Event::CustomPointer {
+            events.push(Event::CustomPointer {
                 id: p.id,
                 x: x - p.body.x,
                 y: y - p.body.y,
                 pressed,
-            }];
+            });
         }
-        vec![]
+        events
     }
 }

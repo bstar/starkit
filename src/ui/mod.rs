@@ -347,16 +347,18 @@ impl Node {
         self
     }
     pub(crate) fn focusable(&self) -> bool {
-        self.enabled
-            && matches!(
-                self.widget,
-                Widget::Button { .. }
-                    | Widget::Checkbox { .. }
-                    | Widget::Field { .. }
-                    | Widget::List { .. }
-                    | Widget::Custom { .. }
-                    | Widget::Slider { .. }
-            )
+        self.enabled && self.accepts_focus()
+    }
+    pub(crate) fn accepts_focus(&self) -> bool {
+        matches!(
+            self.widget,
+            Widget::Button { .. }
+                | Widget::Checkbox { .. }
+                | Widget::Field { .. }
+                | Widget::List { .. }
+                | Widget::Custom { .. }
+                | Widget::Slider { .. }
+        )
     }
 }
 

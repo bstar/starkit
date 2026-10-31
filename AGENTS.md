@@ -340,6 +340,16 @@ gallery exercises full scenes and real Kitty checks aligned track durations.
 Native right alignment is an additive shaped-text hint; old peers keep readable
 left alignment. This remains control catalog work, not a WIRE migration.
 
+2026-10-31: WIRE's first hosted shell exposed missing focus requests, custom
+wheel delivery and inline cancellation. `Application::focus_request` is a
+controlled target: handle user `Focused` events, including toolbar/dialog
+buttons, rather than re-requesting an old pane after every input. Its layout
+callback observes KIT's resolved frame; it must not introduce another solver.
+The real WIRE fixture also exposed F9 being trapped by a modal editor. Keep
+presentation switching available in modals while background domain shortcuts
+remain blocked. Full app migrations and the remaining catalog/media gates
+are still pending.
+
 The hosted FFmpeg 6 movie gate exposed decoder frames with square/unknown SAR
 for an anamorphic container. Processing now applies valid stream SAR before
 frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata
