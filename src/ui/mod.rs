@@ -11,7 +11,7 @@ mod render;
 mod runtime;
 
 pub use crate::panes::{Overflow, Size, Visibility, Wrap};
-pub use layout::{Frame, Placement, Presentation, Viewport};
+pub use layout::{ColumnPlacement, Frame, Placement, Presentation, Viewport};
 pub use runtime::{Event, Runtime};
 
 /// Stable within an application's UI, including across filtering and reordering.
@@ -54,6 +54,39 @@ pub struct Item {
     pub depth: u16,
     pub checked: bool,
     pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// A table column uses the same bounded logical sizes as application panes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Column {
+    pub heading: String,
+    pub width: Size,
+    pub align: Align,
+}
+impl Column {
+    pub fn new(heading: impl Into<String>) -> Self {
+        Self {
+            heading: heading.into(),
+            width: Size::fill(1),
+            align: Align::Left,
+        }
+    }
+    pub fn width(mut self, width: Size) -> Self {
+        self.width = width;
+        self
+    }
+    pub fn align(mut self, align: Align) -> Self {
+        self.align = align;
+        self
+    }
 }
 impl Item {
     pub fn new(id: impl Into<Id>, label: impl Into<String>) -> Self {
@@ -122,6 +155,8 @@ pub struct Node {
     pub priority: u16,
     pub wrap: Wrap,
     pub enabled: bool,
+    /// Empty uses equal-width columns for a list with headings.
+    pub table_columns: Vec<Column>,
 }
 impl Node {
     pub fn new(id: impl Into<Id>, widget: Widget) -> Self {
@@ -136,6 +171,7 @@ impl Node {
             priority: 0,
             wrap: Wrap::Never,
             enabled: true,
+            table_columns: vec![],
         }
     }
     pub fn row(id: impl Into<Id>, children: Vec<Self>) -> Self {
@@ -220,6 +256,21 @@ impl Node {
                 step: 1,
             },
         )
+    }
+    pub fn table_with_columns(
+        id: impl Into<Id>,
+        columns: Vec<Column>,
+        items: Vec<Item>,
+        selected: Option<Id>,
+    ) -> Self {
+        let mut node = Self::table(
+            id,
+            columns.iter().map(|c| c.heading.clone()).collect(),
+            items,
+            selected,
+        );
+        node.table_columns = columns;
+        node
     }
     pub fn meter(id: impl Into<Id>, value: u16, max: u16) -> Self {
         Self::new(

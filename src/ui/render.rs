@@ -49,6 +49,90 @@ fn field_window(value: &str, cursor: usize, secret: bool) -> (String, usize) {
         (value[start..end].to_string(), cursor - start)
     }
 }
+
+fn cell_column(
+    buf: &mut Buffer,
+    column: &super::ColumnPlacement,
+    y: u16,
+    text: &str,
+    style: Style,
+) {
+    if column.area.width == 0 {
+        return;
+    }
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let text = if crate::wrap::width_of(&clean) <= column.area.width {
+        clean
+    } else {
+        let mut clipped = String::new();
+        let mut used: u16 = 0;
+        for (_, cluster) in crate::wrap::clusters(&clean) {
+            let width = crate::wrap::width_of(cluster);
+            if used.saturating_add(width) > column.area.width - 1 {
+                break;
+            }
+            clipped.push_str(cluster);
+            used += width;
+        }
+        clipped.push('…');
+        clipped
+    };
+    let spare = column
+        .area
+        .width
+        .saturating_sub(crate::wrap::width_of(&text));
+    let offset = match column.align {
+        super::Align::Left => 0,
+        super::Align::Center => spare / 2,
+        super::Align::Right => spare,
+    };
+    line(
+        buf,
+        Rect::new(column.area.x + offset, y, column.area.width - offset, 1),
+        &text,
+        style,
+    );
+}
+fn native_column(
+    surface: &mut Surface,
+    column: &super::ColumnPlacement,
+    y: u16,
+    height: u16,
+    text: String,
+    ink: &str,
+    bold: bool,
+) {
+    if column.area.width == 0 || height == 0 {
+        return;
+    }
+    let rect = PixelRect::new(column.area.x, y, column.area.width, height);
+    match column.align {
+        super::Align::Left => surface.text(rect, text, ink, 12, bold),
+        super::Align::Center => surface.text_centered(rect, text, ink, 12, bold),
+        super::Align::Right => surface.text_right(rect, text, ink, 12, bold),
+    }
+}
+fn item_column(item: &super::Item, column: usize, native: bool) -> String {
+    let value = item.columns.get(column).map_or("", String::as_str);
+    if column == 0 {
+        format!(
+            "{}{}{}",
+            " ".repeat(usize::from(item.depth.min(16)) * 2),
+            if item.checked {
+                if native {
+                    "✓ "
+                } else {
+                    "[x] "
+                }
+            } else {
+                ""
+            },
+            value
+        )
+    } else {
+        value.into()
+    }
+}
 impl Runtime {
     pub fn render_cells(&mut self, viewport: Viewport) -> anyhow::Result<Buffer> {
         self.render_cells_with(viewport, &mut super::content::EmptyContent)
@@ -213,12 +297,15 @@ impl Runtime {
                     let rows = usize::from(area.height).saturating_sub(header);
                     let offset = self.scroll.get(&p.id).copied().unwrap_or(0);
                     if header > 0 {
-                        line(
-                            &mut buf,
-                            area,
-                            &columns.join("  "),
-                            style.fg(rgb(theme.header_fg)).add_modifier(Modifier::BOLD),
-                        );
+                        for (column, heading) in p.columns.iter().zip(columns) {
+                            cell_column(
+                                &mut buf,
+                                column,
+                                area.y,
+                                heading,
+                                style.fg(rgb(theme.header_fg)).add_modifier(Modifier::BOLD),
+                            );
+                        }
                     }
                     for (row, item) in items.iter().skip(offset).take(rows).enumerate() {
                         let rect = Rect::new(area.x, area.y + (row + header) as u16, area.width, 1);
@@ -241,17 +328,29 @@ impl Runtime {
                             style
                         };
                         buf.set_style(rect, style);
-                        line(
-                            &mut buf,
-                            rect,
-                            &format!(
-                                "{}{}{}",
-                                " ".repeat(usize::from(item.depth.min(16)) * 2),
-                                if item.checked { "[x] " } else { "" },
-                                item.columns.join("  ")
-                            ),
-                            style,
-                        );
+                        if header > 0 {
+                            for (index, column) in p.columns.iter().enumerate() {
+                                cell_column(
+                                    &mut buf,
+                                    column,
+                                    rect.y,
+                                    &item_column(item, index, false),
+                                    style,
+                                );
+                            }
+                        } else {
+                            line(
+                                &mut buf,
+                                rect,
+                                &format!(
+                                    "{}{}{}",
+                                    " ".repeat(usize::from(item.depth.min(16)) * 2),
+                                    if item.checked { "[x] " } else { "" },
+                                    item.columns.join("  ")
+                                ),
+                                style,
+                            );
+                        }
                     }
                 }
                 Widget::Slider { value, max, .. } | Widget::Meter { value, max } => {
@@ -479,18 +578,17 @@ impl Runtime {
                 let header = u16::from(!columns.is_empty());
                 let rows = rect.height / height;
                 if header > 0 {
-                    surface.text(
-                        PixelRect::new(
-                            rect.x + 4.min(rect.width),
+                    for (column, heading) in p.columns.iter().zip(columns) {
+                        native_column(
+                            surface,
+                            column,
                             rect.y,
-                            rect.width.saturating_sub(8),
                             height.min(rect.height),
-                        ),
-                        columns.join("  "),
-                        ink,
-                        12,
-                        true,
-                    );
+                            heading.clone(),
+                            ink,
+                            true,
+                        );
+                    }
                 }
                 let offset = self.scroll.get(&p.id).copied().unwrap_or(0);
                 for (row, item) in items
@@ -512,18 +610,37 @@ impl Runtime {
                             0,
                         );
                     }
-                    surface.text(
-                        PixelRect::new(row.x + 4, row.y, row.width.saturating_sub(8), row.height),
-                        format!(
-                            "{}{}{}",
-                            " ".repeat(usize::from(item.depth.min(16)) * 2),
-                            if item.checked { "✓ " } else { "" },
-                            item.columns.join("  ")
-                        ),
-                        if item.enabled { ink } else { &style.colors.dim },
-                        12,
-                        false,
-                    );
+                    if header > 0 {
+                        for (index, column) in p.columns.iter().enumerate() {
+                            native_column(
+                                surface,
+                                column,
+                                row.y,
+                                height,
+                                item_column(item, index, true),
+                                if item.enabled { ink } else { &style.colors.dim },
+                                false,
+                            );
+                        }
+                    } else {
+                        surface.text(
+                            PixelRect::new(
+                                row.x + 4,
+                                row.y,
+                                row.width.saturating_sub(8),
+                                row.height,
+                            ),
+                            format!(
+                                "{}{}{}",
+                                " ".repeat(usize::from(item.depth.min(16)) * 2),
+                                if item.checked { "✓ " } else { "" },
+                                item.columns.join("  ")
+                            ),
+                            if item.enabled { ink } else { &style.colors.dim },
+                            12,
+                            false,
+                        );
+                    }
                 }
             }
             Widget::Slider { value, max, .. } | Widget::Meter { value, max } => {
@@ -670,6 +787,10 @@ impl Runtime {
                     local.area.y -= bounds.y;
                     local.body.x -= bounds.x;
                     local.body.y -= bounds.y;
+                    for column in &mut local.columns {
+                        column.area.x -= bounds.x;
+                        column.area.y -= bounds.y;
+                    }
                     if matches!(entry.widget, Widget::Custom { .. }) {
                         if let Some(canvas) = content.canvas(&entry.id) {
                             custom.push((

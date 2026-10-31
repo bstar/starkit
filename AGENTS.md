@@ -332,6 +332,14 @@ state preservation. Keep the fixture independent of inherited TMUX/SSH flags
 and global GPU preferences. This is part of the control catalog gate, not a
 completed consumer migration or physical Mac acceptance.
 
+2026-10-30: table columns now share bounded geometry across headings/data and
+cells/native text. `Frame` keeps window coordinates for input; modal scene
+surfaces must translate column rectangles along with the control body. Testing
+only `render_surface` misses that separate modal mounting path. The independent
+gallery exercises full scenes and real Kitty checks aligned track durations.
+Native right alignment is an additive shaped-text hint; old peers keep readable
+left alignment. This remains control catalog work, not a WIRE migration.
+
 The hosted FFmpeg 6 movie gate exposed decoder frames with square/unknown SAR
 for an anamorphic container. Processing now applies valid stream SAR before
 frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata

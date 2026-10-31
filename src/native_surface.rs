@@ -187,6 +187,10 @@ pub struct Surface {
     /// Older frontends ignore this optional presentation hint.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub centered_text: Vec<u16>,
+    /// Right-aligned using frontend-shaped advances. Older peers keep text
+    /// readable with their ordinary left alignment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub right_aligned_text: Vec<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_carets: Vec<TextCaret>,
 }
@@ -238,6 +242,11 @@ impl Surface {
             .iter()
             .filter_map(|node| mapping.get(usize::from(*node)).copied().flatten())
             .collect();
+        self.right_aligned_text = self
+            .right_aligned_text
+            .iter()
+            .filter_map(|node| mapping.get(usize::from(*node)).copied().flatten())
+            .collect();
     }
     pub fn new(width: u16, height: u16, background: String) -> Self {
         Self {
@@ -254,6 +263,7 @@ impl Surface {
             hover_fills: vec![],
             text_rules: vec![],
             centered_text: vec![],
+            right_aligned_text: vec![],
             text_carets: vec![],
         }
     }
@@ -350,7 +360,8 @@ impl Surface {
                 && self.hits.len() <= 256
                 && self.hover_fills.len() <= 256
                 && self.text_rules.len() <= 256
-                && self.centered_text.len() <= 256
+                && self.centered_text.len() <= 4096
+                && self.right_aligned_text.len() <= 4096
                 && self.text_carets.len() <= 256,
             "surface exceeds limits"
         );
@@ -372,12 +383,23 @@ impl Surface {
         let color = |s: &str| {
             s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|c| c.is_ascii_hexdigit())
         };
+        let mut centered = vec![false; self.nodes.len()];
         anyhow::ensure!(
             self.centered_text.iter().all(|node| matches!(
                 self.nodes.get(usize::from(*node)),
                 Some(Primitive::Text { .. })
             )),
             "invalid centered text node"
+        );
+        for node in &self.centered_text {
+            centered[usize::from(*node)] = true;
+        }
+        anyhow::ensure!(
+            self.right_aligned_text.iter().all(|node| matches!(
+                self.nodes.get(usize::from(*node)),
+                Some(Primitive::Text { .. })
+            ) && !centered[usize::from(*node)]),
+            "invalid right-aligned text node"
         );
         anyhow::ensure!(
             self.background == "transparent" || color(&self.background),
@@ -532,6 +554,18 @@ impl Surface {
         self.text(rect, text, color, size, bold);
         self.centered_text.push(node);
     }
+    pub fn text_right(
+        &mut self,
+        rect: PixelRect,
+        text: impl Into<String>,
+        color: &str,
+        size: u16,
+        bold: bool,
+    ) {
+        let node = self.nodes.len() as u16;
+        self.text(rect, text, color, size, bold);
+        self.right_aligned_text.push(node);
+    }
 }
 
 /// One spacing vocabulary for native applications and embedded content.
@@ -563,6 +597,48 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn right_aligned_text_is_additive_bounded_and_remapped_when_nodes_are_removed() {
+        let legacy = r##"{"width":200,"height":40,"background":"#000000","nodes":[],"hits":[]}"##;
+        let mut surface: Surface = serde_json::from_str(legacy).unwrap();
+        assert!(surface.right_aligned_text.is_empty());
+        assert!(!serde_json::to_string(&surface)
+            .unwrap()
+            .contains("right_aligned_text"));
+        surface.fill(PixelRect::new(0, 0, 200, 40), "#101010", 0);
+        surface.text_right(PixelRect::new(10, 0, 80, 20), "12", "#ffffff", 12, false);
+        surface.text_right(PixelRect::new(10, 20, 80, 20), "3", "#ffffff", 12, false);
+        surface.validate().unwrap();
+        surface.retain_nodes(|node| matches!(node, Primitive::Text { text, .. } if text == "12"));
+        assert_eq!(surface.right_aligned_text, [0]);
+        surface.validate().unwrap();
+        let roundtrip: Surface =
+            serde_json::from_str(&serde_json::to_string(&surface).unwrap()).unwrap();
+        assert_eq!(roundtrip.right_aligned_text, [0]);
+        surface.centered_text.push(0);
+        assert!(surface.validate().is_err());
+        surface.centered_text.clear();
+        surface.right_aligned_text[0] = 1;
+        assert!(surface.validate().is_err());
+        surface.right_aligned_text[0] = 0;
+        surface.nodes[0] = Primitive::Fill {
+            rect: PixelRect::new(0, 0, 20, 20),
+            color: "#ffffff".into(),
+            radius: 0,
+        };
+        assert!(surface.validate().is_err());
+    }
+    #[test]
+    fn right_aligned_metadata_supports_dense_numeric_tables_within_the_node_budget() {
+        let mut surface = Surface::new(200, 40, "#000000".into());
+        for _ in 0..300 {
+            surface.text_right(PixelRect::new(0, 0, 80, 20), "12", "#ffffff", 12, false);
+            surface.text_centered(PixelRect::new(90, 0, 80, 20), "3", "#ffffff", 12, false);
+        }
+        surface.validate().unwrap();
+        surface.right_aligned_text.resize(4097, 0);
+        assert!(surface.validate().is_err());
+    }
     #[test]
     fn retaining_nodes_remaps_decorations_and_drops_removed_targets() {
         let mut s = Surface::new(200, 120, "#000000".into());

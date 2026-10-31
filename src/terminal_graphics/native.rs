@@ -37,6 +37,7 @@ struct TextStyle<'a> {
     mono: bool,
     ellipsis: bool,
     centered: bool,
+    right: bool,
 }
 
 struct Asset {
@@ -530,6 +531,17 @@ impl Painter {
         let [x, y, width, height] = area;
         let sx = width / f32::from(surface.width);
         let sy = height / f32::from(surface.height);
+        let mut alignments = vec![(false, false); surface.nodes.len()];
+        for node in &surface.centered_text {
+            if let Some(value) = alignments.get_mut(usize::from(*node)) {
+                value.0 = true;
+            }
+        }
+        for node in &surface.right_aligned_text {
+            if let Some(value) = alignments.get_mut(usize::from(*node)) {
+                value.1 = true;
+            }
+        }
         for (node_index, node) in surface.nodes.iter().enumerate() {
             let r = node.rect();
             let mut rect = [
@@ -637,8 +649,8 @@ impl Painter {
                         bold: *bold,
                         mono: *mono,
                         ellipsis: surface.cell_size.is_none(),
-                        centered: surface.cell_size.is_some()
-                            || surface.centered_text.contains(&(node_index as u16)),
+                        centered: surface.cell_size.is_some() || alignments[node_index].0,
+                        right: alignments[node_index].1,
                     };
                     if let Some([cw, _]) = surface.cell_size {
                         let previous = self.terminal_font;
@@ -886,9 +898,16 @@ impl Painter {
         value: &str,
         rect: [f32; 4],
         cw: f32,
-        style: TextStyle<'_>,
+        mut style: TextStyle<'_>,
     ) {
-        let [x, y, w, h] = rect;
+        let [mut x, y, mut w, h] = rect;
+        if style.right {
+            let spare = (w - f32::from(crate::wrap::width_of(value)) * cw).max(0.);
+            x += spare;
+            w -= spare;
+            style.right = false;
+        }
+        let rect = [x, y, w, h];
         if self.terminal_font.is_some() {
             let previous = self.terminal_grid.replace(cw);
             self.terminal_symbols.clear();
@@ -920,6 +939,7 @@ impl Painter {
                 rect,
                 TextStyle {
                     centered: false,
+                    right: false,
                     ..style
                 },
             );
@@ -969,6 +989,7 @@ impl Painter {
             mono,
             ellipsis,
             centered,
+            right,
         } = style;
         let [x, y, w, h] = rect;
         if (value.trim().is_empty() && caret.is_none()) || w <= 0. || h <= 0. {
@@ -1072,6 +1093,8 @@ impl Painter {
         let offset_y = (h - line_height) / 2.;
         let offset_x = if let Some(caret) = caret_x {
             -(caret - w + 3.).max(0.)
+        } else if right {
+            (w - text_width).max(0.)
         } else if centered {
             ((w - text_width) / 2.).max(0.)
         } else {
@@ -1233,6 +1256,7 @@ impl Painter {
                     mono,
                     ellipsis: false,
                     centered: false,
+                    right: false,
                 },
             );
             if let Some(edge) = ellipsis_end {
@@ -1306,6 +1330,7 @@ impl Painter {
                                     mono: true,
                                     ellipsis: false,
                                     centered: false,
+                                    right: false,
                                 },
                             );
                         }
@@ -1673,6 +1698,7 @@ impl Painter {
                             mono: false,
                             ellipsis: true,
                             centered: false,
+                            right: false,
                         },
                     );
                 }
@@ -1727,6 +1753,7 @@ impl Painter {
                                 mono: true,
                                 ellipsis: false,
                                 centered: false,
+                                right: false,
                             },
                         );
                     }
@@ -1746,6 +1773,7 @@ impl Painter {
                             mono: false,
                             ellipsis: true,
                             centered: false,
+                            right: false,
                         },
                     );
                     if let Some(r) = close {
@@ -1826,6 +1854,7 @@ impl Painter {
                             mono: false,
                             ellipsis: false,
                             centered: false,
+                            right: false,
                         },
                     );
                     let caret = (x + *caret as f32 * cw).min(x + w - 1.);
@@ -1986,6 +2015,7 @@ impl Painter {
                     mono: true,
                     ellipsis: false,
                     centered: false,
+                    right: false,
                 },
             );
             self.font_factor = factor;
@@ -2450,6 +2480,51 @@ fn draw_icon(canvas: &mut Pixmap, kind: &str, x: f32, y: f32, size: f32, color: 
 mod tests {
     use super::*;
     #[test]
+    fn right_aligned_numbers_share_a_shaped_edge_in_physical_and_editor_grid_surfaces() {
+        use crate::native_surface::{PixelRect, Surface};
+        let mut painter = Painter::new();
+        for grid in [false, true] {
+            for density in [1, 2] {
+                let mut edges = Vec::new();
+                for text in ["1", "111111"] {
+                    let mut surface = Surface::new(160, 32, "transparent".into()).with_ui_text();
+                    if grid {
+                        surface.cell_size = Some([8, 24]);
+                    }
+                    surface.text_right(PixelRect::new(10, 0, 140, 32), text, "#ffffff", 12, false);
+                    let surface = surface.at_density(density).unwrap();
+                    let mut canvas =
+                        Pixmap::new(u32::from(surface.width), u32::from(surface.height)).unwrap();
+                    painter
+                        .surface(
+                            &mut canvas,
+                            &surface,
+                            [0., 0., f32::from(surface.width), f32::from(surface.height)],
+                        )
+                        .unwrap();
+                    let mut left = canvas.width();
+                    let mut right = 0;
+                    for y in 0..canvas.height() {
+                        for x in 0..canvas.width() {
+                            if canvas.pixel(x, y).unwrap().alpha() > 0 {
+                                left = left.min(x);
+                                right = right.max(x);
+                            }
+                        }
+                    }
+                    assert!(left < right, "missing number: {text}");
+                    assert!(right < u32::from(150 * density));
+                    edges.push((left, right));
+                }
+                assert!(
+                    edges[0].1.abs_diff(edges[1].1) <= u32::from(density),
+                    "{edges:?}, grid={grid}, density={density}"
+                );
+                assert!(edges[1].0 < edges[0].0);
+            }
+        }
+    }
+    #[test]
     fn heading_rules_keep_a_fixed_gap_after_shaped_and_ellipsized_text() {
         use crate::native_surface::{PixelRect, Surface, TextRule};
         let mut painter = Painter::new();
@@ -2644,6 +2719,7 @@ mod tests {
             mono: true,
             ellipsis: false,
             centered: true,
+            right: false,
         };
         painter.grid_text(&mut actual, "a\u{301}    z", [0., 0., 96., 18.], 8., style);
         painter.text(&mut expected, "a\u{301}", [0., 0., 8., 18.], style);
@@ -2808,6 +2884,7 @@ mod tests {
                 mono: true,
                 ellipsis: true,
                 centered: false,
+                right: false,
             },
         );
         assert!(!painter.text.keys().any(|k| k.text == "…"));
@@ -2841,6 +2918,7 @@ mod tests {
                     mono: true,
                     ellipsis: false,
                     centered: false,
+                    right: false,
                 },
             );
             let size = painter
@@ -2866,6 +2944,7 @@ mod tests {
                     mono: true,
                     ellipsis: false,
                     centered: false,
+                    right: false,
                 },
             );
             let ink = |p: &Pixmap| {
@@ -2899,6 +2978,7 @@ mod tests {
                 mono: true,
                 ellipsis: true,
                 centered: false,
+                right: false,
             },
         );
         let ellipsis = painter.text.keys().find(|k| k.text == "…").unwrap();
@@ -3002,6 +3082,7 @@ mod tests {
                     mono,
                     ellipsis: false,
                     centered: false,
+                    right: false,
                 },
             );
         }

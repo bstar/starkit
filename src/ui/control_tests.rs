@@ -29,6 +29,240 @@ fn viewports() -> [Viewport; 2] {
     [Viewport::cells(40, 5), Viewport::graphics(336, 136)]
 }
 
+fn table(width: u16, align: Align) -> View {
+    View::new(Node::table_with_columns(
+        "list",
+        vec![
+            Column::new("Title"),
+            Column::new("Count").width(Size::fixed(width)).align(align),
+        ],
+        (0..20)
+            .map(|i| Item {
+                columns: vec![format!("Row {i}"), (i + 1).to_string()],
+                ..Item::new(format!("row-{i}"), "")
+            })
+            .collect(),
+        Some("row-0".into()),
+    ))
+}
+
+#[test]
+fn table_columns_align_headings_values_and_scrolled_pointer_rows() {
+    for viewport in viewports() {
+        let mut ui = Runtime::new(table(6, Align::Right), Registry::default(), theme()).unwrap();
+        let p = ui
+            .frame(viewport)
+            .unwrap()
+            .get(&"list".into())
+            .unwrap()
+            .clone();
+        let count = &p.columns[1].area;
+        assert_eq!(
+            count.width,
+            if viewport.presentation == Presentation::Cells {
+                6
+            } else {
+                48
+            }
+        );
+        let rh = if viewport.presentation == Presentation::Cells {
+            1
+        } else {
+            24
+        };
+        ui.scroll(count.x, count.y + rh, 8);
+        assert_eq!(
+            ui.frame(viewport)
+                .unwrap()
+                .get(&"list".into())
+                .unwrap()
+                .columns,
+            p.columns
+        );
+        if viewport.presentation == Presentation::Cells {
+            let buffer = ui.render_cells(viewport).unwrap();
+            assert_eq!(buffer[(count.right() - 1, count.y)].symbol(), "t");
+            assert_eq!(buffer[(count.right() - 1, count.y + rh)].symbol(), "9");
+            assert_eq!(buffer[(count.right() - 1, count.y + 2 * rh)].symbol(), "0");
+            assert_eq!(buffer[(count.right() - 2, count.y + 2 * rh)].symbol(), "1");
+        } else {
+            let surface = ui.render_surface(viewport).unwrap();
+            surface.validate().unwrap();
+            for value in ["Count", "9", "10"] {
+                let (index, node) = surface
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, node)| {
+                        matches!(node,
+                    Primitive::Text { text, .. } if text == value)
+                    })
+                    .unwrap();
+                assert_eq!(node.rect().x, count.x);
+                assert_eq!(node.rect().width, count.width);
+                assert!(surface.right_aligned_text.contains(&(index as u16)));
+            }
+        }
+        ui.pointer(count.right() - 1, count.y + rh, true);
+        assert_eq!(
+            ui.pointer(count.right() - 1, count.y + rh, false),
+            selected(8)
+        );
+        assert_eq!(ui.layout_count(), 1);
+    }
+}
+
+#[test]
+fn table_width_changes_cancel_capture_but_alignment_and_heading_updates_reuse_geometry() {
+    let viewport = Viewport::cells(40, 5);
+    let mut ui = Runtime::new(table(6, Align::Right), Registry::default(), theme()).unwrap();
+    ui.frame(viewport).unwrap();
+    let mut changed = table(6, Align::Center);
+    changed.root.table_columns[1].heading = "Total".into();
+    if let Widget::List { columns, .. } = &mut changed.root.widget {
+        columns[1] = "Total".into();
+    }
+    ui.set_view(changed).unwrap();
+    let p = ui
+        .frame(viewport)
+        .unwrap()
+        .get(&"list".into())
+        .unwrap()
+        .clone();
+    assert_eq!(p.columns[1].align, Align::Center);
+    let buffer = ui.render_cells(viewport).unwrap();
+    assert_eq!(
+        buffer[(p.columns[1].area.x + 2, p.body.y + 1)].symbol(),
+        "1"
+    );
+    assert_eq!(ui.layout_count(), 1);
+    ui.pointer(p.body.x, p.body.y + 1, true);
+    ui.set_view(table(10, Align::Right)).unwrap();
+    ui.frame(viewport).unwrap();
+    assert!(ui.pointer(p.body.x, p.body.y + 1, false).is_empty());
+    assert!(ui.captured().is_none());
+    assert_eq!(ui.layout_count(), 2);
+}
+
+#[test]
+fn table_clipping_preserves_clusters_and_the_neighboring_column() {
+    let mut view = table(6, Align::Right);
+    view.root.table_columns[0].width = Size::fixed(4);
+    if let Widget::List { items, .. } = &mut view.root.widget {
+        let items = std::sync::Arc::make_mut(items);
+        items[0].columns[0] = "a\u{301}日本語\x1b\n".into();
+        items[1].columns[0] = "👩‍💻abc".into();
+    }
+    let mut ui = Runtime::new(view, Registry::default(), theme()).unwrap();
+    let buffer = ui.render_cells(Viewport::cells(11, 4)).unwrap();
+    assert_eq!(buffer[(0, 1)].symbol(), "a\u{301}");
+    assert_eq!(buffer[(1, 1)].symbol(), "日");
+    assert_eq!(buffer[(3, 1)].symbol(), "…");
+    assert_eq!(buffer[(0, 2)].symbol(), "👩‍💻");
+    assert_eq!(buffer[(2, 2)].symbol(), "a");
+    assert_eq!(buffer[(3, 2)].symbol(), "…");
+    assert_eq!(buffer[(4, 1)].symbol(), " ");
+    assert_eq!(buffer[(10, 1)].symbol(), "1");
+}
+
+#[test]
+fn table_columns_stay_bounded_in_tiny_viewports_and_legacy_tables_remain_supported() {
+    for width in 1..=64 {
+        for viewport in [
+            Viewport::cells(width, 5),
+            Viewport::graphics(width * 8, 136),
+        ] {
+            let mut ui =
+                Runtime::new(table(6, Align::Right), Registry::default(), theme()).unwrap();
+            let frame = ui.frame(viewport).unwrap();
+            if let Some(p) = frame.get(&"list".into()) {
+                for column in &p.columns {
+                    assert!(column.area.x >= p.body.x);
+                    assert!(column.area.right() <= p.body.right());
+                }
+                for columns in p.columns.windows(2) {
+                    assert!(columns[0].area.right() <= columns[1].area.x);
+                }
+            }
+            if viewport.presentation == Presentation::Graphics {
+                ui.render_surface(viewport).unwrap().validate().unwrap();
+            } else {
+                ui.render_cells(viewport).unwrap();
+            }
+        }
+    }
+    let mut view = table(6, Align::Right);
+    view.root.table_columns.clear();
+    let mut ui = Runtime::new(view, Registry::default(), theme()).unwrap();
+    let columns = &ui
+        .frame(Viewport::cells(21, 5))
+        .unwrap()
+        .get(&"list".into())
+        .unwrap()
+        .columns;
+    assert_eq!((columns[0].area.width, columns[1].area.width), (10, 10));
+}
+
+#[test]
+fn table_specifications_reject_mismatched_headings_and_invalid_sizes() {
+    let mut view = table(6, Align::Right);
+    view.root.table_columns[1].heading = "Wrong".into();
+    assert!(Runtime::new(view, Registry::default(), theme()).is_err());
+    let mut view = table(6, Align::Right);
+    view.root.table_columns[1].width = Size::bounded(10, 6, 5);
+    assert!(Runtime::new(view, Registry::default(), theme()).is_err());
+    let mut view = table(6, Align::Right);
+    view.root.widget = Widget::Label("Wrong widget".into());
+    assert!(Runtime::new(view, Registry::default(), theme()).is_err());
+}
+
+#[cfg(feature = "terminal-graphics")]
+#[test]
+fn modal_table_columns_are_local_to_their_surface_while_pointer_geometry_stays_global() {
+    use crate::terminal_graphics::{Component, Viewport as NativeViewport};
+    let view = View::new(Node::label("background", "Background")).modal(
+        Node::pane("dialog", Heading::new("Table"), table(6, Align::Right).root)
+            .width(Size::fixed(40))
+            .height(Size::fixed(12)),
+    );
+    let mut ui = Runtime::new(view, Registry::default(), theme()).unwrap();
+    let viewport = NativeViewport {
+        width: 800,
+        height: 600,
+        ..Default::default()
+    };
+    let scene = ui.render_scene(viewport, false).unwrap();
+    let frame = ui.current_frame().unwrap();
+    let dialog = frame.get(&"dialog".into()).unwrap().area;
+    let count = frame.get(&"list".into()).unwrap().columns[1].area;
+    let surface = scene
+        .components
+        .iter()
+        .find_map(|component| match component {
+            Component::Surface { surface, .. } if surface.width == dialog.width => Some(surface),
+            _ => None,
+        })
+        .unwrap();
+    surface.validate().unwrap();
+    let heading = surface
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(node,
+        Primitive::Text { text, .. } if text == "Count")
+        })
+        .unwrap();
+    assert_eq!(
+        (heading.rect().x, heading.rect().y),
+        (count.x - dialog.x, count.y - dialog.y)
+    );
+    ui.pointer(count.right() - 1, count.y + 24, true);
+    assert_eq!(
+        ui.pointer(count.right() - 1, count.y + 24, false),
+        selected(0)
+    );
+}
+
 #[test]
 fn multiline_navigation_follows_the_current_presentation_before_paint() {
     let text = "abcdefghijklmnopqrst\nsecond\nlast";

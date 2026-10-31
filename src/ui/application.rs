@@ -126,6 +126,7 @@ impl<A: Application> Host<A> {
             self.app.cancel_pointer();
         }
         if let Err(error) = result {
+            tracing::error!(%error, "Application UI update failed");
             self.failure = Some(format!("{error:#}"));
         }
     }
@@ -285,7 +286,10 @@ impl<A: Application> Controller for Host<A> {
                 .render_scene_with(viewport, self.cells, &mut self.app)
             {
                 Ok(scene) => self.scene = Some(scene),
-                Err(error) => self.failure = Some(format!("{error:#}")),
+                Err(error) => {
+                    tracing::error!(%error, "Application UI scene failed");
+                    self.failure = Some(format!("{error:#}"));
+                }
             }
         }
         self.scene

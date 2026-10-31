@@ -1,4 +1,4 @@
-use super::{Id, Node, View, Widget};
+use super::{Align, Id, Node, View, Widget};
 use crate::{panes, ratatui::layout::Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +50,12 @@ impl Viewport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColumnPlacement {
+    pub area: Rect,
+    pub align: Align,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placement {
     pub id: Id,
     pub parent: Option<Id>,
@@ -59,6 +65,7 @@ pub struct Placement {
     pub enabled: bool,
     pub focusable: bool,
     pub modal: bool,
+    pub columns: Vec<ColumnPlacement>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
@@ -124,6 +131,26 @@ pub(super) fn validate(view: &View) -> anyhow::Result<()> {
                 anyhow::ensure!(max > 0 && value <= max, "Invalid meter range")
             }
             _ => {}
+        }
+        if let Widget::List { columns, .. } = &node.widget {
+            anyhow::ensure!(columns.len() <= 64, "Table exceeds 64 columns");
+            anyhow::ensure!(
+                node.table_columns.is_empty()
+                    || (node.table_columns.len() == columns.len()
+                        && node
+                            .table_columns
+                            .iter()
+                            .zip(columns)
+                            .all(|(spec, heading)| &spec.heading == heading
+                                && spec.width.min <= spec.width.preferred
+                                && spec.width.preferred <= spec.width.max)),
+                "Table column specifications must match headings and have valid widths"
+            );
+        } else {
+            anyhow::ensure!(
+                node.table_columns.is_empty(),
+                "Column specifications require a table"
+            );
         }
         for child in &node.children {
             visit(child, depth + 1, ids)?;
@@ -229,6 +256,7 @@ fn place(
         enabled,
         focusable: node.focusable(),
         modal,
+        columns: table_columns(node, body, frame.viewport)?,
     });
     if matches!(node.widget, Widget::Pane(_)) {
         if node.visibility != panes::Visibility::Collapsed {
@@ -279,6 +307,60 @@ fn place(
         }
     }
     Ok(())
+}
+
+fn table_columns(
+    node: &Node,
+    body: Rect,
+    viewport: Viewport,
+) -> anyhow::Result<Vec<ColumnPlacement>> {
+    let Widget::List { columns, .. } = &node.widget else {
+        return Ok(vec![]);
+    };
+    if columns.is_empty() {
+        return Ok(vec![]);
+    }
+    let area = if viewport.presentation == Presentation::Graphics {
+        text_area(body)
+    } else {
+        body
+    };
+    let scale = viewport.scale(true);
+    let children = (0..columns.len())
+        .map(|index| {
+            let width = node
+                .table_columns
+                .get(index)
+                .map_or(panes::Size::fill(1), |c| c.width);
+            panes::Node::pane(index).width(panes::Size {
+                min: width.min.saturating_mul(scale),
+                preferred: width.preferred.saturating_mul(scale),
+                max: if width.max == u16::MAX {
+                    u16::MAX
+                } else {
+                    width.max.saturating_mul(scale)
+                },
+                grow: width.grow,
+            })
+        })
+        .collect();
+    let layout = panes::Node::row(children)
+        .gap(viewport.gap())
+        .layout(area)?;
+    Ok((0..columns.len())
+        .map(|index| ColumnPlacement {
+            area: layout
+                .panes
+                .iter()
+                .find(|p| p.id == index)
+                .and_then(|p| p.area)
+                .unwrap_or(Rect::new(area.right(), area.y, 0, area.height)),
+            align: node
+                .table_columns
+                .get(index)
+                .map_or(Align::Left, |c| c.align),
+        })
+        .collect())
 }
 pub(super) fn solve(
     view: &View,
@@ -354,8 +436,15 @@ pub(super) fn same_geometry(a: &View, b: &View) -> bool {
             && a.overflow == b.overflow
             && a.priority == b.priority
             && a.wrap == b.wrap
+            && a.table_columns
+                .iter()
+                .map(|c| c.width)
+                .eq(b.table_columns.iter().map(|c| c.width))
             && match (&a.widget, &b.widget) {
                 (Widget::Field { multiline: a, .. }, Widget::Field { multiline: b, .. }) => a == b,
+                (Widget::List { columns: a, .. }, Widget::List { columns: b, .. }) => {
+                    a.len() == b.len()
+                }
                 _ => true,
             }
             && a.children.len() == b.children.len()
@@ -390,6 +479,12 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) {
             p.widget = node.widget.clone();
             p.enabled = *enabled;
             p.focusable = node.focusable();
+            for (index, column) in p.columns.iter_mut().enumerate() {
+                column.align = node
+                    .table_columns
+                    .get(index)
+                    .map_or(Align::Left, |c| c.align);
+            }
         }
     }
 }

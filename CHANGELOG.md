@@ -8,6 +8,15 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.13 table control candidate)
+
+- Shared bounded table columns with fixed, fill and weighted widths, left/center/
+  right alignment, Unicode clipping and stable heading/row geometry in cells
+  and graphics. Native numeric values align using shaped text advances.
+- The independent gallery now shows track durations and aligned shortcut columns.
+  Scrolling, pointer selection, narrow windows and geometry invalidation have
+  regression coverage. Consumer migrations remain pending.
+
 ### Fixed (0.13 terminal reply ownership)
 
 - Ordinary presentation preferences no longer enable OSC 72 negotiation. Its

@@ -55,6 +55,16 @@ dialog sizes are honored and clipped to the workspace. These are presentation
 metrics, not terminal font
 scaling. Existing editor-grid and legacy surface text contracts remain intact.
 
+`Node::table_with_columns` accepts `Column::new("Title")` specifications with
+optional `.width(Size::fixed(6))` and `.align(Align::Right)` settings. Headings
+and all visible rows use the same column rectangles in `Placement::columns`;
+scrolling and data changes do not measure or move columns. Fixed/bounded sizes
+and weighted fill use the pane allocator, with clipped columns in small windows.
+The compatible `Node::table` constructor uses equal-width columns. Cells clip
+whole display clusters; native text uses shaped advances for alignment and
+ellipsis. The additive surface alignment hint degrades to left alignment on
+older peers. Row selection, paging and pointer actions retain stable item IDs.
+
 The pane engine retains manual sizes and user visibility. Automatic collapse
 never rewrites the supplied view. IDs must be unique across both root and modal
 content. The tree is bounded to 2,048 nodes and 32 levels; rendering retains the
