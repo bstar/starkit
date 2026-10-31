@@ -14,6 +14,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import unicodedata
 from terminal_fixture import TerminalStartup
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -210,6 +211,17 @@ def handle_result(args, result, target_window_id, boss):
         rc('send-key', '--match', 'id:1', 'f9')
         wait_for(lambda: b'LIBRARY' in rc('get-text', '--match', 'id:1'),
                  'Cell presentation did not show compact border headings')
+        table_text = rc('get-text', '--match', 'id:1').decode()
+        column_edges = []
+        for value in ('Time', '3:04', '12:09', '1:42'):
+            row = next((row for row in table_text.splitlines() if value in row), None)
+            assert row is not None, f'Table lost {value}: {table_text}'
+            prefix = row[:row.index(value) + len(value)]
+            column_edges.append(sum(0 if unicodedata.combining(c) else
+                                    2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+                                    for c in prefix))
+        assert len(set(column_edges)) == 1, f'Table heading and durations are misaligned: {column_edges}'
+        report['table_columns'] = True
         pixels('cells')
         report['cell_switch'] = True
         rc('send-key', '--match', 'id:1', 'f9')

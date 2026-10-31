@@ -35,6 +35,7 @@ with tempfile.TemporaryDirectory(prefix="starkit-external-") as directory:
     assert "d4e9929f" in parser_source, "Starter lost the zero-coordinate parser fix"
     cargo("check", "--all-targets", *feature)
     cargo("clippy", "--all-targets", *feature, "--", "-D", "warnings", "-A", "dead_code")
+    cargo("test", *feature)
     output = cargo("run", "--quiet", "--", "--inspect", capture_output=True, text=True)
     report = json.loads(output.stdout)
     assert report["layout"]["fits"] and report["focus"]["active"] == "workspace"

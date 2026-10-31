@@ -3,7 +3,7 @@ use starkit::{
     theme::{Theme, ThemeFile, BUILTINS},
     ui::{
         command::{self, Command, Registry},
-        Event, Heading, Item, Node, Runtime, Size, View, Viewport, Widget, Wrap,
+        Align, Column, Event, Heading, Item, Node, Runtime, Size, View, Viewport, Widget, Wrap,
     },
 };
 
@@ -60,18 +60,26 @@ impl Gallery {
                 vec![
                     Node::label("filter-label", "Filter"),
                     Node::field("filter", &self.name),
-                    Node::new(
+                    Node::table_with_columns(
                         "tracks",
-                        Widget::List {
-                            items: vec![
-                                Item::new("track-1", "First light"),
-                                Item::new("track-2", "日本語 · Evening"),
-                                Item::new("track-3", "A longer title to exercise clipping"),
-                            ]
-                            .into(),
-                            selected: self.selected.clone(),
-                            columns: vec!["Title".into()],
-                        },
+                        vec![
+                            Column::new("Title"),
+                            Column::new("Time")
+                                .width(Size::fixed(6))
+                                .align(Align::Right),
+                        ],
+                        [
+                            ("track-1", "First light", "3:04"),
+                            ("track-2", "日本語 · Evening", "12:09"),
+                            ("track-3", "A longer title to exercise clipping", "1:42"),
+                        ]
+                        .into_iter()
+                        .map(|(id, title, duration)| Item {
+                            columns: vec![title.into(), duration.into()],
+                            ..Item::new(id, "")
+                        })
+                        .collect(),
+                        self.selected.clone(),
                     ),
                 ],
             ),
@@ -129,9 +137,12 @@ impl Gallery {
                     Node::column(
                         "dialog-content",
                         vec![
-                            Node::table(
+                            Node::table_with_columns(
                                 "command-help",
-                                vec!["Shortcut".into(), "Action".into()],
+                                vec![
+                                    Column::new("Shortcut").width(Size::fixed(15)),
+                                    Column::new("Action"),
+                                ],
                                 self.commands()
                                     .into_iter()
                                     .map(|command| Item {
@@ -369,3 +380,42 @@ pub fn cells(id: &str) -> anyhow::Result<()> {
 }
 
 impl starkit::ui::content::Content for Gallery {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_dialogs_render_over_the_application_in_both_presentations() {
+        for command in ["kit.help", "settings", "kit.theme"] {
+            let mut gallery = Gallery::default();
+            gallery.event(Event::Command(command.into()));
+            for (width, height) in [(700, 640), (336, 136), (12, 12)] {
+                let mut ui = Runtime::new(
+                    gallery.view(),
+                    Registry::new(gallery.commands()).unwrap(),
+                    theme(starkit::theme::DEFAULT_ID).unwrap(),
+                )
+                .unwrap();
+                ui.render_surface(Viewport::graphics(width, height))
+                    .unwrap()
+                    .validate()
+                    .unwrap();
+                #[cfg(feature = "native")]
+                ui.render_scene(
+                    starkit::terminal_graphics::Viewport {
+                        width: u32::from(width),
+                        height: u32::from(height),
+                        columns: (width / 8).max(1),
+                        rows: (height / 24).max(1),
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .unwrap();
+                ui.render_cells(Viewport::cells((width / 8).max(1), (height / 24).max(1)))
+                    .unwrap();
+            }
+        }
+    }
+}
