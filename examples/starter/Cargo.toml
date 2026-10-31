@@ -12,7 +12,7 @@ default = []
 native = ["starkit/terminal-graphics"]
 media = ["native", "starkit/media"]
 [dependencies]
-starkit = { git = "https://github.com/bstar/starkit", rev = "a02a4656d1fdc09d6da9efbedc7b4eb9b2963b5f", version = "0.13", default-features = false }
+starkit = { git = "https://github.com/bstar/starkit", rev = "11d6caa394e0c7ae104dd3ecd12387cc05b95b77", version = "0.13", default-features = false }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

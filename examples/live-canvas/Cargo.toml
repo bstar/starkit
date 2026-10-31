@@ -6,7 +6,7 @@ publish = false
 [workspace]
 [dependencies]
 # Immutable unreleased 0.13 candidate; builds independently of this checkout.
-starkit = { git = "https://github.com/bstar/starkit", rev = "257cb22bce2c728c4b1dedfa76a240e521ef3382", version = "0.13", default-features = false, features = ["terminal-graphics"] }
+starkit = { git = "https://github.com/bstar/starkit", rev = "11d6caa394e0c7ae104dd3ecd12387cc05b95b77", version = "0.13", default-features = false, features = ["terminal-graphics"] }
 anyhow = "1"
 serde_json = "1"
 
