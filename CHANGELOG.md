@@ -8,6 +8,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.13 frontend acceleration)
+
+- Terminal frontends prefer GPU rendering when supported, including when the
+  shell requests `gpu`, and recover through CPU if setup or a GPU frame fails.
+  Explicit `cpu` remains available; offscreen GPU benchmarks stay strict.
+- A small frontend GPU/CPU indicator follows the actual renderer, including
+  fallback, without changing controller geometry or the transport protocol.
+
 ### Fixed (0.13 text control candidate)
 
 - Multiline navigation follows the active presentation before painting, rather

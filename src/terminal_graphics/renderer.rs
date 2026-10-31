@@ -29,6 +29,15 @@ impl Backend {
         }
     }
 }
+// A terminal is an interactive application, so acceleration is a preference,
+// not a condition for opening its UI. Explicit CPU still disables GPU setup;
+// offscreen SceneRenderer::new(Backend::Gpu) retains strict benchmark semantics.
+fn frontend_backend(requested: Backend, explicit: bool) -> Backend {
+    match (requested, explicit) {
+        (Backend::Cpu, true) => Backend::Cpu,
+        _ => Backend::Auto,
+    }
+}
 /// Actual backend selected, including a hardware adapter or explicit fallback reason.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct BackendInfo {
@@ -167,7 +176,10 @@ impl Renderer {
         font: super::font::Font,
         options: super::client::PresentationOptions,
     ) -> Result<Self> {
-        let backend = Backend::from_environment()?;
+        let backend = frontend_backend(
+            Backend::from_environment()?,
+            std::env::var_os("STAR_GRAPHICS_RENDERER").is_some(),
+        );
         let (input, scenes) = bounded::<(Scene, Vec<String>)>(1);
         let stale = scenes.clone();
         let (live, images) = bounded::<(String, Arc<RgbaImage>)>(1);
@@ -181,8 +193,12 @@ impl Renderer {
                     font,
                     options.pane_corner_radius,
                 );
-                if let Err(error)=configure_backend(&mut painter,backend){
-                    let _=frames.send(RenderMessage::Error{message:format!("Native renderer initialization: {error:#}")});return;
+                painter.show_backend = true;
+                match configure_backend(&mut painter,backend) {
+                    Ok(info) => tracing::info!(?info, "Terminal scene backend selected"),
+                    Err(error) => {
+                        let _=frames.send(RenderMessage::Error{message:format!("Native renderer initialization: {error:#}")});return;
+                    }
                 }
                 let mut previous = None;
                 loop {
@@ -1567,6 +1583,60 @@ mod tests {
 
 #[cfg(test)]
 mod backend_tests {
+    #[test]
+    fn terminal_frontends_prefer_acceleration_and_keep_cpu_override() {
+        use super::{frontend_backend, Backend};
+        assert_eq!(frontend_backend(Backend::Cpu, false), Backend::Auto);
+        assert_eq!(frontend_backend(Backend::Gpu, true), Backend::Auto);
+        assert_eq!(frontend_backend(Backend::Auto, true), Backend::Auto);
+        assert_eq!(frontend_backend(Backend::Cpu, true), Backend::Cpu);
+    }
+
+    #[test]
+    fn renderer_indicator_is_local_bounded_and_absent_from_reference_frames() {
+        use super::super::protocol::{Scene, Viewport};
+        let scene = Scene {
+            viewport: Viewport {
+                width: 128,
+                height: 64,
+                ..Viewport::default()
+            },
+            ..Scene::from_buffer(
+                &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                    0, 0, 100, 40,
+                )),
+                Viewport::default(),
+                1,
+            )
+        };
+        let mut painter = super::super::native::Painter::new();
+        let reference = painter.render_with_canvases(&scene, &[]).unwrap();
+        painter.show_backend = true;
+        let labeled = painter.render_with_canvases(&scene, &[]).unwrap();
+        assert_ne!(reference, labeled);
+        for (x, y, pixel) in labeled.enumerate_pixels() {
+            if !(84..126).contains(&x) || !(46..62).contains(&y) {
+                assert_eq!(
+                    pixel,
+                    reference.get_pixel(x, y),
+                    "Indicator escaped its physical bounds"
+                );
+            }
+        }
+        assert_eq!(labeled.get_pixel(88, 52).0, [143, 168, 199, 255]);
+        let tiny = Scene {
+            viewport: Viewport {
+                width: 20,
+                height: 20,
+                ..scene.viewport
+            },
+            ..scene
+        };
+        let labeled = painter.render_with_canvases(&tiny, &[]).unwrap();
+        painter.show_backend = false;
+        assert_eq!(labeled, painter.render_with_canvases(&tiny, &[]).unwrap());
+    }
+
     #[test]
     fn offscreen_renderers_can_be_moved_to_a_worker() {
         fn send<T: Send>() {}

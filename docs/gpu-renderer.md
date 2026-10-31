@@ -1,6 +1,6 @@
 # Optional GPU scene renderer
 
-The unreleased 0.13 candidate adds hardware scene rendering through Vello 0.11 and wgpu 30. CPU rendering remains the default. This is a local development candidate, with no release tag or consumer pin migration yet.
+The unreleased 0.13 candidate adds hardware scene rendering through Vello 0.11 and wgpu 30. Terminal frontends prefer hardware rendering and fall back to CPU. Deterministic reference exports remain CPU. This is a development candidate, with no release tag yet.
 
 Enable the `gpu-renderer` Cargo feature. It implies `terminal-graphics`, without enabling media decoding or audio. Select the terminal scene worker with:
 
@@ -10,9 +10,9 @@ STAR_GRAPHICS_RENDERER=gpu your-app
 STAR_GRAPHICS_RENDERER=auto your-app
 ```
 
-`gpu` requires a hardware adapter and reports an error if initialization or rendering fails. Software GPU adapters are rejected. `auto` attempts hardware rendering, falls back to CPU if initialization fails, and retries a failed GPU scene on CPU. An unset variable selects CPU; an invalid value is an error. Existing builds without the feature support CPU and explicit Auto fallback.
+Terminal frontends treat `gpu` and `auto` as a preference for hardware: they fall back to CPU if initialization fails and retry a failed GPU scene on CPU. Software GPU adapters are rejected. An unset variable also prefers hardware; `cpu` explicitly disables GPU initialization. Builds without the feature keep working through CPU fallback. An invalid value is an error. A small local GPU/CPU indicator in the lower right reports the backend actually painting the frame, including after fallback; it adds no remote protocol or input target.
 
-For reusable offscreen rendering, use `terminal_graphics::renderer::{Backend, SceneRenderer}`. `SceneRenderer::new(Backend::Gpu)` selects hardware; `render(&scene)` returns RGBA pixels. `backend()` reports the requested and selected backend, adapter, graphics API and fallback reason. The reference renderer stays CPU regardless of the environment.
+For reusable offscreen rendering, use `terminal_graphics::renderer::{Backend, SceneRenderer}`. `SceneRenderer::new(Backend::Gpu)` requires hardware and reports initialization/rendering errors; use `Backend::Auto` for fallback. `render(&scene)` returns RGBA pixels. `backend()` reports the requested and selected backend, adapter, graphics API and fallback reason. The reference renderer stays CPU regardless of the environment and does not include the frontend indicator.
 
 ## What runs on the GPU
 

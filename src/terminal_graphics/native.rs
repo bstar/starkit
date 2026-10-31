@@ -50,6 +50,7 @@ struct Asset {
 pub(super) struct Painter {
     #[cfg(feature = "gpu-renderer")]
     pub(super) gpu: Option<super::gpu::Gpu>,
+    pub(super) show_backend: bool,
     ui_font: bool,
     terminal_font: Option<f32>,
     terminal_grid: Option<f32>,
@@ -858,6 +859,7 @@ impl Painter {
         Self {
             #[cfg(feature = "gpu-renderer")]
             gpu: None,
+            show_backend: false,
             ui_font: false,
             terminal_font: None,
             terminal_grid: None,
@@ -1956,6 +1958,39 @@ impl Painter {
         }
         if manage_assets {
             self.assets.retain(|id, _| used.contains(id));
+        }
+        if self.show_backend && viewport.width >= 64 && viewport.height >= 32 {
+            #[cfg(feature = "gpu-renderer")]
+            let accelerated = self.gpu.is_some();
+            #[cfg(not(feature = "gpu-renderer"))]
+            let accelerated = false;
+            let x = viewport.width as f32 - 44.;
+            let y = viewport.height as f32 - 18.;
+            rounded(&mut canvas, [x, y, 42., 16.], 3., "#20242b", false);
+            fill(
+                &mut canvas,
+                [x + 4., y + 6., 4., 4.],
+                if accelerated { "#7bd88f" } else { "#8fa8c7" },
+            );
+            let factor = std::mem::replace(&mut self.font_factor, 1.);
+            let grid = self.terminal_grid.take();
+            let ui = std::mem::replace(&mut self.ui_font, true);
+            self.text(
+                &mut canvas,
+                if accelerated { "GPU" } else { "CPU" },
+                [x + 11., y, 29., 16.],
+                TextStyle {
+                    size: 10.,
+                    color: "#d8dee9",
+                    bold: false,
+                    mono: true,
+                    ellipsis: false,
+                    centered: false,
+                },
+            );
+            self.font_factor = factor;
+            self.terminal_grid = grid;
+            self.ui_font = ui;
         }
         let mut pixels = match canvas {
             Pixmap::Cpu(pixels) => pixels.take(),
