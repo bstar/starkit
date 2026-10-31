@@ -316,6 +316,14 @@ loss/disconnect. The interactive frontend-loss gate closes its private Kitty
 window; Ctrl+Q belongs to the app while connected. Its fresh controller
 connection must still report selection and marks before clean shutdown.
 
+2026-10-30: multiline navigation installs its current cell wrap width before
+painting and resets to logical native lines on presentation changes. Password
+cells retain scrolling/carets without plaintext. The public gallery's Alt+S text
+dialog passed private Kitty/Xvfb edits, submission, masked cell rendering and
+state preservation. Keep the fixture independent of inherited TMUX/SSH flags
+and global GPU preferences. This is part of the control catalog gate, not a
+completed consumer migration or physical Mac acceptance.
+
 The hosted FFmpeg 6 movie gate exposed decoder frames with square/unknown SAR
 for an anamorphic container. Processing now applies valid stream SAR before
 frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata
