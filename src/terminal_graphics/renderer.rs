@@ -63,7 +63,10 @@ fn configure_backend(
     }
     #[cfg(feature = "gpu-renderer")]
     {
-        match super::gpu::Gpu::new() {
+        let initialized =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(super::gpu::Gpu::new))
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("GPU initialization panicked")));
+        match initialized {
             Ok(gpu) => {
                 info.selected = Backend::Gpu;
                 info.adapter = Some(gpu.name.clone());
