@@ -8,6 +8,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.13 terminal reply ownership)
+
+- Ordinary presentation preferences no longer enable OSC 72 negotiation. Its
+  capability reply was parsed as keyboard input by stock crossterm, making
+  apps with a plain `q` shortcut exit after their first real Kitty frame.
+- Extension-aware consumers explicitly opt in through the OSC 72 preference
+  entry points, preserving FOLD's vendored parser and drag/drop contract.
+
 ### Fixed (0.13 frontend acceleration)
 
 - Terminal frontends prefer GPU rendering when supported, including when the

@@ -680,10 +680,33 @@ pub fn run_with_preference(
     options: PresentationOptions,
     preference: PresentationPreference,
 ) -> Result<()> {
+    run_preferred(launch, custom, notices, options, preference, false)
+}
+
+/// Opt in to OSC 72 only when the caller's crossterm parser exposes complete
+/// OSC messages and `custom` maps them to `Input::Osc72`. The stock parser
+/// turns unknown OSC payloads into keys, including capability reply `q`.
+pub fn run_with_osc72_preference(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    notices: fn() -> Option<String>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+) -> Result<()> {
+    run_preferred(launch, custom, notices, options, preference, true)
+}
+fn run_preferred(
+    launch: Launch,
+    custom: fn(&Event) -> Option<Input>,
+    notices: fn() -> Option<String>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+    terminal_extensions: bool,
+) -> Result<()> {
     run_impl(
         launch,
         custom,
-        true,
+        terminal_extensions,
         None,
         notices,
         options,
@@ -697,6 +720,25 @@ pub fn run_terminal_socket_with_preference(
     options: PresentationOptions,
     preference: PresentationPreference,
 ) -> Result<()> {
+    run_terminal_preferred(path, custom, options, preference, false)
+}
+/// OSC 72 counterpart of `run_terminal_socket_with_preference`, requiring an
+/// extension-aware parser and callback as in `run_with_osc72_preference`.
+pub fn run_terminal_socket_with_osc72_preference(
+    path: &std::path::Path,
+    custom: fn(&Event) -> Option<Input>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+) -> Result<()> {
+    run_terminal_preferred(path, custom, options, preference, true)
+}
+fn run_terminal_preferred(
+    path: &std::path::Path,
+    custom: fn(&Event) -> Option<Input>,
+    options: PresentationOptions,
+    preference: PresentationPreference,
+    terminal_extensions: bool,
+) -> Result<()> {
     run_impl(
         Launch {
             executable: String::new(),
@@ -708,7 +750,7 @@ pub fn run_terminal_socket_with_preference(
             play: None,
         },
         custom,
-        true,
+        terminal_extensions,
         Some(path),
         || None,
         options,
@@ -1147,6 +1189,9 @@ fn run_impl(
                     meta,
                     payload,
                 } => {
+                    if !terminal_extensions {
+                        continue;
+                    }
                     if meta.len() > 4096
                         || payload.as_ref().is_some_and(|s| s.len() > MAX_MESSAGE / 2)
                         || meta
@@ -1468,8 +1513,10 @@ fn run_impl(
                 break;
             }
             drop_bridge.reset();
-            io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
-            io::stdout().flush()?;
+            if terminal_extensions {
+                io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\")?;
+                io::stdout().flush()?;
+            }
             connection = None;
             connected = false;
             pending_keyboard.clear();
@@ -2057,8 +2104,10 @@ fn run_impl(
     }
     canvases.clear(&mut io::stdout().lock())?;
     drop_bridge.reset();
-    io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\\x1b]72;t=A:i=1\x1b\\")?;
-    io::stdout().flush()?;
+    if terminal_extensions {
+        io::stdout().write_all(b"\x1b]72;t=r:o=0:i=1\x1b\\\x1b]72;t=A:i=1\x1b\\")?;
+        io::stdout().flush()?;
+    }
     presenter.clear(&mut io::stdout().lock())?;
     tracing::info!(
         frames,

@@ -299,6 +299,14 @@ Hosted consumer CI currently covers AMP, FOLD, CORD and WIRE. The SCREEN reposit
 
 ## Delayed terminal probe acceptance
 
+2026-10-30: a real Kitty import window revealed OSC 72 `t=q` replies being
+replayed as ordinary keys by stock crossterm, immediately quitting AMP. Plain
+`run_with_preference` and socket preferences must not query/emit OSC 72. FOLD's
+vendored parser and mapping callback explicitly use `run_with_osc72_preference`
+and `run_terminal_socket_with_osc72_preference`. Never fix this by dropping real
+startup keys or suppressing the application's Quit command. AMP's PTY responder
+now models Kitty's actual reply, which reproduces the failure before the fix.
+
 2026-10-28 hosted Linux artifacts showed a cold software-rendered Kitty answering
 after the former 250 ms timeout. The private pixel fixtures still warm the
 terminal before launching the app, verifying UI behavior after terminal readiness.
