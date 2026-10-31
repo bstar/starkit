@@ -30,6 +30,96 @@ fn viewports() -> [Viewport; 2] {
 }
 
 #[test]
+fn multiline_navigation_follows_the_current_presentation_before_paint() {
+    let text = "abcdefghijklmnopqrst\nsecond\nlast";
+    let mut ui = Runtime::new(
+        View::new(Node::multiline("composer", text)),
+        Registry::default(),
+        theme(),
+    )
+    .unwrap();
+    // Establish a narrow cell layout, then switch to native hard lines. The
+    // cell renderer's old wrap width must not remain in the native editor.
+    ui.render_cells(Viewport::cells(10, 3)).unwrap();
+    ui.frame(Viewport::graphics(400, 120)).unwrap();
+    ui.key(key(KeyCode::Up));
+    ui.key(key(KeyCode::Up));
+    assert_eq!(ui.fields[&"composer".into()].cursor(), 4);
+
+    // Switching back must install the new wrap width before any input, even
+    // if a paint is delayed by transport backpressure.
+    ui.fields
+        .get_mut(&"composer".into())
+        .unwrap()
+        .set_cursor(text.len());
+    ui.frame(Viewport::cells(10, 3)).unwrap();
+    ui.key(key(KeyCode::Up));
+    ui.key(key(KeyCode::Up));
+    assert_eq!(ui.fields[&"composer".into()].cursor(), 14);
+    assert_eq!(
+        ui.key(key(KeyCode::Enter)),
+        vec![Event::Submitted {
+            id: "composer".into(),
+            value: text.into(),
+        }]
+    );
+    assert_eq!(
+        ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+        vec![Event::Changed {
+            id: "composer".into(),
+            value: "abcdefghijklmn\nopqrst\nsecond\nlast".into()
+        }]
+    );
+}
+
+#[test]
+fn password_cells_scroll_and_show_a_caret_without_exposing_text() {
+    let mut ui = Runtime::new(
+        View::new(Node::password("password", "秘密abcd")),
+        Registry::default(),
+        theme(),
+    )
+    .unwrap();
+    let viewport = Viewport::cells(4, 1);
+    let buffer = ui.render_cells(viewport).unwrap();
+    assert!(buffer
+        .content
+        .iter()
+        .all(|cell| matches!(cell.symbol(), "*" | " ")));
+    assert!(buffer[(3, 0)]
+        .modifier
+        .contains(crate::ratatui::style::Modifier::REVERSED));
+    ui.key(key(KeyCode::Home));
+    let buffer = ui.render_cells(viewport).unwrap();
+    assert!(buffer[(0, 0)]
+        .modifier
+        .contains(crate::ratatui::style::Modifier::REVERSED));
+    let surface = ui.render_surface(Viewport::graphics(200, 48)).unwrap();
+    surface.validate().unwrap();
+    assert_eq!(surface.text_carets.len(), 1);
+    assert_eq!(surface.text_carets[0].byte, 0);
+    assert!(!serde_json::to_string(&surface).unwrap().contains("秘密"));
+    assert_eq!(ui.fields[&"password".into()].text(), "秘密abcd");
+}
+
+#[test]
+fn non_caret_native_lines_keep_their_beginning_when_the_value_is_large() {
+    let text = format!("FIRST{}\nlast", "a".repeat(4096));
+    let mut ui = Runtime::new(
+        View::new(Node::multiline("composer", text)),
+        Registry::default(),
+        theme(),
+    )
+    .unwrap();
+    let surface = ui.render_surface(Viewport::graphics(400, 120)).unwrap();
+    surface.validate().unwrap();
+    assert!(surface
+        .nodes
+        .iter()
+        .any(|node| matches!(node, Primitive::Text { text, .. } if text.starts_with("FIRST"))));
+}
+
+#[test]
 fn list_navigation_uses_visible_data_rows_and_skips_disabled_items() {
     // Both viewports leave four data rows after the table header.
     for viewport in viewports() {

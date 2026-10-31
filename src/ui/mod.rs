@@ -241,6 +241,23 @@ impl Node {
             },
         )
     }
+    /// A message composer: Enter submits, Shift/Alt+Enter inserts a newline.
+    pub fn multiline(id: impl Into<Id>, value: impl Into<String>) -> Self {
+        let mut node = Self::field(id, value);
+        if let Widget::Field { multiline, .. } = &mut node.widget {
+            *multiline = true;
+        }
+        node
+    }
+    /// Mask the presentation in both cells and native surfaces. The value in
+    /// application state and edit events remains the original text.
+    pub fn password(id: impl Into<Id>, value: impl Into<String>) -> Self {
+        let mut node = Self::field(id, value);
+        if let Widget::Field { secret, .. } = &mut node.widget {
+            *secret = true;
+        }
+        node
+    }
     pub fn children(mut self, children: Vec<Self>) -> Self {
         self.children = children;
         self

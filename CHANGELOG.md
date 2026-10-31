@@ -8,6 +8,15 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.13 text control candidate)
+
+- Multiline navigation follows the active presentation before painting, rather
+  than retaining a previous cell wrap width in native proportional text.
+- Password cells scroll and show the caret without placing plaintext in the
+  render buffer; non-caret native lines retain their beginning in large values.
+- Public multiline/password constructors and the independent gallery exercise
+  native edits, submission, masked cells and state across presentation changes.
+
 ### Fixed (0.13 terminal and movie compatibility)
 
 - Retain bounded keyboard/paste input while resize or presentation frames are pending, preserving command order without replay after disconnect. Verify frontend loss by closing the fixture's terminal rather than invoking the application's Quit shortcut.

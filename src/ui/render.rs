@@ -174,16 +174,27 @@ impl Runtime {
                         Modifier::empty()
                     });
                     buf.set_style(area, style);
-                    if *secret {
-                        line(
-                            &mut buf,
-                            area,
-                            &"*".repeat(value.chars().count().min(usize::from(area.width))),
-                            style,
-                        );
-                    } else if value.is_empty() && !focused {
+                    if value.is_empty() && !focused {
                         line(&mut buf, area, placeholder, style.fg(rgb(theme.dim)));
                     } else if let Some(field) = self.fields.get_mut(&p.id) {
+                        // Use the editor's scrolling/caret rules for passwords
+                        // too, without ever placing plaintext in the buffer.
+                        let mut masked;
+                        let field = if *secret {
+                            masked = field.clone();
+                            let cursor = field.text()[..field.cursor()].chars().count();
+                            masked.set_text(
+                                field
+                                    .text()
+                                    .chars()
+                                    .map(|c| if c == '\n' { '\n' } else { '*' })
+                                    .collect::<String>(),
+                            );
+                            masked.set_cursor(cursor);
+                            &mut masked
+                        } else {
+                            field
+                        };
                         if let Some((x, y)) =
                             field.render(area, &mut buf, style).filter(|_| focused)
                         {
@@ -422,9 +433,13 @@ impl Runtime {
                     .map(|line| line.len() + 1)
                     .sum::<usize>();
                 for (row, line) in lines.iter().skip(first).take(visible).enumerate() {
-                    let local_cursor = cursor.saturating_sub(byte_base).min(line.len());
-                    let (text, caret) = field_window(line, local_cursor, *secret);
                     let is_caret_line = row + first == cursor_row && focused;
+                    let local_cursor = if is_caret_line {
+                        cursor.saturating_sub(byte_base).min(line.len())
+                    } else {
+                        0
+                    };
+                    let (text, caret) = field_window(line, local_cursor, *secret);
                     let text = if value.is_empty() && !focused {
                         placeholder.clone()
                     } else {

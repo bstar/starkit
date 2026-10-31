@@ -220,6 +220,14 @@ impl Runtime {
                 self.focus = order.first().cloned();
             }
             frame.focus = self.focus.clone();
+            for p in &frame.placements {
+                if let Some(field) = self.fields.get_mut(&p.id) {
+                    field.layout_width(match viewport.presentation {
+                        super::Presentation::Cells => p.body.width,
+                        super::Presentation::Graphics => 0,
+                    });
+                }
+            }
             self.sync_list_scroll(&frame);
             self.frame = Some(frame);
             self.layout_dirty = false;

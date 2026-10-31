@@ -68,6 +68,12 @@ including read-only dialogs with no focusable controls.
 
 Tab/Shift+Tab traverse enabled controls. Text fields handle editing before
 application shortcuts; modal content traps focus and background commands.
+`Node::multiline` creates a message composer: Enter submits and Shift/Alt+Enter
+inserts a newline. Vertical movement follows wrapped rows in cells and logical
+lines in native proportional text, including before a delayed paint and after
+a presentation change. `Node::password` masks both presentations and retains
+scrolling and a visible caret; application values/events still contain the
+original text. Native lines outside the caret row retain their beginning.
 Enter and pointer release invoke the same registered control command. Lists,
 tables and indented trees support Up/Down, Home/End and Page Up/Page Down;
 page movement uses visible data rows, excluding a table heading. Disabled rows
@@ -126,7 +132,10 @@ to the host. Graphics-only consumers must continue to exclude FFmpeg and CPAL.
 Linux native-graphics CI builds the independent starter and exercises it in a
 private Kitty instance under Xvfb. `scripts/test-application-ui.py` verifies
 commands, page navigation and item activation, modal isolation, theme delivery,
-cell/native switching, display recovery and clean exit. It retains screenshots
+multiline submission and masked field editing, cell/native switching, display
+recovery and clean exit. The private terminal removes inherited multiplexer/SSH
+flags and selects the CPU reference backend independently of the parent shell.
+It retains screenshots
 and a JSON report in the `application-ui-proof` artifact. Run it locally with
 `--kitty PATH --kitten PATH --binary PATH --output DIRECTORY`, selecting
 `--display-server wayland` for a Wayland desktop or `x11` for Xvfb.

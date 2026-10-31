@@ -35,9 +35,14 @@ with tempfile.TemporaryDirectory(prefix='kit-ui-proof-') as temporary:
            'XDG_CONFIG_HOME': str(private / 'config'),
            'XDG_CACHE_HOME': str(private / 'cache'),
            'XDG_DATA_HOME': str(private / 'data'), 'STAR_GRAPHICS_SYSTEM_FONTS': '0',
+           'STAR_GRAPHICS_RENDERER': 'cpu',
            'STAR_KIT_STARTER_DIR': str(output / 'profile')}
     env.pop('NO_COLOR', None)
     env.pop('STAR_KIT_ASCII', None)
+    # This child owns a fresh terminal, independently of the agent's enclosing
+    # SSH/multiplexer session. Inherited flags would disable the native probe.
+    for key in ('TMUX', 'TMUX_PANE', 'STY', 'SSH_CONNECTION', 'SSH_TTY'):
+        env.pop(key, None)
     if args.display_server == 'wayland' and os.environ.get('WAYLAND_DISPLAY'):
         env['WAYLAND_DISPLAY'] = str(Path(os.environ['XDG_RUNTIME_DIR']) / os.environ['WAYLAND_DISPLAY'])
     address = f'unix:{private}/kitty.sock'
@@ -128,6 +133,45 @@ def handle_result(args, result, target_window_id, boss):
         rc('send-key', '--match', 'id:1', 'escape')
         wait_for(lambda: difference(played, pixels('modal-closed')) < .0001,
                  'Closing modal did not restore the same application state')
+        rc('send-key', '--match', 'id:1', 'alt+s')
+        wait_for(lambda: difference(played, pixels('text-controls')) > .0001,
+                 'Text controls dialog did not appear')
+        editor = stable('text-controls')
+        rc('send-key', '--match', 'id:1', 'alt+enter')
+        rc('send-text', '--match', 'id:1', 'Third line')
+        wait_for(lambda: difference(editor, pixels('multiline-edited')) > .0001,
+                 'Multiline input did not change the native field')
+        edited = stable('multiline-edited')
+        rc('send-key', '--match', 'id:1', 'enter')
+        wait_for(lambda: difference(edited, pixels('multiline-submitted')) > .0001,
+                 'Enter did not submit the multiline field')
+        submitted = stable('multiline-submitted')
+        rc('send-key', '--match', 'id:1', 'tab')
+        rc('send-key', '--match', 'id:1', 'home')
+        rc('send-text', '--match', 'id:1', '日本語PW-PROBE-739')
+        wait_for(lambda: difference(submitted, pixels('password-edited')) > .0001,
+                 'Password editing did not update the masked field/caret')
+        password = stable('password-edited')
+        rc('send-key', '--match', 'id:1', 'escape')
+        wait_for(lambda: difference(password, pixels('text-controls-closed')) > .0001,
+                 'Text controls dialog did not close')
+        report['native_text_controls'] = True
+        rc('send-key', '--match', 'id:1', 'f9')
+        wait_for(lambda: b'LIBRARY' in rc('get-text', '--match', 'id:1'),
+                 'Text controls could not return to cell presentation')
+        rc('send-key', '--match', 'id:1', 'alt+s')
+        cell_editor = wait_for(lambda: (text if b'Third line' in (text := rc('get-text', '--match', 'id:1'))
+                                       and b'Submitted 3 lines' in text else None),
+                               'Multiline edits/submission did not persist into the cell dialog')
+        assert b'private-fixture' not in cell_editor and b'PW-PROBE-739' not in cell_editor, \
+            'Password plaintext appeared in the terminal buffer'
+        pixels('text-controls-cells')
+        report['cell_text_controls'] = True
+        rc('send-key', '--match', 'id:1', 'escape')
+        rc('send-key', '--match', 'id:1', 'f9')
+        wait_for(lambda: b'LIBRARY' not in rc('get-text', '--match', 'id:1'),
+                 'Text controls could not return to graphical presentation')
+        played = stable('text-controls-returned')
         rc('send-key', '--match', 'id:1', 'alt+t')
         wait_for(lambda: difference(played, pixels('theme-dialog')) > .0001,
                  'Theme picker did not appear')

@@ -13,6 +13,9 @@ pub struct Gallery {
     playing: bool,
     volume: u16,
     modal: bool,
+    editing: bool,
+    message: String,
+    password: String,
     quit: bool,
     status: String,
     theme_id: String,
@@ -28,6 +31,9 @@ impl Default for Gallery {
             playing: false,
             volume: 65,
             modal: false,
+            editing: false,
+            message: "First line\nSecond line".into(),
+            password: "private-fixture".into(),
             quit: false,
             status: "Ready · F1 Help · Alt+T Theme · F9 Cells / Graphics".into(),
         }
@@ -146,6 +152,27 @@ impl Gallery {
                 .height(Size::fixed(12)),
             );
         }
+        if self.editing {
+            view.modal = Some(
+                Node::pane(
+                    "controls-dialog",
+                    Heading::new("Text controls"),
+                    Node::column(
+                        "controls-content",
+                        vec![
+                            Node::label("composer-label", "Message · Alt+Enter for a new line"),
+                            Node::multiline("composer", &self.message),
+                            Node::label("password-label", "Password"),
+                            Node::password("password", &self.password),
+                            Node::new("editor-status", Widget::Status(self.status.clone())),
+                            Node::button("editor-close", "close"),
+                        ],
+                    ),
+                )
+                .width(Size::fixed(48))
+                .height(Size::fixed(18)),
+            );
+        }
         view
     }
     pub fn commands(&self) -> Vec<Command> {
@@ -154,7 +181,7 @@ impl Gallery {
             Command::new("play", if self.playing { "Pause" } else { "Play" })
                 .shortcut("ctrl+p")
                 .checked(self.playing),
-            Command::new("settings", "Settings…"),
+            Command::new("settings", "Settings…").shortcut("alt+s"),
             Command::new("close", "Close"),
         ]);
         commands
@@ -166,10 +193,15 @@ impl Gallery {
                     self.playing = !self.playing;
                     self.status = if self.playing { "Playing" } else { "Paused" }.into();
                 }
-                "settings" | "kit.help" => self.modal = true,
+                "settings" => self.editing = true,
+                "kit.help" => {
+                    self.editing = false;
+                    self.modal = true;
+                }
                 "close" => {
                     self.modal = false;
                     self.choosing_theme = false;
+                    self.editing = false;
                 }
                 "kit.theme" => self.choosing_theme = true,
                 "kit.quit" => self.quit = true,
@@ -182,6 +214,7 @@ impl Gallery {
             Event::CancelModal => {
                 self.modal = false;
                 self.choosing_theme = false;
+                self.editing = false;
             }
             Event::Selected { id, item } if id.0 == "themes" => self.theme_id = item.0,
             Event::Activated { id, item } if id.0 == "themes" => {
@@ -194,6 +227,11 @@ impl Gallery {
                 self.playing = true;
             }
             Event::Changed { id, value } if id.0 == "filter" => self.name = value,
+            Event::Changed { id, value } if id.0 == "composer" => self.message = value,
+            Event::Changed { id, value } if id.0 == "password" => self.password = value,
+            Event::Submitted { id, .. } if id.0 == "composer" => {
+                self.status = format!("Submitted {} lines", self.message.lines().count());
+            }
             Event::Selected { id, item } if id.0 == "tracks" => {
                 self.status = format!("Selected {}", item.0);
                 self.selected = Some(item);

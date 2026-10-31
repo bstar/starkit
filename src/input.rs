@@ -112,6 +112,15 @@ impl TextInput {
         self.multiline
     }
 
+    /// Keep navigation aligned before the first paint and across presentation
+    /// changes. Zero means logical lines, as used by proportional native text.
+    pub(crate) fn layout_width(&mut self, width: u16) {
+        if self.width != width {
+            self.width = width;
+            self.goal = None;
+        }
+    }
+
     /// Put the cursor at a byte offset.
     ///
     /// Clamped to the end of the text, and rounded *down* to a character
