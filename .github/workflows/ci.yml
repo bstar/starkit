@@ -43,7 +43,7 @@ jobs:
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --check
       # dead_code is allowed rather than denied: this is a library, and a
       # module usually lands here complete and tested one work package before
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
       - run: cargo test --no-default-features --features terminal-graphics
       - run: cargo clippy --all-targets --no-default-features --features terminal-graphics -- -D warnings -A dead_code
       - name: Verify native media libraries stay optional
@@ -111,7 +111,7 @@ jobs:
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo check --all-targets --all-features
 
   # SCREEN remains a local integration target until its repository is available
@@ -139,7 +139,7 @@ jobs:
       - name: SCREEN capture and compositor dependencies
         if: matrix.app == 'starscreen'
         run: sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libges-1.0-dev libcairo2-dev libwayland-dev libxkbcommon-dev libudev-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libpixman-1-dev
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           workspaces: consumer -> target/kit-compat
       - run: python3 starkit/scripts/check-consumer.py consumer --kit starkit
@@ -162,7 +162,7 @@ jobs:
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
       - name: Isolated terminal capability and input ownership checks
         run: cargo test --no-default-features --features image --test graphics_probe
       - run: cargo run --example terminal-graphics --features terminal-graphics -- graphical-smoke.png
