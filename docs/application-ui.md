@@ -145,6 +145,30 @@ hosts reuse their scene; value/focus updates retain layout, and geometry changes
 solve it again. The renderer retains unchanged surface rasters under a combined
 16 MB / 64-entry budget. Live frames travel independently of UI rebuilding.
 
+## Links on the attaching computer
+
+With `terminal-graphics`, `frontend_actions::Requests` tracks bounded HTTP/HTTPS
+actions independently of cell/graphical presentation. In `Application::capabilities`,
+pass `capabilities.open_urls_v1` to `set_available`; enable link commands only
+when `available()` is true. Call `open_url` for an explicit user action and drain
+messages into `ServerMessage::FrontendAction` from `Application::effects`.
+Feed `Application::frontend_action` replies into `Requests::receive` and surface
+errors through the application's normal status UI. Set availability false on
+detach, clearing queued requests and stale replies without replaying them.
+
+The local frontend validates the URL again and runs its platform opener with
+the URL as one argument and no terminal fds. It accepts no command, executable
+or local file path from the host. Opener startup is asynchronous; up to eight
+workers/processes remain tracked for nonblocking reaping. Busy and unavailable
+frontends return typed errors. Success confirms dispatch to the opener, not a
+loaded page. A still-running opener is acknowledged after two seconds and
+reaped later; KIT never terminates a browser on disconnect or quit.
+
+Only the actual desktop frontend advertises this service. An unbridged SSH
+shell does not advertise it, even if the host has an opener installed. Legacy
+peers default to unsupported; the session host does not send them new message
+variants. This service does not require codec or sound-device libraries.
+
 ## Specialized content
 
 A `Widget::Custom` reserves a bounded slot and declares its fallback and content

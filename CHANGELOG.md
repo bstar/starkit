@@ -8,6 +8,15 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.13 frontend URL actions)
+
+- Negotiated HTTP/HTTPS opening on the attaching computer, with bounded
+  asynchronous startup, process reaping and typed failures. Host requests carry
+  URLs only; remote commands and local paths are rejected.
+- `frontend_actions::Requests` supplies bounded application tracking and
+  disconnect cleanup. Hosted applications receive results through
+  `Application::frontend_action`. Legacy peers receive no new wire messages.
+
 ### Added (0.13 shared list scrollbars)
 
 - Overflowing lists, tables and trees share bounded cell/native tracks and

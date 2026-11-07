@@ -63,6 +63,13 @@ pub trait Application: super::content::Content {
         false
     }
     #[cfg(all(feature = "terminal-graphics", unix))]
+    fn frontend_action(
+        &mut self,
+        _message: crate::terminal_graphics::frontend_actions::ToHost,
+    ) -> bool {
+        false
+    }
+    #[cfg(all(feature = "terminal-graphics", unix))]
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
@@ -425,6 +432,11 @@ impl<A: Application> Controller for Host<A> {
     }
     fn media(&mut self, message: crate::terminal_graphics::media::ToHost) {
         if self.app.media(message) {
+            self.refresh();
+        }
+    }
+    fn frontend_action(&mut self, message: crate::terminal_graphics::frontend_actions::ToHost) {
+        if self.app.frontend_action(message) {
             self.refresh();
         }
     }

@@ -16,6 +16,7 @@ pub mod client;
 mod drop_bridge;
 pub mod embedded_input;
 mod font;
+pub mod frontend_actions;
 #[cfg(feature = "gpu-renderer")]
 mod gpu;
 mod input_queue;

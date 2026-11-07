@@ -41,6 +41,7 @@ pub trait Controller {
     fn input(&mut self, input: Input);
     fn export(&mut self, _message: super::exports::ToHost) {}
     fn media(&mut self, _message: super::media::ToHost) {}
+    fn frontend_action(&mut self, _message: super::frontend_actions::ToHost) {}
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
         vec![]
     }
@@ -151,6 +152,7 @@ struct Peer {
     assets: std::sync::Mutex<HashSet<String>>,
     presentation: PresentationBudget,
     presentation_switch: bool,
+    open_urls_v1: bool,
 }
 impl Peer {
     fn new(socket: UnixStream) -> Result<Self> {
@@ -221,6 +223,7 @@ impl Peer {
             assets: std::sync::Mutex::new(HashSet::new()),
             presentation: PresentationBudget::default(),
             presentation_switch: false,
+            open_urls_v1: false,
         })
     }
     fn control(&self, message: ServerMessage) -> bool {
@@ -474,6 +477,12 @@ fn serve_with_policy(
                 }
                 ClientMessage::Export { message } => controller.export(message),
                 ClientMessage::Media { message } => controller.media(message),
+                ClientMessage::FrontendAction { message } => {
+                    if p.client.is_some() && p.open_urls_v1 {
+                        controller.frontend_action(message);
+                        input_dirty = true;
+                    }
+                }
                 ClientMessage::Hello {
                     version,
                     viewport: v,
@@ -503,6 +512,7 @@ fn serve_with_policy(
                     exact = None;
                     canvas_video_active = false;
                     controller.attached();
+                    p.open_urls_v1 = capabilities.is_some_and(|cap| cap.open_urls_v1);
                     if let Some(capabilities) = capabilities {
                         local_frames = capabilities.local_frames;
                         streamed_frames = capabilities.streamed_frames && !local_frames;
@@ -729,6 +739,19 @@ fn serve_with_policy(
                 let Some(mut effect) = effects.pop_front() else {
                     break;
                 };
+                if let ServerMessage::FrontendAction {
+                    message: super::frontend_actions::ToClient::OpenUrl { id, .. },
+                } = &effect
+                {
+                    if !p.open_urls_v1 {
+                        controller.frontend_action(super::frontend_actions::ToHost::Result {
+                            id: *id,
+                            error: Some(super::frontend_actions::Error::Unsupported),
+                        });
+                        input_dirty = true;
+                        continue;
+                    }
+                }
                 let wire = matches!(effect, ServerMessage::Osc72 { .. });
                 if let ServerMessage::Osc72 { id, .. } = &mut effect {
                     effect_id += 1;
@@ -838,6 +861,7 @@ mod tests {
             assets: std::sync::Mutex::new(HashSet::new()),
             presentation: PresentationBudget::default(),
             presentation_switch: false,
+            open_urls_v1: false,
         };
         let mut acknowledged = Vec::new();
         for burst in 0..16 {
@@ -968,6 +992,130 @@ mod tests {
             Some(ServerMessage::Scene { .. })
         ));
         assert!(peer.assets.lock().unwrap().contains(&id));
+    }
+    #[test]
+    fn frontend_url_actions_negotiate_without_sending_new_messages_to_old_peers() {
+        use super::super::frontend_actions::{Error, ToClient, ToHost};
+        struct Opener {
+            ready: bool,
+            offered: bool,
+            result: Option<ToHost>,
+            done: std::sync::mpsc::Sender<ToHost>,
+        }
+        impl Controller for Opener {
+            fn tick(&mut self) {}
+            fn attached(&mut self) {
+                self.ready = true;
+            }
+            fn scene(&mut self, viewport: Viewport) -> Scene {
+                Scene::from_buffer(
+                    &crate::ratatui::buffer::Buffer::empty(crate::ratatui::layout::Rect::new(
+                        0, 0, 100, 40,
+                    )),
+                    viewport,
+                    0,
+                )
+            }
+            fn input(&mut self, _: Input) {}
+            fn effects(&mut self) -> Vec<ServerMessage> {
+                if !self.ready {
+                    return vec![];
+                }
+                if std::mem::replace(&mut self.offered, true) {
+                    return vec![];
+                }
+                vec![ServerMessage::FrontendAction {
+                    message: ToClient::OpenUrl {
+                        id: 1,
+                        url: "https://example.org/".into(),
+                    },
+                }]
+            }
+            fn frontend_action(&mut self, message: ToHost) {
+                self.result = Some(message);
+            }
+            fn closed(&self) -> bool {
+                self.result.is_some()
+            }
+            fn shutdown(&mut self) {
+                self.done.send(self.result.take().unwrap()).unwrap();
+            }
+        }
+        for supported in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("private");
+            let socket = socket_path(&root, "opener").unwrap();
+            let (done, result) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                serve(
+                    &root,
+                    "opener",
+                    Opener {
+                        ready: false,
+                        offered: false,
+                        result: None,
+                        done,
+                    },
+                )
+                .unwrap()
+            });
+            let start = Instant::now();
+            let mut stream = loop {
+                if let Ok(stream) = UnixStream::connect(&socket) {
+                    break stream;
+                }
+                assert!(start.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut capabilities = super::super::capabilities::Capabilities::detected(
+                &crate::graphics::Graphics::disabled(),
+            );
+            capabilities.open_urls_v1 = true;
+            write_message(
+                &ClientMessage::Hello {
+                    version: VERSION,
+                    viewport: Viewport::default(),
+                    client: "opener-proof".into(),
+                    capabilities: supported.then_some(capabilities),
+                },
+                &mut stream,
+            )
+            .unwrap();
+            let mut received = false;
+            while let Some(message) = read_message::<ServerMessage>(&mut reader).unwrap() {
+                match message {
+                    ServerMessage::FrontendAction {
+                        message: ToClient::OpenUrl { id, url },
+                    } => {
+                        assert!(supported, "new wire message reached a legacy peer");
+                        assert_eq!(url, "https://example.org/");
+                        received = true;
+                        write_message(
+                            &ClientMessage::FrontendAction {
+                                message: ToHost::Result { id, error: None },
+                            },
+                            &mut stream,
+                        )
+                        .unwrap();
+                    }
+                    ServerMessage::Closed => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(received, supported);
+            assert_eq!(
+                result.recv_timeout(Duration::from_secs(2)).unwrap(),
+                ToHost::Result {
+                    id: 1,
+                    error: (!supported).then_some(Error::Unsupported),
+                }
+            );
+            server.join().unwrap();
+        }
     }
     #[test]
     fn ignored_input_is_acknowledged_without_resending_the_scene() {

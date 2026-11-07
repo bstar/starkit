@@ -377,6 +377,9 @@ pub enum Input {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    FrontendAction {
+        message: super::frontend_actions::ToHost,
+    },
     Export {
         message: super::exports::ToHost,
     },
@@ -420,6 +423,10 @@ pub enum ClientMessage {
 // Scenes already own their variable-sized payloads; keep the wire envelope inline.
 #[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
+    /// Send only after the frontend advertises `open_urls_v1`.
+    FrontendAction {
+        message: super::frontend_actions::ToClient,
+    },
     TerminalFont {
         size_millipoints: u32,
     },

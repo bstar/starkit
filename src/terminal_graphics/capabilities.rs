@@ -47,6 +47,9 @@ pub struct Capabilities {
     /// Opt-in delivery of exported files into a frontend-owned directory.
     #[serde(default)]
     pub file_exports: bool,
+    /// HTTP/HTTPS links open on the attaching computer, never on the host.
+    #[serde(default)]
+    pub open_urls_v1: bool,
     /// Local Kitty/Cocoa mouse visibility, separate from captured video pixels.
     #[serde(default)]
     pub pointer_hiding: bool,
@@ -182,6 +185,7 @@ impl Capabilities {
             pointer_hiding: cfg!(target_os = "macos")
                 && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
+            open_urls_v1: false,
             local_frames: false,
             streamed_frames: false,
             lossless_frames: true,
@@ -305,6 +309,7 @@ mod tests {
         assert!(!old.canvas_video_high_quality);
         assert!(!old.surface_hover);
         assert!(!old.pixel_mouse);
+        assert!(!old.open_urls_v1);
     }
     #[test]
     fn image_support_does_not_claim_pixel_pointer_precision() {
@@ -314,6 +319,7 @@ mod tests {
             pointer_hiding: cfg!(target_os = "macos")
                 && std::env::var_os("KITTY_WINDOW_ID").is_some(),
             file_exports: false,
+            open_urls_v1: false,
             local_frames: false,
             streamed_frames: false,
             lossless_frames: true,

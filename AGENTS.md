@@ -299,6 +299,14 @@ painting to prevent background text/borders and selection styles leaking in.
 
 ## Crossterm coordinate parser
 
+2026-10-31: `frontend_actions::Requests` queues explicit HTTP/HTTPS actions for
+the attaching desktop. Negotiate `open_urls_v1`; legacy peers must never receive
+the new message variant. The session reports unsupported actions back to the
+controller. Browser spawning belongs only in the local frontend, is bounded and
+asynchronous, and uses one validated URL argument with detached terminal fds.
+Applications reset the request tracker on detach and never replay its effects.
+Video playback remains in the existing media protocols, not this URL service.
+
 Crossterm 0.29.0 panics on zero SGR mouse/cursor coordinates in debug builds.
 KIT and both independent examples patch crates.io to upstream commit
 `d4e9929f9a1c4adf91505d54f8527c817ae504cd`, matching AMP/CORD. Cargo only

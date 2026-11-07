@@ -802,6 +802,8 @@ fn run_impl(
     capabilities.video = cfg!(feature = "media");
     capabilities.presentation_switch = preference.is_some();
     let environment = crate::presentation::Environment::detect();
+    capabilities.open_urls_v1 = !environment.ssh && super::frontend_actions::available();
+    let mut url_actions = super::frontend_actions::Frontend::new(capabilities.open_urls_v1);
     let profile = capabilities.profile(
         &environment,
         graphics.name(),
@@ -935,6 +937,13 @@ fn run_impl(
     let mut frames = 0u64;
     let mut bytes = 0u64;
     loop {
+        for message in url_actions.poll() {
+            if connected {
+                if let Some(c) = &connection {
+                    c.send(ClientMessage::FrontendAction { message })?;
+                }
+            }
+        }
         if connected {
             if let (Some(c), Some((revision, generation))) = (&connection, shown) {
                 if let Some(message) = notices() {
@@ -1121,6 +1130,7 @@ fn run_impl(
                     presentation_switch,
                     ..
                 } => {
+                    url_actions.reset();
                     switch_supported = presentation_switch;
                     if direct_play.is_some() && !video_player {
                         fatal = Some(
@@ -1170,6 +1180,15 @@ fn run_impl(
                     shown_scene = None;
                 }
                 ServerMessage::LaunchMovie { path } => direct_play = Some(path),
+                ServerMessage::FrontendAction { message } => {
+                    if connected {
+                        if let Some(message) = url_actions.receive(message) {
+                            if let Some(c) = &connection {
+                                c.send(ClientMessage::FrontendAction { message })?;
+                            }
+                        }
+                    }
+                }
                 ServerMessage::Clipboard { text } => renderer.clipboard(&text)?,
                 ServerMessage::Asset { id, png } => {
                     assets.insert(id, png)?;
@@ -1479,6 +1498,7 @@ fn run_impl(
                     .flatten()
                     .is_some());
         if dead {
+            url_actions.reset();
             tracing::warn!(
                 timed_out,
                 quiet_ms = last_reply.elapsed().as_millis(),

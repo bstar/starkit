@@ -225,8 +225,11 @@ def handle_result(args, result, target_window_id, boss):
         rc('send-key', '--match', 'id:1', 'alt+t')
         stable('scrollbar-dialog-native')
         rc('send-key', '--match', 'id:1', 'f9')
+        wait_for(lambda: b'THEME' in rc('get-text', '--match', 'id:1'),
+                 'Theme dialog did not finish switching to cells')
+        stable('scrollbar-dialog-cells')
         original_lines = json.loads(rc('ls'))[0]['tabs'][0]['windows'][0]['lines']
-        rc('set-font-size', '32')
+        rc('action', '--match', 'id:1', 'change_font_size', 'current', '+10')
         wait_for(lambda: json.loads(rc('ls'))[0]['tabs'][0]['windows'][0]['lines'] < original_lines,
                  'Private terminal font zoom did not reduce its cell grid')
         def scrollbar_text():
@@ -256,7 +259,7 @@ def handle_result(args, result, target_window_id, boss):
         pixels('scrollbar-after')
         assert 'theme' in scrolled.casefold(), 'Scrollbar release activated a row or escaped its modal'
         rc('send-key', '--match', 'id:1', 'escape')
-        rc('set-font-size', '0')
+        rc('action', '--match', 'id:1', 'change_font_size', 'current', '0')
         report['list_scrollbar_drag'] = True
         def restored_table():
             text = rc('get-text', '--match', 'id:1').decode()
