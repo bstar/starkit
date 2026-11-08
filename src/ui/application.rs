@@ -30,6 +30,11 @@ pub trait Application: super::content::Content {
     fn intercept_key(&mut self, _key: KeyEvent) -> bool {
         false
     }
+    /// Consume domain paste input (for example dropped folder URLs) before
+    /// ordinary focused-field editing. Return false to retain normal paste.
+    fn intercept_paste(&mut self, _text: &str) -> bool {
+        false
+    }
     /// Inspect resolved geometry for domain paging/custom content.
     /// This callback must not rebuild the UI or start another layout solver.
     fn layout(&mut self, _frame: &Frame) {}
@@ -177,6 +182,14 @@ impl<A: Application> Host<A> {
         }
         self.refresh();
     }
+    fn paste(&mut self, text: &str) -> Vec<Event> {
+        if self.app.intercept_paste(text) {
+            self.refresh();
+            vec![]
+        } else {
+            self.ui.paste(text)
+        }
+    }
     fn key(&mut self, key: KeyEvent) -> Vec<Event> {
         if key.kind == KeyEventKind::Release {
             return vec![];
@@ -240,7 +253,7 @@ impl<A: Application> Host<A> {
                 }
                 let events = match event::read()? {
                     InputEvent::Key(key) => self.key(key),
-                    InputEvent::Paste(text) => self.ui.paste(&text),
+                    InputEvent::Paste(text) => self.paste(&text),
                     InputEvent::Mouse(mouse) => match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
                             self.ui.pointer(mouse.column, mouse.row, true)
@@ -346,7 +359,7 @@ impl<A: Application> Controller for Host<A> {
             } => decode_key(code, modifiers)
                 .map(|key| self.key(key))
                 .unwrap_or_default(),
-            Input::Paste { ref text } => self.ui.paste(text),
+            Input::Paste { ref text } => self.paste(text),
             Input::Pointer {
                 ref action,
                 button: 0,
@@ -561,6 +574,15 @@ mod tests {
                 false
             }
         }
+        fn intercept_paste(&mut self, text: &str) -> bool {
+            if text.starts_with("file://") {
+                self.interceptions += 1;
+                self.value = "Dropped folder".into();
+                true
+            } else {
+                false
+            }
+        }
         fn layout(&mut self, frame: &Frame) {
             self.layout_width = frame.viewport.width;
         }
@@ -603,6 +625,29 @@ mod tests {
         assert!(
             matches!(&host.ui.view().root.children[0].widget,Widget::Field { value,.. } if value=="Chord")
         );
+    }
+    #[test]
+    fn domain_paste_precedes_field_editing_and_ordinary_paste_still_edits() {
+        let mut host = host();
+        host.ui.render_cells(UiViewport::cells(80, 24)).unwrap();
+        host.ui.request_focus("field".into()).unwrap();
+        assert!(
+            matches!(&host.paste("hello")[..], [Event::Changed {value,..}] if value == "hello")
+        );
+        assert!(host.paste("file:///folder").is_empty());
+        assert_eq!(host.app.interceptions, 1);
+        assert!(
+            matches!(&host.ui.view().root.children[0].widget, Widget::Field {value,..} if value == "Dropped folder")
+        );
+    }
+    #[cfg(all(feature = "terminal-graphics", unix))]
+    #[test]
+    fn graphical_paste_uses_the_same_domain_interception() {
+        let mut host = host();
+        host.input(Input::Paste {
+            text: "file:///folder".into(),
+        });
+        assert_eq!(host.app.interceptions, 1);
     }
     #[cfg(all(feature = "terminal-graphics", unix))]
     #[test]

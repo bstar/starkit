@@ -8,6 +8,12 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.14 domain paste input)
+
+- Optional `Application::intercept_paste` handles dropped folder URLs before
+  focused-field editing in both cell and graphical hosts. Existing applications
+  keep their normal paste behavior by default.
+
 ### Added (0.13 frontend URL actions)
 
 - Negotiated HTTP/HTTPS opening on the attaching computer, with bounded
