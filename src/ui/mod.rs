@@ -432,7 +432,7 @@ mod tests {
             )
             .gap(0),
         );
-        let mut ui = Runtime::new(view, registry(), theme.clone()).unwrap();
+        let mut ui = Runtime::new(view.clone(), registry(), theme.clone()).unwrap();
         let cells = ui.render_cells(Viewport::cells(40, 8)).unwrap();
         assert_eq!(
             ui.current_frame()
@@ -446,6 +446,23 @@ mod tests {
         assert_eq!(cells[(0, 0)].bg, crate::chrome::rgb(theme.accent));
         assert_ne!(cells[(0, 1)].bg, cells[(0, 2)].bg);
         ui.render_surface(Viewport::graphics(320, 192)).unwrap();
+        let mut next = view;
+        next.root.gap = Some(1);
+        next.root.children[0].primary = false;
+        next.root.children[1].striped = false;
+        ui.update(next, registry()).unwrap();
+        let cells = ui.render_cells(Viewport::cells(40, 8)).unwrap();
+        assert_eq!(
+            ui.current_frame()
+                .unwrap()
+                .get(&"rows".into())
+                .unwrap()
+                .area
+                .y,
+            2
+        );
+        assert_ne!(cells[(0, 0)].bg, crate::chrome::rgb(theme.accent));
+        assert_eq!(cells[(0, 2)].bg, cells[(0, 3)].bg);
     }
     fn registry() -> Registry {
         Registry::new(vec![

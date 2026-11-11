@@ -484,6 +484,7 @@ pub(super) fn same_geometry(a: &View, b: &View) -> bool {
             && a.overflow == b.overflow
             && a.priority == b.priority
             && a.wrap == b.wrap
+            && a.gap == b.gap
             && a.table_columns
                 .iter()
                 .map(|c| c.width)
@@ -525,6 +526,8 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) -> anyhow::Result<()> {
     for p in &mut frame.placements {
         if let Some((node, enabled)) = nodes.get(&p.id) {
             let previous = p.list_layout(frame.viewport);
+            p.primary = node.primary;
+            p.striped = node.striped;
             p.widget = node.widget.clone();
             p.enabled = *enabled;
             p.focusable = node.focusable();
