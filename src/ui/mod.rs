@@ -159,6 +159,10 @@ pub struct Node {
     pub table_columns: Vec<Column>,
     /// Optional logical spacing; defaults preserve existing layouts.
     pub gap: Option<u16>,
+    /// Container inset in graphical pixels; rounded to cells in the fallback.
+    pub padding_pixels: u16,
+    /// Exact graphical group spacing, taking precedence over logical gap.
+    pub gap_pixels: Option<u16>,
     pub font_size: Option<u16>,
     /// Semantic primary action, rendered with the shared accent.
     pub primary: bool,
@@ -181,6 +185,8 @@ impl Node {
             enabled: true,
             table_columns: vec![],
             gap: None,
+            padding_pixels: 0,
+            gap_pixels: None,
             font_size: None,
             primary: false,
             navigation: false,
@@ -190,6 +196,16 @@ impl Node {
     /// A sidebar/tab destination; selection comes from the shared command state.
     pub fn navigation(mut self) -> Self {
         self.navigation = true;
+        self
+    }
+    /// Inset a pane, row or column without moving its outer border or hit area.
+    pub fn padding_pixels(mut self, pixels: u16) -> Self {
+        self.padding_pixels = pixels;
+        self
+    }
+    /// Set physical group spacing; cell presentation rounds to its grid.
+    pub fn gap_pixels(mut self, pixels: u16) -> Self {
+        self.gap_pixels = Some(pixels);
         self
     }
     pub fn font_size(mut self, size: u16) -> Self {
@@ -533,6 +549,42 @@ mod tests {
                     )));
                 }
             }
+        }
+    }
+    #[test]
+    fn padding_and_pixel_gaps_keep_pointer_targets_in_the_painted_content() {
+        for viewport in [Viewport::graphics(640, 480), Viewport::cells(80, 24)] {
+            let view = View::new(
+                Node::column(
+                    "root",
+                    vec![
+                        Node::button("one", "open").height(Size::fixed(1)),
+                        Node::button("two", "open").height(Size::fixed(1)),
+                    ],
+                )
+                .padding_pixels(16)
+                .gap_pixels(12),
+            );
+            let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+            let frame = ui.frame(viewport).unwrap().clone();
+            let one = frame.get(&"one".into()).unwrap().area;
+            let two = frame.get(&"two".into()).unwrap().area;
+            assert!(one.x > 0 && one.y > 0);
+            assert!(two.y > one.bottom());
+            assert!(ui.pointer(0, 0, true).is_empty());
+            assert!(ui.pointer(0, 0, false).is_empty());
+            ui.pointer(two.x + 1, two.y, true);
+            assert_eq!(
+                ui.pointer(two.x + 1, two.y, false),
+                vec![Event::Command("open".into())]
+            );
+            let layouts = ui.layout_count();
+            let mut next = ui.view().clone();
+            next.root.padding_pixels = 24;
+            ui.update(next, registry()).unwrap();
+            let after = ui.frame(viewport).unwrap();
+            assert!(after.get(&"one".into()).unwrap().area.x > one.x);
+            assert!(ui.layout_count() > layouts);
         }
     }
     fn registry() -> Registry {

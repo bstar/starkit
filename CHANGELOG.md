@@ -8,6 +8,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.17 container spacing)
+
+- Opt-in container padding and physical group gaps share KIT's solved body,
+  rendering and hit geometry. Native panes inset their headings consistently;
+  cell fallback rounds physical spacing to its grid. Defaults stay unchanged.
+
+
 ### Added (0.16 graphical workspace presentation)
 
 - Applications can request the negotiated terminal monospace font for all shared

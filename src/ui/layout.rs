@@ -69,6 +69,7 @@ pub struct Placement {
     pub primary: bool,
     pub navigation: bool,
     pub font_size: Option<u16>,
+    pub padding: [u16; 2],
     pub striped: bool,
 }
 
@@ -154,6 +155,11 @@ pub(super) fn validate(view: &View) -> anyhow::Result<()> {
             !node.id.0.is_empty() && node.id.0.len() <= 120 && ids.insert(node.id.clone()),
             "Empty or duplicate UI identity {}",
             node.id.0
+        );
+        anyhow::ensure!(
+            node.padding_pixels == 0
+                || matches!(node.widget, Widget::Pane(_) | Widget::Row | Widget::Column),
+            "Padding belongs to a container"
         );
         match node.widget {
             Widget::Row | Widget::Column => {}
@@ -257,6 +263,13 @@ pub(super) fn pane_header(area: Rect) -> Rect {
 pub(super) fn text_area(area: Rect) -> Rect {
     inset(area, TEXT_PADDING, 0, 0)
 }
+fn spacing(pixels: u16, horizontal: bool, viewport: Viewport) -> u16 {
+    if viewport.presentation == Presentation::Cells {
+        pixels.div_ceil(if horizontal { 8 } else { 24 })
+    } else {
+        pixels
+    }
+}
 fn inset(area: Rect, x: u16, top: u16, bottom: u16) -> Rect {
     Rect::new(
         area.x.saturating_add(x).min(area.right()),
@@ -285,6 +298,14 @@ fn place(
     } else {
         area
     };
+    let px = spacing(node.padding_pixels, true, frame.viewport);
+    let py = spacing(node.padding_pixels, false, frame.viewport);
+    let body = Rect::new(
+        body.x.saturating_add(px).min(body.right()),
+        body.y.saturating_add(py).min(body.bottom()),
+        body.width.saturating_sub(px.saturating_mul(2)),
+        body.height.saturating_sub(py.saturating_mul(2)),
+    );
     let enabled = enabled && node.enabled;
     frame.placements.push(Placement {
         id: node.id.clone(),
@@ -299,6 +320,7 @@ fn place(
         primary: node.primary,
         navigation: node.navigation,
         font_size: node.font_size,
+        padding: [px, py],
         striped: node.striped,
     });
     if matches!(node.widget, Widget::Pane(_)) {
@@ -333,9 +355,16 @@ fn place(
         };
         let layout = group
             .gap(
-                node.gap
-                    .map(|gap| {
-                        gap.saturating_mul(frame.viewport.scale(matches!(node.widget, Widget::Row)))
+                node.gap_pixels
+                    .map(|pixels| {
+                        spacing(pixels, matches!(node.widget, Widget::Row), frame.viewport)
+                    })
+                    .or_else(|| {
+                        node.gap.map(|gap| {
+                            gap.saturating_mul(
+                                frame.viewport.scale(matches!(node.widget, Widget::Row)),
+                            )
+                        })
                     })
                     .unwrap_or_else(|| frame.viewport.gap()),
             )
@@ -489,6 +518,8 @@ pub(super) fn same_geometry(a: &View, b: &View) -> bool {
             && a.priority == b.priority
             && a.wrap == b.wrap
             && a.gap == b.gap
+            && a.gap_pixels == b.gap_pixels
+            && a.padding_pixels == b.padding_pixels
             && a.table_columns
                 .iter()
                 .map(|c| c.width)

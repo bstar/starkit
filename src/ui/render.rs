@@ -471,7 +471,9 @@ impl Runtime {
                     style.frame(surface, rect, false);
                 }
                 if rect.height >= super::layout::BODY_TOP && rect.width >= 16 {
-                    let header = super::layout::pane_header(p.area);
+                    let mut header = super::layout::pane_header(p.area);
+                    header.y = header.y.saturating_add(p.padding[1]).min(p.area.bottom());
+                    header.height = header.height.min(p.area.bottom().saturating_sub(header.y));
                     surface.fill(pixel_rect(header), &style.colors.title, 0);
                     // Align headings with field, label and list text below.
                     let body_text = super::layout::text_area(p.body);
