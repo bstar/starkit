@@ -242,7 +242,12 @@ impl Runtime {
                         } else {
                             format!("[ {} ]", command.label)
                         };
-                        let style = if focused {
+                        let style = if p.primary && command.enabled {
+                            style
+                                .bg(rgb(theme.accent))
+                                .fg(rgb(theme.bg))
+                                .add_modifier(Modifier::BOLD)
+                        } else if focused {
                             style
                                 .fg(rgb(theme.row_cursor_fg))
                                 .bg(rgb(theme.row_cursor_bg))
@@ -334,6 +339,8 @@ impl Runtime {
                                 )
                         } else if !item.enabled {
                             style.fg(rgb(theme.dim))
+                        } else if p.striped && (offset + row) % 2 == 1 {
+                            style.bg(rgb(theme.row_bg.mix(theme.fg, 0.035)))
                         } else {
                             style
                         };
@@ -519,7 +526,10 @@ impl Runtime {
                     } else {
                         command.label.clone()
                     };
-                    if p.enabled {
+                    if p.primary && p.enabled && command.enabled {
+                        surface.fill(rect, &self.theme.accent.to_hex(), 2);
+                        surface.text_centered(rect, text, &self.theme.bg.to_hex(), 12, true);
+                    } else if p.enabled {
                         style.button(surface, rect, &text, &action, command.checked);
                     } else {
                         style.frame(surface, rect, true);
@@ -623,12 +633,20 @@ impl Runtime {
                     .take(usize::from(rows.saturating_sub(header)))
                     .enumerate()
                 {
+                    let alternate = p.striped && (offset + row) % 2 == 1;
                     let row = PixelRect::new(
                         rect.x,
                         rect.y + (row as u16 + header) * height,
                         rect.width,
                         height,
                     );
+                    if alternate {
+                        surface.fill(
+                            row,
+                            &self.theme.row_bg.mix(self.theme.fg, 0.035).to_hex(),
+                            0,
+                        );
+                    }
                     if selected.as_ref() == Some(&item.id) {
                         surface.fill(
                             row,

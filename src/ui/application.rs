@@ -3,7 +3,7 @@ use super::{
     command::{Command, Registry},
     Event, Frame, Runtime, View,
 };
-use crate::crossterm::event::{KeyEvent, KeyEventKind};
+use crate::crossterm::event::{KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use crate::theme::Theme;
 #[cfg(all(feature = "terminal-graphics", unix))]
 use crate::{
@@ -28,6 +28,11 @@ pub trait Application: super::content::Content {
     /// Stateful domain chords can consume a key before standard editing/navigation.
     /// Releases are filtered by the host. Ordinary shortcuts belong in commands.
     fn intercept_key(&mut self, _key: KeyEvent) -> bool {
+        false
+    }
+    /// Intercept domain drags in the resolved frame's coordinate system.
+    /// Return false to keep KIT's normal focus, capture and controls.
+    fn intercept_mouse(&mut self, _event: MouseEvent) -> bool {
         false
     }
     /// Consume domain paste input (for example dropped folder URLs) before
@@ -206,8 +211,29 @@ impl<A: Application> Host<A> {
     /// Cell-only applications use the same state/command contract without
     /// linking a rasterizer, codecs or audio devices. Terminal ownership and
     /// repaint recovery stay in KIT.
+    pub fn mouse(&mut self, mouse: MouseEvent) -> Vec<Event> {
+        if self.app.intercept_mouse(mouse) {
+            if matches!(mouse.kind, MouseEventKind::Up(_)) {
+                self.ui.cancel_pointer();
+            }
+            self.refresh();
+            return vec![];
+        }
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.ui.pointer(mouse.column, mouse.row, true)
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.ui.pointer(mouse.column, mouse.row, false)
+            }
+            MouseEventKind::Drag(MouseButton::Left) => self.ui.drag(mouse.column, mouse.row),
+            MouseEventKind::ScrollUp => self.ui.scroll(mouse.column, mouse.row, -3),
+            MouseEventKind::ScrollDown => self.ui.scroll(mouse.column, mouse.row, 3),
+            _ => vec![],
+        }
+    }
     pub fn run_cells(mut self) -> anyhow::Result<()> {
-        use crate::crossterm::event::{self, Event as InputEvent, MouseButton, MouseEventKind};
+        use crate::crossterm::event::{self, Event as InputEvent};
         let profile = crate::presentation::Profile::resolve(
             &crate::presentation::Environment::detect(),
             crate::presentation::Observed::default(),
@@ -254,27 +280,7 @@ impl<A: Application> Host<A> {
                 let events = match event::read()? {
                     InputEvent::Key(key) => self.key(key),
                     InputEvent::Paste(text) => self.paste(&text),
-                    InputEvent::Mouse(mouse) => match mouse.kind {
-                        MouseEventKind::Down(MouseButton::Left) => {
-                            self.ui.pointer(mouse.column, mouse.row, true)
-                        }
-                        MouseEventKind::Up(MouseButton::Left) => {
-                            self.ui.pointer(mouse.column, mouse.row, false)
-                        }
-                        MouseEventKind::Drag(MouseButton::Left) => {
-                            self.ui.drag(mouse.column, mouse.row)
-                        }
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.ui.scroll(
-                            mouse.column,
-                            mouse.row,
-                            if mouse.kind == MouseEventKind::ScrollUp {
-                                -3
-                            } else {
-                                3
-                            },
-                        ),
-                        _ => vec![],
-                    },
+                    InputEvent::Mouse(mouse) => self.mouse(mouse),
                     InputEvent::Resize(_, _) => {
                         generation += 1;
                         self.ui.cancel_pointer();
@@ -389,14 +395,19 @@ impl<A: Application> Controller for Host<A> {
                 } else {
                     return;
                 };
-                match action.as_str() {
-                    "drag" => self.ui.drag(x, y),
-                    "scroll_up" | "scroll_down" => {
-                        self.ui
-                            .scroll(x, y, if action == "scroll_up" { -3 } else { 3 })
-                    }
-                    _ => self.ui.pointer(x, y, action == "down"),
-                }
+                let kind = match action.as_str() {
+                    "drag" => MouseEventKind::Drag(MouseButton::Left),
+                    "scroll_up" => MouseEventKind::ScrollUp,
+                    "scroll_down" => MouseEventKind::ScrollDown,
+                    "down" => MouseEventKind::Down(MouseButton::Left),
+                    _ => MouseEventKind::Up(MouseButton::Left),
+                };
+                self.mouse(MouseEvent {
+                    kind,
+                    column: x,
+                    row: y,
+                    modifiers: crate::crossterm::event::KeyModifiers::NONE,
+                })
             }
             Input::CancelPointer => {
                 self.ui.cancel_pointer();
@@ -574,6 +585,14 @@ mod tests {
                 false
             }
         }
+        fn intercept_mouse(&mut self, mouse: MouseEvent) -> bool {
+            if mouse.modifiers.contains(KeyModifiers::ALT) {
+                self.interceptions += 1;
+                true
+            } else {
+                false
+            }
+        }
         fn intercept_paste(&mut self, text: &str) -> bool {
             if text.starts_with("file://") {
                 self.interceptions += 1;
@@ -625,6 +644,36 @@ mod tests {
         assert!(
             matches!(&host.ui.view().root.children[0].widget,Widget::Field { value,.. } if value=="Chord")
         );
+    }
+    #[test]
+    fn consumed_mouse_input_cancels_release_capture_without_replaying_it() {
+        let mut host = host();
+        host.ui.render_cells(UiViewport::cells(80, 24)).unwrap();
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let events = host.mouse(mouse);
+        host.dispatch(events);
+        assert!(host.ui.captured().is_some());
+        assert!(host
+            .mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::ALT,
+                ..mouse
+            })
+            .is_empty());
+        assert!(host
+            .mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                modifiers: KeyModifiers::ALT,
+                ..mouse
+            })
+            .is_empty());
+        assert_eq!(host.app.interceptions, 2);
+        assert!(host.ui.captured().is_none());
     }
     #[test]
     fn domain_paste_precedes_field_editing_and_ordinary_paste_still_edits() {

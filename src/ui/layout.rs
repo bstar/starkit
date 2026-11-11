@@ -66,6 +66,8 @@ pub struct Placement {
     pub focusable: bool,
     pub modal: bool,
     pub columns: Vec<ColumnPlacement>,
+    pub primary: bool,
+    pub striped: bool,
 }
 
 /// List text and its optional scrollbar in the resolved frame's coordinates.
@@ -292,6 +294,8 @@ fn place(
         focusable: node.focusable(),
         modal,
         columns: table_columns(node, body, frame.viewport)?,
+        primary: node.primary,
+        striped: node.striped,
     });
     if matches!(node.widget, Widget::Pane(_)) {
         if node.visibility != panes::Visibility::Collapsed {
@@ -324,7 +328,13 @@ fn place(
             panes::Node::column(children)
         };
         let layout = group
-            .gap(frame.viewport.gap())
+            .gap(
+                node.gap
+                    .map(|gap| {
+                        gap.saturating_mul(frame.viewport.scale(matches!(node.widget, Widget::Row)))
+                    })
+                    .unwrap_or_else(|| frame.viewport.gap()),
+            )
             .wrap(node.wrap)
             .layout(body)?;
         frame.fits &= layout.fits;

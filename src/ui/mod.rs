@@ -157,6 +157,12 @@ pub struct Node {
     pub enabled: bool,
     /// Empty uses equal-width columns for a list with headings.
     pub table_columns: Vec<Column>,
+    /// Optional logical spacing; defaults preserve existing layouts.
+    pub gap: Option<u16>,
+    /// Semantic primary action, rendered with the shared accent.
+    pub primary: bool,
+    /// Subtle alternating rows for dense data lists.
+    pub striped: bool,
 }
 impl Node {
     pub fn new(id: impl Into<Id>, widget: Widget) -> Self {
@@ -172,7 +178,22 @@ impl Node {
             wrap: Wrap::Never,
             enabled: true,
             table_columns: vec![],
+            gap: None,
+            primary: false,
+            striped: false,
         }
+    }
+    pub fn gap(mut self, gap: u16) -> Self {
+        self.gap = Some(gap);
+        self
+    }
+    pub fn primary(mut self) -> Self {
+        self.primary = true;
+        self
+    }
+    pub fn striped(mut self) -> Self {
+        self.striped = true;
+        self
     }
     pub fn row(id: impl Into<Id>, children: Vec<Self>) -> Self {
         Self::new(id, Widget::Row).children(children)
@@ -388,6 +409,43 @@ mod tests {
     use command::{Command, Registry, Scope};
     fn theme() -> Theme {
         Theme::resolve(&ThemeFile::parse(BUILTINS[0].toml).unwrap())
+    }
+    #[test]
+    fn compact_spacing_primary_actions_and_alternating_rows_are_opt_in() {
+        let mut theme = theme();
+        theme.row_bg = crate::theme::color::Rgb::new(40, 40, 40);
+        theme.fg = crate::theme::color::Rgb::new(235, 219, 178);
+        let view = View::new(
+            Node::column(
+                "root",
+                vec![
+                    Node::button("action", "open")
+                        .primary()
+                        .height(Size::fixed(1)),
+                    Node::list(
+                        "rows",
+                        vec![Item::new("a", "Alpha"), Item::new("b", "Beta")],
+                        None,
+                    )
+                    .striped(),
+                ],
+            )
+            .gap(0),
+        );
+        let mut ui = Runtime::new(view, registry(), theme.clone()).unwrap();
+        let cells = ui.render_cells(Viewport::cells(40, 8)).unwrap();
+        assert_eq!(
+            ui.current_frame()
+                .unwrap()
+                .get(&"rows".into())
+                .unwrap()
+                .area
+                .y,
+            1
+        );
+        assert_eq!(cells[(0, 0)].bg, crate::chrome::rgb(theme.accent));
+        assert_ne!(cells[(0, 1)].bg, cells[(0, 2)].bg);
+        ui.render_surface(Viewport::graphics(320, 192)).unwrap();
     }
     fn registry() -> Registry {
         Registry::new(vec![

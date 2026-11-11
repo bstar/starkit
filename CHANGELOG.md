@@ -8,6 +8,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.15 workspace interaction)
+
+- Optional domain mouse interception uses the shared frame coordinates in cell
+  and graphical hosts. Unconsumed input retains KIT capture and focus behavior.
+- Optional compact group spacing, semantic primary actions and striped data lists;
+  existing consumers keep their previous defaults.
+
+
 ### Added (0.14 domain paste input)
 
 - Optional `Application::intercept_paste` handles dropped folder URLs before
