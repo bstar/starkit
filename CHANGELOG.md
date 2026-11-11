@@ -8,6 +8,16 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.16 graphical workspace presentation)
+
+- Applications can request the negotiated terminal monospace font for all shared
+  graphical controls through `Application::native_monospace`. Existing consumers
+  retain their UI faces. Both direct and mounted scene rendering use the policy.
+- Optional flat chrome, shared navigation destinations with selected/hover states,
+  and headline sizing let native workspaces follow reviewed graphical layouts
+  without replacing KIT's layout, controls, hit regions or terminal frontend.
+
+
 ### Added (0.15 workspace interaction)
 
 - Optional domain mouse interception uses the shared frame coordinates in cell

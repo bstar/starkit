@@ -88,6 +88,8 @@ pub struct Runtime {
     layout_count: u64,
     layout_dirty: bool,
     skins: bool,
+    pub(super) native_monospace: bool,
+    pub(super) native_flat: bool,
 }
 impl Runtime {
     pub fn new(view: View, registry: Registry, theme: Theme) -> anyhow::Result<Self> {
@@ -115,9 +117,25 @@ impl Runtime {
             layout_count: 0,
             layout_dirty: true,
             skins: true,
+            native_monospace: false,
+            native_flat: false,
         };
         ui.sync_fields();
         Ok(ui)
+    }
+    /// Render all shared graphical controls using the negotiated terminal mono face.
+    /// Opt into flat workspace chrome; input and geometry remain shared.
+    pub fn native_flat(&mut self, enabled: bool) {
+        if self.native_flat != enabled {
+            self.native_flat = enabled;
+            self.invalidate();
+        }
+    }
+    pub fn native_monospace(&mut self, enabled: bool) {
+        if self.native_monospace != enabled {
+            self.native_monospace = enabled;
+            self.invalidate();
+        }
     }
     pub fn commands(&self) -> &Registry {
         &self.registry

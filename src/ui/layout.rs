@@ -67,6 +67,8 @@ pub struct Placement {
     pub modal: bool,
     pub columns: Vec<ColumnPlacement>,
     pub primary: bool,
+    pub navigation: bool,
+    pub font_size: Option<u16>,
     pub striped: bool,
 }
 
@@ -295,6 +297,8 @@ fn place(
         modal,
         columns: table_columns(node, body, frame.viewport)?,
         primary: node.primary,
+        navigation: node.navigation,
+        font_size: node.font_size,
         striped: node.striped,
     });
     if matches!(node.widget, Widget::Pane(_)) {
@@ -527,6 +531,8 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) -> anyhow::Result<()> {
         if let Some((node, enabled)) = nodes.get(&p.id) {
             let previous = p.list_layout(frame.viewport);
             p.primary = node.primary;
+            p.navigation = node.navigation;
+            p.font_size = node.font_size;
             p.striped = node.striped;
             p.widget = node.widget.clone();
             p.enabled = *enabled;

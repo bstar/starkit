@@ -428,8 +428,19 @@ impl Runtime {
         for p in &frame.placements {
             self.paint_native(&mut surface, &frame, p);
         }
+        self.apply_typography(&mut surface);
         surface.validate()?;
         Ok(surface)
+    }
+    fn apply_typography(&self, surface: &mut Surface) {
+        if self.native_monospace {
+            surface.ui_font = false;
+            for node in &mut surface.nodes {
+                if let crate::native_surface::Primitive::Text { mono, .. } = node {
+                    *mono = true;
+                }
+            }
+        }
     }
     fn paint_native(&mut self, surface: &mut Surface, frame: &Frame, p: &super::Placement) {
         let node_start = surface.nodes.len();
@@ -447,7 +458,18 @@ impl Runtime {
         match &p.widget {
             Widget::Row | Widget::Column => {}
             Widget::Pane(heading) => {
-                style.frame(surface, rect, false);
+                if self.native_flat {
+                    surface.fill(rect, &self.theme.panel_bg.to_hex(), 0);
+                    surface
+                        .nodes
+                        .push(crate::native_surface::Primitive::Border {
+                            rect,
+                            color: self.theme.border.to_hex(),
+                            radius: 0,
+                        });
+                } else {
+                    style.frame(surface, rect, false);
+                }
                 if rect.height >= super::layout::BODY_TOP && rect.width >= 16 {
                     let header = super::layout::pane_header(p.area);
                     surface.fill(pixel_rect(header), &style.colors.title, 0);
@@ -500,7 +522,7 @@ impl Runtime {
                         ),
                         text,
                         ink,
-                        12,
+                        p.font_size.unwrap_or(12),
                         false,
                     );
                 }
@@ -526,7 +548,67 @@ impl Runtime {
                     } else {
                         command.label.clone()
                     };
-                    if p.primary && p.enabled && command.enabled {
+                    if p.navigation {
+                        let bg = if command.checked {
+                            self.theme.bg.mix(self.theme.accent, 0.12)
+                        } else {
+                            self.theme.panel_bg
+                        };
+                        let node = surface.nodes.len() as u16;
+                        surface.fill(rect, &bg.to_hex(), 0);
+                        surface.hover_fills.push(crate::native_surface::HoverFill {
+                            node,
+                            color: self.theme.bg.mix(self.theme.fg, 0.055).to_hex(),
+                        });
+                        if command.checked {
+                            surface.fill(
+                                PixelRect::new(rect.x, rect.y, 2, rect.height),
+                                &self.theme.accent.to_hex(),
+                                0,
+                            );
+                        }
+                        surface.text(
+                            PixelRect::new(
+                                rect.x + 12.min(rect.width),
+                                rect.y,
+                                rect.width.saturating_sub(20),
+                                rect.height,
+                            ),
+                            text,
+                            &self.theme.fg.to_hex(),
+                            12,
+                            command.checked,
+                        );
+                    } else if self.native_flat {
+                        let primary = p.primary && p.enabled && command.enabled;
+                        let bg = if primary {
+                            self.theme.accent
+                        } else {
+                            self.theme.panel_bg.mix(self.theme.fg, 0.03)
+                        };
+                        surface.fill(rect, &bg.to_hex(), 0);
+                        surface
+                            .nodes
+                            .push(crate::native_surface::Primitive::Border {
+                                rect,
+                                color: self.theme.border.to_hex(),
+                                radius: 0,
+                            });
+                        surface.text_centered(
+                            rect,
+                            text,
+                            &if primary {
+                                self.theme.bg
+                            } else if command.enabled {
+                                self.theme.fg
+                            } else {
+                                self.theme.dim
+                            }
+                            .to_hex(),
+                            12,
+                            primary,
+                        );
+                    } else if p.primary && p.enabled && command.enabled {
                         surface.fill(rect, &self.theme.accent.to_hex(), 2);
                         surface.text_centered(rect, text, &self.theme.bg.to_hex(), 12, true);
                     } else if p.enabled {
@@ -543,7 +625,18 @@ impl Runtime {
                 secret,
                 multiline,
             } => {
-                style.frame(surface, rect, true);
+                if self.native_flat {
+                    surface.fill(rect, &self.theme.bg.to_hex(), 0);
+                    surface
+                        .nodes
+                        .push(crate::native_surface::Primitive::Border {
+                            rect,
+                            color: self.theme.border.to_hex(),
+                            radius: 0,
+                        });
+                } else {
+                    style.frame(surface, rect, true);
+                }
                 let cursor = self
                     .fields
                     .get(&p.id)
@@ -749,7 +842,8 @@ impl Runtime {
                 }
             }
         }
-        if (focused || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p))
+        if (focused
+            || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p) && !self.native_flat)
             && rect.width > 2
             && rect.height > 2
         {
@@ -867,9 +961,10 @@ impl Runtime {
                             ));
                             continue;
                         }
-                        if let Some(surface) =
+                        if let Some(mut surface) =
                             content.native(&entry.id, [entry.body.width, entry.body.height])
                         {
+                            self.apply_typography(&mut surface);
                             surface.validate()?;
                             anyhow::ensure!(
                                 (surface.width, surface.height)
@@ -896,6 +991,7 @@ impl Runtime {
                     }
                     self.paint_native(&mut surface, &frame, &local);
                 }
+                self.apply_typography(&mut surface);
                 self.visual.mount(&mut scene, surface, bounds.x, bounds.y)?;
                 for (body, component) in custom {
                     if let crate::terminal_graphics::Component::Surface { surface, rect } =

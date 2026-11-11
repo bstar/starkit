@@ -159,8 +159,10 @@ pub struct Node {
     pub table_columns: Vec<Column>,
     /// Optional logical spacing; defaults preserve existing layouts.
     pub gap: Option<u16>,
+    pub font_size: Option<u16>,
     /// Semantic primary action, rendered with the shared accent.
     pub primary: bool,
+    pub navigation: bool,
     /// Subtle alternating rows for dense data lists.
     pub striped: bool,
 }
@@ -179,9 +181,20 @@ impl Node {
             enabled: true,
             table_columns: vec![],
             gap: None,
+            font_size: None,
             primary: false,
+            navigation: false,
             striped: false,
         }
+    }
+    /// A sidebar/tab destination; selection comes from the shared command state.
+    pub fn navigation(mut self) -> Self {
+        self.navigation = true;
+        self
+    }
+    pub fn font_size(mut self, size: u16) -> Self {
+        self.font_size = Some(size.clamp(6, 48));
+        self
     }
     pub fn gap(mut self, gap: u16) -> Self {
         self.gap = Some(gap);
@@ -463,6 +476,64 @@ mod tests {
         );
         assert_ne!(cells[(0, 0)].bg, crate::chrome::rgb(theme.accent));
         assert_eq!(cells[(0, 2)].bg, cells[(0, 3)].bg);
+    }
+    #[test]
+    fn flat_monospace_profile_is_shared_by_direct_and_mounted_surfaces() {
+        let view = View::new(Node::pane(
+            "pane",
+            Heading::new("Workspace"),
+            Node::column(
+                "body",
+                vec![
+                    Node::label("heading", "Workspace")
+                        .font_size(22)
+                        .height(Size::fixed(2)),
+                    Node::button("action", "open")
+                        .primary()
+                        .height(Size::fixed(1)),
+                    Node::field("path", "/home"),
+                ],
+            ),
+        ));
+        let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+        ui.native_monospace(true);
+        ui.native_flat(true);
+        let surface = ui.render_surface(Viewport::graphics(640, 480)).unwrap();
+        assert!(!surface.ui_font);
+        assert!(surface.nodes.iter().all(|n| !matches!(
+            n,
+            crate::native_surface::Primitive::Text { mono: false, .. }
+        )));
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n, crate::native_surface::Primitive::Text { size: 22, .. })));
+        assert!(surface
+            .nodes
+            .iter()
+            .all(|n| !matches!(n, crate::native_surface::Primitive::Sprite { .. })));
+        #[cfg(feature = "terminal-graphics")]
+        {
+            let scene = ui
+                .render_scene(
+                    crate::terminal_graphics::Viewport {
+                        width: 640,
+                        height: 480,
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .unwrap();
+            for component in scene.components {
+                if let crate::terminal_graphics::Component::Surface { surface, .. } = component {
+                    assert!(!surface.ui_font);
+                    assert!(surface.nodes.iter().all(|n| !matches!(
+                        n,
+                        crate::native_surface::Primitive::Text { mono: false, .. }
+                    )));
+                }
+            }
+        }
     }
     fn registry() -> Registry {
         Registry::new(vec![

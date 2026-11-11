@@ -25,6 +25,13 @@ pub trait Application: super::content::Content {
     fn focus_request(&self) -> Option<super::Id> {
         None
     }
+    /// Shared graphical typography. False preserves the bundled UI face.
+    fn native_flat(&self) -> bool {
+        false
+    }
+    fn native_monospace(&self) -> bool {
+        false
+    }
     /// Stateful domain chords can consume a key before standard editing/navigation.
     /// Releases are filtered by the host. Ordinary shortcuts belong in commands.
     fn intercept_key(&mut self, _key: KeyEvent) -> bool {
@@ -113,6 +120,8 @@ pub struct Host<A: Application> {
 impl<A: Application> Host<A> {
     pub fn new(app: A, theme: Theme) -> anyhow::Result<Self> {
         let mut ui = Runtime::new(app.view(), Registry::new(app.commands())?, theme)?;
+        ui.native_monospace(app.native_monospace());
+        ui.native_flat(app.native_flat());
         if let Some(id) = app.focus_request() {
             ui.request_focus(id)?;
         }
@@ -145,6 +154,8 @@ impl<A: Application> Host<A> {
         self.failure.as_deref()
     }
     fn refresh(&mut self) {
+        self.ui.native_monospace(self.app.native_monospace());
+        self.ui.native_flat(self.app.native_flat());
         if let Some(theme) = self.app.theme() {
             if self.ui.theme() != &theme {
                 self.ui.set_theme(theme);
