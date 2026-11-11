@@ -435,9 +435,16 @@ impl Runtime {
     fn apply_typography(&self, surface: &mut Surface) {
         if self.native_monospace {
             surface.ui_font = false;
-            for node in &mut surface.nodes {
-                if let crate::native_surface::Primitive::Text { mono, .. } = node {
+        }
+        for node in &mut surface.nodes {
+            if let crate::native_surface::Primitive::Text { mono, size, .. } = node {
+                if self.native_monospace {
                     *mono = true;
+                }
+                if *size <= 12 {
+                    *size = size
+                        .saturating_add_signed((self.native_font_size as i16) - 12)
+                        .max(6);
                 }
             }
         }
@@ -553,6 +560,8 @@ impl Runtime {
                     if p.navigation {
                         let bg = if command.checked {
                             self.theme.bg.mix(self.theme.accent, 0.12)
+                        } else if focused {
+                            self.theme.bg.mix(self.theme.accent, 0.06)
                         } else {
                             self.theme.panel_bg
                         };
@@ -562,7 +571,7 @@ impl Runtime {
                             node,
                             color: self.theme.bg.mix(self.theme.fg, 0.055).to_hex(),
                         });
-                        if command.checked {
+                        if command.checked || focused {
                             surface.fill(
                                 PixelRect::new(rect.x, rect.y, 2, rect.height),
                                 &self.theme.accent.to_hex(),
@@ -577,7 +586,12 @@ impl Runtime {
                                 rect.height,
                             ),
                             text,
-                            &self.theme.fg.to_hex(),
+                            &if command.enabled || command.checked {
+                                self.theme.fg
+                            } else {
+                                self.theme.dim
+                            }
+                            .to_hex(),
                             12,
                             command.checked,
                         );
@@ -844,7 +858,7 @@ impl Runtime {
                 }
             }
         }
-        if (focused
+        if ((focused && !p.navigation)
             || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p) && !self.native_flat)
             && rect.width > 2
             && rect.height > 2

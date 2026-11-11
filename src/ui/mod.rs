@@ -256,6 +256,24 @@ impl Node {
         )
         .height(Size::fixed(1))
     }
+    /// Joined workflow destinations use the same commands, focus and hit handling
+    /// as navigation. The application's command state marks the current phase.
+    pub fn steps(id: impl Into<Id>, commands: &[Id]) -> Self {
+        let id = id.into();
+        Self::row(
+            id.clone(),
+            commands
+                .iter()
+                .map(|command| {
+                    Self::button(format!("{}/{}", id.0, command.0), command.clone())
+                        .navigation()
+                        .height(Size::fill(1))
+                })
+                .collect(),
+        )
+        .height(Size::fixed(2))
+        .gap_pixels(0)
+    }
     pub fn tabs(id: impl Into<Id>, commands: &[Id]) -> Self {
         Self::toolbar(id, commands)
     }
@@ -586,6 +604,34 @@ mod tests {
             assert!(after.get(&"one".into()).unwrap().area.x > one.x);
             assert!(ui.layout_count() > layouts);
         }
+    }
+    #[test]
+    fn workflow_steps_fill_the_strip_and_typography_keeps_headlines() {
+        let view = View::new(Node::column(
+            "root",
+            vec![
+                Node::steps("steps", &["open".into(), "off".into()]),
+                Node::label("title", "Headline")
+                    .font_size(26)
+                    .height(Size::fixed(2)),
+            ],
+        ));
+        let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+        ui.native_font_size(14);
+        let surface = ui.render_surface(Viewport::graphics(800, 600)).unwrap();
+        assert!(surface.nodes.iter().any(|node| matches!(
+            node,
+            crate::native_surface::Primitive::Text { size: 26, .. }
+        )));
+        assert!(surface.nodes.iter().any(|node| matches!(
+            node,
+            crate::native_surface::Primitive::Text { size: 14, .. }
+        )));
+        let frame = ui.current_frame().unwrap();
+        assert_eq!(
+            frame.get(&"steps".into()).unwrap().area.height,
+            frame.get(&"steps/open".into()).unwrap().area.height
+        );
     }
     fn registry() -> Registry {
         Registry::new(vec![

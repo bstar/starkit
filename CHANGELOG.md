@@ -8,6 +8,13 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.18 workspace hierarchy)
+
+- Shared workflow steps reuse navigation command state and pointer handling.
+- Configurable native base typography keeps explicit headlines independent,
+  across directly rendered controls and mounted graphical content.
+
+
 ### Added (0.17 container spacing)
 
 - Opt-in container padding and physical group gaps share KIT's solved body,

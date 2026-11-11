@@ -90,6 +90,7 @@ pub struct Runtime {
     skins: bool,
     pub(super) native_monospace: bool,
     pub(super) native_flat: bool,
+    pub(super) native_font_size: u16,
 }
 impl Runtime {
     pub fn new(view: View, registry: Registry, theme: Theme) -> anyhow::Result<Self> {
@@ -119,12 +120,21 @@ impl Runtime {
             skins: true,
             native_monospace: false,
             native_flat: false,
+            native_font_size: 12,
         };
         ui.sync_fields();
         Ok(ui)
     }
     /// Render all shared graphical controls using the negotiated terminal mono face.
     /// Opt into flat workspace chrome; input and geometry remain shared.
+    /// Base graphical control typography; explicit headline sizes remain independent.
+    pub fn native_font_size(&mut self, size: u16) {
+        let size = size.clamp(10, 18);
+        if self.native_font_size != size {
+            self.native_font_size = size;
+            self.invalidate();
+        }
+    }
     pub fn native_flat(&mut self, enabled: bool) {
         if self.native_flat != enabled {
             self.native_flat = enabled;
