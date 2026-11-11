@@ -3042,7 +3042,7 @@ mod tests {
                 pixels: Some(size),
                 cell: Some((9, 20)),
             });
-            let mut surface = Surface::new(240, 40, "#000000".into()).with_ui_text();
+            let mut surface = Surface::new(240, 40, "#000000".into()).with_bundled_ui_text();
             surface.text(
                 PixelRect::new(8, 0, 224, 40),
                 "Inspector · 1080p",
@@ -3064,6 +3064,46 @@ mod tests {
             assert!(painter.text.keys().any(|k| !k.ui_font));
         }
         assert_eq!(rendered[0], rendered[1]);
+    }
+    #[test]
+    fn fleet_ui_matches_flux_physical_text_on_the_display_font() {
+        use crate::native_surface::{PixelRect, Primitive, Surface};
+        let mut faces = Vec::new();
+        for family in ["Liberation Mono", "Liberation Sans"] {
+            let mut painter = Painter::with_font(super::super::font::Font {
+                name: Some(family.into()),
+                pixels: Some(24.),
+                cell: Some((14, 28)),
+            });
+            // FLUX emits physical monospace primitives; shared fleet controls
+            // must produce exactly those pixels, including bold shaping.
+            let mut flux = Surface::new(320, 64, "#282828".into()).with_physical_text();
+            for (y, bold) in [(0, false), (28, true)] {
+                flux.nodes.push(Primitive::Text {
+                    rect: PixelRect::new(12, y, 296, 28),
+                    text: "Workspace / Files 0123".into(),
+                    color: "#ebdbb2".into(),
+                    size: 12,
+                    bold,
+                    mono: true,
+                });
+            }
+            let fleet = flux.clone().with_ui_text();
+            let mut expected = Pixmap::new(320, 64).unwrap();
+            let mut actual = Pixmap::new(320, 64).unwrap();
+            painter
+                .surface(&mut expected, &flux, [0., 0., 320., 64.])
+                .unwrap();
+            painter
+                .surface(&mut actual, &fleet, [0., 0., 320., 64.])
+                .unwrap();
+            assert_eq!(expected.data(), actual.data());
+            faces.push(actual.data().to_vec());
+        }
+        assert_ne!(
+            faces[0], faces[1],
+            "the attaching display chooses the family"
+        );
     }
     #[test]
     fn physical_surface_text_does_not_inflate_with_terminal_font_zoom() {

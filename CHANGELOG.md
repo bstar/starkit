@@ -8,6 +8,18 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Changed (0.19 STAR/FLEET typography)
+
+- STAR/FLUX is the shared graphical typography reference. UI surfaces and hosted
+  controls use the attaching display's terminal family, physical pixel sizing,
+  and KIT's existing cosmic-text/Swash native renderer. SSH hosts do not choose
+  the display font. Cell mode continues to use the terminal grid.
+- `with_ui_text` now follows that family instead of forcing bundled Liberation.
+  `with_bundled_ui_text` retains an explicit opt-in for fixed-face artwork.
+- Hosted controls default to monospace body text at 12 px, with explicit heading
+  sizes preserved. Applications should inherit these defaults.
+
+
 ### Added (0.18 workspace hierarchy)
 
 - Shared workflow steps reuse navigation command state and pointer handling.

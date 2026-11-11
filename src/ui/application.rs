@@ -25,15 +25,16 @@ pub trait Application: super::content::Content {
     fn focus_request(&self) -> Option<super::Id> {
         None
     }
-    /// Shared graphical typography. False preserves the bundled UI face.
+    /// Physical base size for shared controls; STAR/FLUX uses 12 px body text.
     fn native_font_size(&self) -> u16 {
         12
     }
     fn native_flat(&self) -> bool {
         false
     }
+    /// Use the display-side terminal family, matching STAR/FLUX.
     fn native_monospace(&self) -> bool {
-        false
+        true
     }
     /// Stateful domain chords can consume a key before standard editing/navigation.
     /// Releases are filtered by the host. Ordinary shortcuts belong in commands.

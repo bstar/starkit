@@ -383,3 +383,14 @@ for an anamorphic container. Processing now applies valid stream SAR before
 frame SAR (FFmpeg's av_guess_sample_aspect_ratio policy), installs that metadata
 without copying source pixels, and fits proxy output by display dimensions.
 Both 6.1.6 and 9.0.1 passed movie and forced-frame-metadata regressions locally.
+
+## STAR/FLEET rendering standard
+
+STAR/FLUX is the visual reference for the fleet, including STAR/VAULT. Keep
+font selection, shaping, rasterization, physical text sizing and remote display
+ownership in STAR/KIT. Shared UI text uses the attaching terminal's font family;
+12 px body text and explicit heading sizes follow FLUX chrome. Do not introduce
+per-app font substitutions or rasterizers. `with_ui_text` follows this policy;
+fixed artwork may explicitly opt into `with_bundled_ui_text`. Cell mode remains
+native terminal text. A remote server update does not replace a running local
+frontend; verify that frontend separately before claiming cross-machine parity.

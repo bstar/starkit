@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(cells[(0, 2)].bg, cells[(0, 3)].bg);
     }
     #[test]
-    fn flat_monospace_profile_is_shared_by_direct_and_mounted_surfaces() {
+    fn fleet_default_typography_is_shared_by_direct_and_mounted_surfaces() {
         let view = View::new(Node::pane(
             "pane",
             Heading::new("Workspace"),
@@ -530,7 +530,6 @@ mod tests {
             ),
         ));
         let mut ui = Runtime::new(view, registry(), theme()).unwrap();
-        ui.native_monospace(true);
         ui.native_flat(true);
         let surface = ui.render_surface(Viewport::graphics(640, 480)).unwrap();
         assert!(!surface.ui_font);

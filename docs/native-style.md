@@ -67,10 +67,15 @@ palette roles: neutral panels, shallow control fills and fine separators. They
 retain the selected theme and keep accent colors for active modes and selection.
 Classic's artwork remains available for compact instruments and media players.
 
-`workspace_panel` opts into `Surface::with_ui_text()`: bundled Liberation Sans
-for UI labels and Liberation Mono for numeric text, in physical pixels. Legacy
-surfaces keep the configured terminal face. The additive `ui_font` hint is
-ignored by older frontends, and the font choice participates in the glyph cache.
+`workspace_panel` opts into `Surface::with_ui_text()`, following STAR/FLUX:
+the attaching display's terminal family, shaped and rasterized by KIT at physical
+pixel sizes. Hosted UI controls inherit the same monospace policy with a 12 px
+body baseline; explicit headlines retain their size. Cell fallback stays on the
+terminal grid. Applications must not substitute their own fonts or renderers.
+`with_bundled_ui_text()` explicitly selects fixed Liberation faces for artwork;
+it is not the fleet UI default. Font choice participates in the glyph cache.
+Updating an SSH host does not update a running frontend: reconnect with the
+current display-side helper before comparing rendering across machines.
 A property field keeps its label, value, hover and hit target aligned; read-only
 fields have no action. No app-specific RGB tables or font loading are required.
 

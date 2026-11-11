@@ -271,8 +271,15 @@ impl Surface {
         self.text_scale = TextScale::Physical;
         self
     }
-    /// Stable UI typography in physical pixels, independent of terminal font.
+    /// STAR/FLEET chrome follows STAR/FLUX: display-side terminal family,
+    /// physically sized text, and the shared native shaping/rasterization path.
     pub fn with_ui_text(mut self) -> Self {
+        self.text_scale = TextScale::Physical;
+        self.ui_font = false;
+        self
+    }
+    /// Explicit fixed bundled face for artwork that must ignore terminal fonts.
+    pub fn with_bundled_ui_text(mut self) -> Self {
         self.text_scale = TextScale::Physical;
         self.ui_font = true;
         self

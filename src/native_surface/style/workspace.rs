@@ -710,7 +710,7 @@ mod tests {
             let style = Style::new(palette);
             for (w, h) in [(1, 1), (100, 100), (360, 240)] {
                 let mut s = style.workspace_panel(w, h, "INSPECTOR");
-                assert!(s.ui_font);
+                assert!(!s.ui_font);
                 if w == 360 {
                     style.tool(&mut s, R::new(12, 40, 110, 28), "Fit", "fit", true);
                     style.property(

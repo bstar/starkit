@@ -118,7 +118,7 @@ impl Runtime {
             layout_count: 0,
             layout_dirty: true,
             skins: true,
-            native_monospace: false,
+            native_monospace: true,
             native_flat: false,
             native_font_size: 12,
         };
