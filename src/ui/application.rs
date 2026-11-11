@@ -385,16 +385,21 @@ impl<A: Application> Controller for Host<A> {
             Input::Paste { ref text } => self.paste(text),
             Input::Pointer {
                 ref action,
-                button: 0,
+                button,
                 x,
                 y,
                 pixel,
-                ..
+                modifiers,
             } if matches!(
                 action.as_str(),
                 "down" | "up" | "drag" | "scroll_up" | "scroll_down"
-            ) =>
+            ) && button <= 2 =>
             {
+                let button = match button {
+                    1 => MouseButton::Right,
+                    2 => MouseButton::Middle,
+                    _ => MouseButton::Left,
+                };
                 let (x, y) = if self.cells {
                     (x, y)
                 } else if let Some([x, y]) = pixel {
@@ -413,17 +418,17 @@ impl<A: Application> Controller for Host<A> {
                     return;
                 };
                 let kind = match action.as_str() {
-                    "drag" => MouseEventKind::Drag(MouseButton::Left),
+                    "drag" => MouseEventKind::Drag(button),
                     "scroll_up" => MouseEventKind::ScrollUp,
                     "scroll_down" => MouseEventKind::ScrollDown,
-                    "down" => MouseEventKind::Down(MouseButton::Left),
-                    _ => MouseEventKind::Up(MouseButton::Left),
+                    "down" => MouseEventKind::Down(button),
+                    _ => MouseEventKind::Up(button),
                 };
                 self.mouse(MouseEvent {
                     kind,
                     column: x,
                     row: y,
-                    modifiers: crate::crossterm::event::KeyModifiers::NONE,
+                    modifiers: crate::crossterm::event::KeyModifiers::from_bits_truncate(modifiers),
                 })
             }
             Input::CancelPointer => {
@@ -603,7 +608,9 @@ mod tests {
             }
         }
         fn intercept_mouse(&mut self, mouse: MouseEvent) -> bool {
-            if mouse.modifiers.contains(KeyModifiers::ALT) {
+            if mouse.modifiers.contains(KeyModifiers::ALT)
+                || mouse.kind == MouseEventKind::Down(MouseButton::Right)
+            {
                 self.interceptions += 1;
                 true
             } else {
@@ -661,6 +668,25 @@ mod tests {
         assert!(
             matches!(&host.ui.view().root.children[0].widget,Widget::Field { value,.. } if value=="Chord")
         );
+    }
+    #[cfg(all(feature = "terminal-graphics", unix))]
+    #[test]
+    fn native_right_click_reaches_application_without_activating_left_controls() {
+        let mut host = host();
+        host.ui.render_cells(UiViewport::cells(80, 24)).unwrap();
+        <Host<Example> as Controller>::input(
+            &mut host,
+            Input::Pointer {
+                action: "down".into(),
+                button: 1,
+                modifiers: 0,
+                x: 1,
+                y: 0,
+                pixel: Some([1, 0]),
+            },
+        );
+        assert_eq!(host.app.interceptions, 1);
+        assert!(host.ui.captured().is_none());
     }
     #[test]
     fn consumed_mouse_input_cancels_release_capture_without_replaying_it() {

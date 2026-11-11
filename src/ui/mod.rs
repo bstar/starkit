@@ -169,6 +169,8 @@ pub struct Node {
     pub navigation: bool,
     /// Subtle alternating rows for dense data lists.
     pub striped: bool,
+    /// Modal menu origin in viewport units; KIT clamps it to the visible area.
+    pub popup_position: Option<(u16, u16)>,
 }
 impl Node {
     pub fn new(id: impl Into<Id>, widget: Widget) -> Self {
@@ -191,6 +193,7 @@ impl Node {
             primary: false,
             navigation: false,
             striped: false,
+            popup_position: None,
         }
     }
     /// A sidebar/tab destination; selection comes from the shared command state.
@@ -289,6 +292,12 @@ impl Node {
             heading,
             Self::column(format!("{}/items", id.0), items),
         )
+    }
+    /// Anchor a modal menu beside its invocation point. Cells use cell units;
+    /// graphics use viewport pixels. The solver keeps the entire menu visible.
+    pub fn popup_at(mut self, x: u16, y: u16) -> Self {
+        self.popup_position = Some((x, y));
+        self
     }
     pub fn list(id: impl Into<Id>, items: Vec<Item>, selected: Option<Id>) -> Self {
         Self::new(
@@ -601,6 +610,33 @@ mod tests {
             ui.update(next, registry()).unwrap();
             let after = ui.frame(viewport).unwrap();
             assert!(after.get(&"one".into()).unwrap().area.x > one.x);
+            assert!(ui.layout_count() > layouts);
+        }
+    }
+    #[test]
+    fn anchored_menus_clamp_at_edges_and_relocate_hit_targets() {
+        for viewport in [Viewport::graphics(640, 480), Viewport::cells(80, 24)] {
+            let menu = || {
+                Node::menu("menu", Heading::new("Item"), &["open".into()])
+                    .width(Size::fixed(20))
+                    .height(Size::fixed(4))
+            };
+            let base = View::new(Node::label("base", "Workspace"));
+            let mut ui = Runtime::new(
+                base.clone().modal(menu().popup_at(u16::MAX, u16::MAX)),
+                registry(),
+                theme(),
+            )
+            .unwrap();
+            let frame = ui.frame(viewport).unwrap().clone();
+            let area = frame.get(&"menu".into()).unwrap().area;
+            assert!(area.right() <= viewport.width && area.bottom() <= viewport.height);
+            assert_eq!(area.right(), viewport.width);
+            let layouts = ui.layout_count();
+            ui.update(base.modal(menu().popup_at(1, 2)), registry())
+                .unwrap();
+            let next = ui.frame(viewport).unwrap();
+            assert_eq!(next.get(&"menu".into()).unwrap().area.x, 1);
             assert!(ui.layout_count() > layouts);
         }
     }

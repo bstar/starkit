@@ -489,11 +489,14 @@ pub(super) fn solve(
         };
         let width = extent(true, bounds.width);
         let height = extent(false, bounds.height);
+        let (x, y) = modal
+            .popup_position
+            .unwrap_or(((viewport.width - width) / 2, (viewport.height - height) / 2));
         place(
             modal,
             Rect::new(
-                (viewport.width - width) / 2,
-                (viewport.height - height) / 2,
+                x.min(viewport.width - width),
+                y.min(viewport.height - height),
                 width,
                 height,
             ),
@@ -520,6 +523,7 @@ pub(super) fn same_geometry(a: &View, b: &View) -> bool {
             && a.gap == b.gap
             && a.gap_pixels == b.gap_pixels
             && a.padding_pixels == b.padding_pixels
+            && a.popup_position == b.popup_position
             && a.table_columns
                 .iter()
                 .map(|c| c.width)

@@ -8,6 +8,14 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.20 anchored context menus)
+
+- Shared modal menus can anchor to their invocation point, clamped within cells
+  or graphics, with the same solved keyboard focus and pointer targets.
+- Hosted native input preserves right/middle buttons for application context
+  actions instead of discarding them. Left-control activation remains separate.
+
+
 ### Changed (0.19 STAR/FLEET typography)
 
 - STAR/FLUX is the shared graphical typography reference. UI surfaces and hosted
