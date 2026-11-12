@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.22.2 burn icon)
+
+- Shared flame icon uses portable vector paths, including on existing native-path frontends.
+
 ### Fixed (0.22.1 bridge shutdown)
 
 - Consume the asynchronous terminal bridge shutdown reply before returning input to the shell, including after UI updates. Preserve shell keys queued after the reply and bound missing-client waits.
