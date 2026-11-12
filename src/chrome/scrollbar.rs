@@ -79,6 +79,7 @@ struct Geometry {
 
 /// `None` when there is nothing to scroll -- the content fits in the track,
 /// or there is no track to draw on.
+#[cfg(test)]
 fn geometry(track: u16, total: u32) -> Option<Geometry> {
     geometry_visible(track, total, u32::from(track), 1)
 }

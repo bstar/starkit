@@ -90,6 +90,7 @@ pub struct Runtime {
     skins: bool,
     pub(super) native_monospace: bool,
     pub(super) native_flat: bool,
+    pub(super) pane_border_pixels: u16,
     pub(super) native_font_size: u16,
 }
 impl Runtime {
@@ -120,6 +121,7 @@ impl Runtime {
             skins: true,
             native_monospace: true,
             native_flat: false,
+            pane_border_pixels: 2,
             native_font_size: 12,
         };
         ui.sync_fields();
@@ -132,6 +134,14 @@ impl Runtime {
         let size = size.clamp(10, 18);
         if self.native_font_size != size {
             self.native_font_size = size;
+            self.invalidate();
+        }
+    }
+    /// Flat pane border thickness in physical pixels; other controls keep their style.
+    pub fn native_pane_border_pixels(&mut self, pixels: u16) {
+        let pixels = pixels.clamp(1, 2);
+        if self.pane_border_pixels != pixels {
+            self.pane_border_pixels = pixels;
             self.invalidate();
         }
     }

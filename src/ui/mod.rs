@@ -1236,6 +1236,34 @@ mod tests {
         assert_ne!(before.interaction, after.interaction);
         assert_eq!(before.scroll_interaction, after.scroll_interaction);
     }
+    #[test]
+    fn opted_in_flat_panes_have_single_pixel_focused_and_inactive_edges() {
+        let view = View::new(Node::row(
+            "root",
+            vec![
+                Node::pane("left", Heading::new("Left"), Node::button("one", "open")),
+                Node::pane("right", Heading::new("Right"), Node::button("two", "open")),
+            ],
+        ));
+        let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+        ui.native_flat(true);
+        ui.native_pane_border_pixels(1);
+        for (control, pane) in [("one", "left"), ("two", "right")] {
+            ui.request_focus(control.into()).unwrap();
+            let surface = ui.render_surface(Viewport::graphics(800, 480)).unwrap();
+            let frame = ui.current_frame().unwrap();
+            for id in ["left", "right"] {
+                let area = frame.get(&id.into()).unwrap().area;
+                assert!(!surface.nodes.iter().any(|n|matches!(n,crate::native_surface::Primitive::Border{rect,..}if rect.x==area.x&&rect.y==area.y&&rect.width==area.width&&rect.height==area.height)));
+                let color = if id == pane {
+                    ui.visual.colors.accent.clone()
+                } else {
+                    ui.theme.border.to_hex()
+                };
+                assert!(surface.nodes.iter().any(|n|matches!(n,crate::native_surface::Primitive::Fill{rect,color:c,..}if rect.x==area.x&&rect.y==area.y&&rect.width==area.width&&rect.height==1&&c==&color)));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

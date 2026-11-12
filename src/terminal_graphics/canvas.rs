@@ -51,6 +51,7 @@ impl Canvas {
             Self::Gpu(_) => panic!("GPU drawing must not access CPU pixels"),
         }
     }
+    #[cfg(test)]
     pub fn pixel(&self, x: u32, y: u32) -> Option<tiny_skia::PremultipliedColorU8> {
         match self {
             Self::Cpu(p) => p.pixel(x, y),

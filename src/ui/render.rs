@@ -449,6 +449,29 @@ impl Runtime {
             }
         }
     }
+    fn pane_outline(&self, surface: &mut Surface, rect: PixelRect, color: String) {
+        if self.native_flat && self.pane_border_pixels == 1 {
+            if rect.width == 0 || rect.height == 0 {
+                return;
+            }
+            for edge in [
+                PixelRect::new(rect.x, rect.y, rect.width, 1),
+                PixelRect::new(rect.x, rect.y + rect.height - 1, rect.width, 1),
+                PixelRect::new(rect.x, rect.y, 1, rect.height),
+                PixelRect::new(rect.x + rect.width - 1, rect.y, 1, rect.height),
+            ] {
+                surface.fill(edge, &color, 0);
+            }
+        } else {
+            surface
+                .nodes
+                .push(crate::native_surface::Primitive::Border {
+                    rect,
+                    color,
+                    radius: 0,
+                });
+        }
+    }
     fn paint_native(&mut self, surface: &mut Surface, frame: &Frame, p: &super::Placement) {
         let node_start = surface.nodes.len();
         let hit_start = surface.hits.len();
@@ -467,13 +490,7 @@ impl Runtime {
             Widget::Pane(heading) => {
                 if self.native_flat {
                     surface.fill(rect, &self.theme.panel_bg.to_hex(), 0);
-                    surface
-                        .nodes
-                        .push(crate::native_surface::Primitive::Border {
-                            rect,
-                            color: self.theme.border.to_hex(),
-                            radius: 0,
-                        });
+                    self.pane_outline(surface, rect, self.theme.border.to_hex());
                 } else {
                     style.frame(surface, rect, false);
                 }
@@ -911,13 +928,17 @@ impl Runtime {
             && rect.width > 2
             && rect.height > 2
         {
-            surface
-                .nodes
-                .push(crate::native_surface::Primitive::Border {
-                    rect,
-                    color: style.colors.accent.clone(),
-                    radius: 0,
-                });
+            if matches!(p.widget, Widget::Pane(_)) {
+                self.pane_outline(surface, rect, style.colors.accent.clone());
+            } else {
+                surface
+                    .nodes
+                    .push(crate::native_surface::Primitive::Border {
+                        rect,
+                        color: style.colors.accent.clone(),
+                        radius: 0,
+                    });
+            }
         }
         if p.enabled && p.focusable && !surface.hits.iter().any(|h| h.action == action) {
             surface

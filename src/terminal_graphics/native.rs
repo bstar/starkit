@@ -849,6 +849,7 @@ impl Painter {
             },
         );
     }
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_font(super::font::Font::default())
     }

@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.22.0 candidate)
+
+- Opt-in physical 1 px flat pane borders, including focused outlines. Existing applications retain 2 px outlines.
+
 ### Fixed (0.21.1 bounded icons and field insets)
 
 - Icon paths clamp to strict local bounds on mounted surfaces.
