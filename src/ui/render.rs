@@ -692,9 +692,10 @@ impl Runtime {
                     let height = 24.min(rect.y + rect.height - top);
                     surface.text(
                         PixelRect::new(
-                            rect.x + 4.min(rect.width),
+                            rect.x + p.padding[0].max(4).min(rect.width),
                             top,
-                            rect.width.saturating_sub(8),
+                            rect.width
+                                .saturating_sub(p.padding[0].max(4).saturating_mul(2)),
                             height,
                         ),
                         text,
@@ -847,8 +848,17 @@ impl Runtime {
                 0,
             ),
         }
+        if let Some(font_size) = p.font_size {
+            if matches!(p.widget, Widget::Button { .. }) {
+                for node in &mut surface.nodes[node_start..] {
+                    if let crate::native_surface::Primitive::Text { size, .. } = node {
+                        *size = font_size;
+                    }
+                }
+            }
+        }
         if let Some(name) = &p.icon {
-            if rect.width >= 36 && matches!(p.widget, Widget::Button { .. }) {
+            if rect.width >= 36 && rect.height >= 16 && matches!(p.widget, Widget::Button { .. }) {
                 for node in &mut surface.nodes[node_start..] {
                     if let crate::native_surface::Primitive::Text { rect, .. } = node {
                         rect.x = rect.x.saturating_add(24);

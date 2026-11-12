@@ -105,8 +105,10 @@ pub fn draw(surface: &mut Surface, rect: PixelRect, name: &str, color: &str) {
             .into_iter()
             .map(|[x, y]| {
                 [
-                    (u32::from(x) * u32::from(rect.width) / 16) as u16,
-                    (u32::from(y) * u32::from(rect.height) / 16) as u16,
+                    ((u32::from(x) * u32::from(rect.width) / 16) as u16)
+                        .min(rect.width.saturating_sub(1)),
+                    ((u32::from(y) * u32::from(rect.height) / 16) as u16)
+                        .min(rect.height.saturating_sub(1)),
                 ]
             })
             .collect();
@@ -147,11 +149,12 @@ mod tests {
                 "#ebdbb2",
             );
             assert!(!surface.nodes.is_empty());
+            surface.validate().unwrap();
             for node in &surface.nodes {
                 if let Primitive::Path { rect, points, .. } = node {
                     assert!(points
                         .iter()
-                        .all(|p| p[0] <= rect.width && p[1] <= rect.height));
+                        .all(|p| p[0] < rect.width && p[1] < rect.height));
                 } else {
                     panic!("icons must use portable vector paths");
                 }

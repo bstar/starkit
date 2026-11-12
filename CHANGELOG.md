@@ -8,6 +8,12 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.21.1 bounded icons and field insets)
+
+- Icon paths clamp to strict local bounds on mounted surfaces.
+- Field padding preserves line height and uses matching physical text insets.
+- Explicit button font sizes apply to native controls as well as labels.
+
 ### Added (0.21 workspace presentation and idle updates)
 
 - Opt-in persistent hosts can replace a newly installed executable only after

@@ -159,8 +159,11 @@ pub(super) fn validate(view: &View) -> anyhow::Result<()> {
         );
         anyhow::ensure!(
             node.padding_pixels == 0
-                || matches!(node.widget, Widget::Pane(_) | Widget::Row | Widget::Column),
-            "Padding belongs to a container"
+                || matches!(
+                    node.widget,
+                    Widget::Pane(_) | Widget::Row | Widget::Column | Widget::Field { .. }
+                ),
+            "Padding belongs to a container or field"
         );
         match node.widget {
             Widget::Row | Widget::Column => {}
@@ -300,7 +303,11 @@ fn place(
         area
     };
     let px = spacing(node.padding_pixels, true, frame.viewport);
-    let py = spacing(node.padding_pixels, false, frame.viewport);
+    let py = if matches!(node.widget, Widget::Field { .. }) {
+        0
+    } else {
+        spacing(node.padding_pixels, false, frame.viewport)
+    };
     let body = Rect::new(
         body.x.saturating_add(px).min(body.right()),
         body.y.saturating_add(py).min(body.bottom()),

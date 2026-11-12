@@ -160,7 +160,7 @@ pub struct Node {
     pub table_columns: Vec<Column>,
     /// Optional logical spacing; defaults preserve existing layouts.
     pub gap: Option<u16>,
-    /// Container inset in graphical pixels; rounded to cells in the fallback.
+    /// Container inset, or horizontal field inset, in graphical pixels; rounded to cells in the fallback.
     pub padding_pixels: u16,
     /// Exact graphical group spacing, taking precedence over logical gap.
     pub gap_pixels: Option<u16>,
@@ -620,6 +620,30 @@ mod tests {
             assert!(after.get(&"one".into()).unwrap().area.x > one.x);
             assert!(ui.layout_count() > layouts);
         }
+    }
+    #[test]
+    fn field_insets_keep_line_height_and_buttons_honor_font_size() {
+        let view = View::new(Node::column(
+            "root",
+            vec![
+                Node::field("path", "/home/bstar")
+                    .padding_pixels(10)
+                    .height(Size::fixed(1)),
+                Node::button("prepare", "open")
+                    .font_size(15)
+                    .height(Size::fixed(2)),
+            ],
+        ));
+        let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+        ui.native_flat(true);
+        let surface = ui.render_surface(Viewport::graphics(640, 300)).unwrap();
+        let field = ui.current_frame().unwrap().get(&"path".into()).unwrap();
+        assert_eq!(field.body.height, field.area.height);
+        assert_eq!(field.body.x, field.area.x + 10);
+        assert!(surface.nodes.iter().any(|n|matches!(n,crate::native_surface::Primitive::Text{rect,text,..} if text=="/home/bstar" && rect.x==field.area.x+10)));
+        assert!(surface.nodes.iter().any(
+            |n| matches!(n,crate::native_surface::Primitive::Text{text,size:15,..} if text=="Open")
+        ));
     }
     #[test]
     fn flat_pane_focus_follows_the_control_and_icons_keep_labels_clear() {
