@@ -167,9 +167,12 @@ pub struct Node {
     pub font_size: Option<u16>,
     /// Semantic primary action, rendered with the shared accent.
     pub primary: bool,
+    /// Optional theme-derived color for this primary action only.
+    pub primary_color: Option<crate::theme::color::Rgb>,
     pub navigation: bool,
     /// Framework vector icon beside a button label; independent of font glyphs.
     pub icon: Option<String>,
+    pub icon_size: u16,
     /// Subtle alternating rows for dense data lists.
     pub striped: bool,
     /// Modal menu origin in viewport units; KIT clamps it to the visible area.
@@ -194,8 +197,10 @@ impl Node {
             gap_pixels: None,
             font_size: None,
             primary: false,
+            primary_color: None,
             navigation: false,
             icon: None,
+            icon_size: 16,
             striped: false,
             popup_position: None,
         }
@@ -203,6 +208,15 @@ impl Node {
     /// A sidebar/tab destination; selection comes from the shared command state.
     pub fn icon(mut self, name: impl Into<String>) -> Self {
         self.icon = Some(name.into());
+        self
+    }
+    pub fn icon_size(mut self, pixels: u16) -> Self {
+        self.icon_size = pixels.clamp(8, 48);
+        self
+    }
+    pub fn primary_color(mut self, color: crate::theme::color::Rgb) -> Self {
+        self.primary = true;
+        self.primary_color = Some(color);
         self
     }
     pub fn navigation(mut self) -> Self {
@@ -473,6 +487,43 @@ mod tests {
     use command::{Command, Registry, Scope};
     fn theme() -> Theme {
         Theme::resolve(&ThemeFile::parse(BUILTINS[0].toml).unwrap())
+    }
+    #[test]
+    fn action_colors_and_larger_icons_refresh_without_replacing_the_layout() {
+        use crate::{native_surface::Primitive, theme::color::Rgb};
+        let orange = Rgb::new(254, 128, 25);
+        let alternate = Rgb::new(208, 135, 112);
+        let view = |color| {
+            View::new(
+                Node::button("burn", "open")
+                    .primary_color(color)
+                    .icon("flame")
+                    .icon_size(28)
+                    .height(Size::fixed(2)),
+            )
+        };
+        let mut ui = Runtime::new(view(orange), registry(), theme()).unwrap();
+        ui.native_flat(true);
+        let cells = ui.render_cells(Viewport::cells(40, 8)).unwrap();
+        assert_eq!(cells[(0, 0)].bg, crate::chrome::rgb(orange));
+        let surface = ui.render_surface(Viewport::graphics(320, 192)).unwrap();
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n, Primitive::Fill { color, .. } if color == &orange.to_hex())));
+        assert!(surface.nodes.iter().any(
+            |n| matches!(n, Primitive::Path { rect, .. } if rect.width == 28 && rect.height == 28)
+        ));
+        ui.update(view(alternate), registry()).unwrap();
+        let surface = ui.render_surface(Viewport::graphics(320, 192)).unwrap();
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n, Primitive::Fill { color, .. } if color == &alternate.to_hex())));
+        assert!(!surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n, Primitive::Fill { color, .. } if color == &orange.to_hex())));
     }
     #[test]
     fn compact_spacing_primary_actions_and_alternating_rows_are_opt_in() {

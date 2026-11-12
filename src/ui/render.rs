@@ -244,7 +244,7 @@ impl Runtime {
                         };
                         let style = if p.primary && command.enabled {
                             style
-                                .bg(rgb(theme.accent))
+                                .bg(rgb(p.primary_color.unwrap_or(theme.accent)))
                                 .fg(rgb(theme.bg))
                                 .add_modifier(Modifier::BOLD)
                         } else if focused {
@@ -615,7 +615,7 @@ impl Runtime {
                     } else if self.native_flat {
                         let primary = p.primary && p.enabled && command.enabled;
                         let bg = if primary {
-                            self.theme.accent
+                            p.primary_color.unwrap_or(self.theme.accent)
                         } else {
                             self.theme.panel_bg.mix(self.theme.fg, 0.03)
                         };
@@ -642,7 +642,11 @@ impl Runtime {
                             primary,
                         );
                     } else if p.primary && p.enabled && command.enabled {
-                        surface.fill(rect, &self.theme.accent.to_hex(), 2);
+                        surface.fill(
+                            rect,
+                            &p.primary_color.unwrap_or(self.theme.accent).to_hex(),
+                            2,
+                        );
                         surface.text_centered(rect, text, &self.theme.bg.to_hex(), 12, true);
                     } else if p.enabled {
                         style.button(surface, rect, &text, &action, command.checked);
@@ -876,10 +880,15 @@ impl Runtime {
         }
         if let Some(name) = &p.icon {
             if rect.width >= 36 && rect.height >= 16 && matches!(p.widget, Widget::Button { .. }) {
+                let icon_size = p
+                    .icon_size
+                    .min(rect.height.saturating_sub(4))
+                    .min(rect.width.saturating_sub(20));
+                let inset = icon_size + 8;
                 for node in &mut surface.nodes[node_start..] {
                     if let crate::native_surface::Primitive::Text { rect, .. } = node {
-                        rect.x = rect.x.saturating_add(24);
-                        rect.width = rect.width.saturating_sub(24);
+                        rect.x = rect.x.saturating_add(inset);
+                        rect.width = rect.width.saturating_sub(inset);
                     }
                 }
                 let color = if p.primary && p.enabled {
@@ -901,9 +910,9 @@ impl Runtime {
                     surface,
                     PixelRect::new(
                         rect.x + 10,
-                        rect.y + rect.height.saturating_sub(16) / 2,
-                        16,
-                        16,
+                        rect.y + rect.height.saturating_sub(icon_size) / 2,
+                        icon_size,
+                        icon_size,
                     ),
                     name,
                     &color.to_hex(),

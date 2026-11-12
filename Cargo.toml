@@ -1,6 +1,6 @@
 [package]
 name = "starkit"
-version = "0.22.2"
+version = "0.23.0"
 edition = "2021"
 rust-version = "1.90"
 description = "A native terminal application framework with cell, graphical and SSH media presentation"

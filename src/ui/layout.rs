@@ -67,8 +67,10 @@ pub struct Placement {
     pub modal: bool,
     pub columns: Vec<ColumnPlacement>,
     pub primary: bool,
+    pub primary_color: Option<crate::theme::color::Rgb>,
     pub navigation: bool,
     pub icon: Option<String>,
+    pub icon_size: u16,
     pub font_size: Option<u16>,
     pub padding: [u16; 2],
     pub striped: bool,
@@ -326,8 +328,10 @@ fn place(
         modal,
         columns: table_columns(node, body, frame.viewport)?,
         primary: node.primary,
+        primary_color: node.primary_color,
         navigation: node.navigation,
         icon: node.icon.clone(),
+        icon_size: node.icon_size,
         font_size: node.font_size,
         padding: [px, py],
         striped: node.striped,
@@ -575,8 +579,10 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) -> anyhow::Result<()> {
         if let Some((node, enabled)) = nodes.get(&p.id) {
             let previous = p.list_layout(frame.viewport);
             p.primary = node.primary;
+            p.primary_color = node.primary_color;
             p.navigation = node.navigation;
             p.icon = node.icon.clone();
+            p.icon_size = node.icon_size;
             p.font_size = node.font_size;
             p.striped = node.striped;
             p.widget = node.widget.clone();

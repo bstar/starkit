@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.23.0 action presentation)
+
+- Per-action theme color overrides and bounded physical icon sizes for shared buttons, preserving default styling for existing apps.
+
 ### Added (0.22.2 burn icon)
 
 - Shared flame icon uses portable vector paths, including on existing native-path frontends.
