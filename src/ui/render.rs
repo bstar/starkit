@@ -574,7 +574,89 @@ impl Runtime {
                     } else {
                         command.label.clone()
                     };
-                    if p.navigation {
+                    if self.native_flat && matches!(p.widget, Widget::Checkbox { .. }) {
+                        let enabled = p.enabled && command.enabled;
+                        let side = 16.min(rect.height).min(rect.width.saturating_sub(8));
+                        let square = PixelRect::new(
+                            rect.x + 4.min(rect.width),
+                            rect.y + rect.height.saturating_sub(side) / 2,
+                            side,
+                            side,
+                        );
+                        let color = if enabled && (command.checked || focused) {
+                            self.theme.accent
+                        } else if enabled {
+                            self.theme.border
+                        } else {
+                            self.theme.dim
+                        };
+                        surface.fill(rect, &self.theme.panel_bg.to_hex(), 0);
+                        surface.fill(
+                            square,
+                            &if command.checked {
+                                color
+                            } else {
+                                self.theme.bg
+                            }
+                            .to_hex(),
+                            2,
+                        );
+                        if side > 1 {
+                            surface.nodes.push(crate::native_surface::Primitive::Path {
+                                rect: square,
+                                points: vec![
+                                    [0, 0],
+                                    [side - 1, 0],
+                                    [side - 1, side - 1],
+                                    [0, side - 1],
+                                    [0, 0],
+                                ],
+                                color: color.to_hex(),
+                                width: 1,
+                            });
+                            if command.checked {
+                                crate::native_surface::icons::draw(
+                                    surface,
+                                    square,
+                                    "check",
+                                    &self.theme.bg.to_hex(),
+                                );
+                            }
+                            if focused && rect.height >= side + 4 && rect.width >= side + 8 {
+                                let ring =
+                                    PixelRect::new(square.x - 2, square.y - 2, side + 4, side + 4);
+                                surface.nodes.push(crate::native_surface::Primitive::Path {
+                                    rect: ring,
+                                    points: vec![
+                                        [0, 0],
+                                        [side + 3, 0],
+                                        [side + 3, side + 3],
+                                        [0, side + 3],
+                                        [0, 0],
+                                    ],
+                                    color: self.theme.accent.to_hex(),
+                                    width: 1,
+                                });
+                            }
+                        }
+                        surface.text(
+                            PixelRect::new(
+                                rect.x + 28.min(rect.width),
+                                rect.y,
+                                rect.width.saturating_sub(32),
+                                rect.height,
+                            ),
+                            &command.label,
+                            &if enabled {
+                                self.theme.fg
+                            } else {
+                                self.theme.dim
+                            }
+                            .to_hex(),
+                            p.font_size.unwrap_or(12),
+                            false,
+                        );
+                    } else if p.navigation {
                         let bg = if command.checked {
                             self.theme.bg.mix(self.theme.accent, 0.12)
                         } else if focused {
@@ -932,7 +1014,8 @@ impl Runtime {
         }
         if ((focused
             && !p.navigation
-            && !(self.native_flat && matches!(p.widget, Widget::Custom { .. })))
+            && !(self.native_flat
+                && matches!(p.widget, Widget::Custom { .. } | Widget::Checkbox { .. })))
             || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p))
             && rect.width > 2
             && rect.height > 2

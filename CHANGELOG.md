@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.23.1 flat checkboxes)
+
+- Flat graphical checkboxes use a compact square, vector checkmark and left-aligned label. Focus rings surround the square; the full label remains clickable.
+
 ### Added (0.23.0 action presentation)
 
 - Per-action theme color overrides and bounded physical icon sizes for shared buttons, preserving default styling for existing apps.
