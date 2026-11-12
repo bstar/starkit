@@ -68,6 +68,7 @@ pub struct Placement {
     pub columns: Vec<ColumnPlacement>,
     pub primary: bool,
     pub navigation: bool,
+    pub icon: Option<String>,
     pub font_size: Option<u16>,
     pub padding: [u16; 2],
     pub striped: bool,
@@ -319,6 +320,7 @@ fn place(
         columns: table_columns(node, body, frame.viewport)?,
         primary: node.primary,
         navigation: node.navigation,
+        icon: node.icon.clone(),
         font_size: node.font_size,
         padding: [px, py],
         striped: node.striped,
@@ -567,6 +569,7 @@ pub(super) fn refresh(view: &View, frame: &mut Frame) -> anyhow::Result<()> {
             let previous = p.list_layout(frame.viewport);
             p.primary = node.primary;
             p.navigation = node.navigation;
+            p.icon = node.icon.clone();
             p.font_size = node.font_size;
             p.striped = node.striped;
             p.widget = node.widget.clone();

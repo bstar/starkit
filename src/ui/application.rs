@@ -19,6 +19,18 @@ use crate::{
 /// presentation. Return true from `tick` only when visible state changed.
 pub trait Application: super::content::Content {
     fn view(&self) -> View;
+    /// Opt into same-session executable updates. KIT checks only while the app
+    /// explicitly permits replacement; jobs must remain guarded by the app.
+    fn live_updates(&self) -> bool {
+        false
+    }
+    fn reload_ready(&self) -> bool {
+        false
+    }
+    fn prepare_reload(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn reload_failed(&mut self, _message: &str) {}
     fn commands(&self) -> Vec<Command>;
     fn event(&mut self, event: Event);
     /// The application's requested control; hidden controls retain their request.
@@ -120,6 +132,8 @@ pub struct Host<A: Application> {
     presentation_requested: bool,
     repaint_requested: bool,
     failure: Option<String>,
+    #[cfg(unix)]
+    reloader: Option<super::reload::Probe>,
 }
 impl<A: Application> Host<A> {
     pub fn new(app: A, theme: Theme) -> anyhow::Result<Self> {
@@ -130,7 +144,15 @@ impl<A: Application> Host<A> {
         if let Some(id) = app.focus_request() {
             ui.request_focus(id)?;
         }
+        #[cfg(unix)]
+        let reloader = if app.live_updates() {
+            super::reload::Probe::new()
+        } else {
+            None
+        };
         Ok(Self {
+            #[cfg(unix)]
+            reloader,
             app,
             ui,
             #[cfg(all(feature = "terminal-graphics", unix))]
@@ -338,6 +360,16 @@ impl<A: Application> Controller for Host<A> {
     fn tick(&mut self) {
         if self.app.tick() {
             self.refresh();
+        }
+        if self.app.reload_ready() {
+            if let Some(path) = self.reloader.as_mut().and_then(|p| p.replacement()) {
+                let error = match self.app.prepare_reload() {
+                    Ok(()) => super::reload::replace(&path).to_string(),
+                    Err(error) => format!("{error:#}"),
+                };
+                self.app.reload_failed(&error);
+                self.refresh();
+            }
         }
     }
     fn scene_dirty(&self) -> bool {

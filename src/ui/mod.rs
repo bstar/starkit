@@ -7,6 +7,7 @@ pub mod application;
 pub mod command;
 pub mod content;
 mod layout;
+mod reload;
 mod render;
 mod runtime;
 
@@ -167,6 +168,8 @@ pub struct Node {
     /// Semantic primary action, rendered with the shared accent.
     pub primary: bool,
     pub navigation: bool,
+    /// Framework vector icon beside a button label; independent of font glyphs.
+    pub icon: Option<String>,
     /// Subtle alternating rows for dense data lists.
     pub striped: bool,
     /// Modal menu origin in viewport units; KIT clamps it to the visible area.
@@ -192,11 +195,16 @@ impl Node {
             font_size: None,
             primary: false,
             navigation: false,
+            icon: None,
             striped: false,
             popup_position: None,
         }
     }
     /// A sidebar/tab destination; selection comes from the shared command state.
+    pub fn icon(mut self, name: impl Into<String>) -> Self {
+        self.icon = Some(name.into());
+        self
+    }
     pub fn navigation(mut self) -> Self {
         self.navigation = true;
         self
@@ -611,6 +619,44 @@ mod tests {
             let after = ui.frame(viewport).unwrap();
             assert!(after.get(&"one".into()).unwrap().area.x > one.x);
             assert!(ui.layout_count() > layouts);
+        }
+    }
+    #[test]
+    fn flat_pane_focus_follows_the_control_and_icons_keep_labels_clear() {
+        let view = View::new(Node::row(
+            "root",
+            vec![
+                Node::pane(
+                    "left",
+                    Heading::new("Staging"),
+                    Node::button("one", "open").icon("folder"),
+                ),
+                Node::pane(
+                    "right",
+                    Heading::new("Files"),
+                    Node::button("two", "open").icon("archive"),
+                ),
+            ],
+        ));
+        let mut ui = Runtime::new(view, registry(), theme()).unwrap();
+        ui.native_flat(true);
+        for (control, pane, other) in [("one", "left", "right"), ("two", "right", "left")] {
+            ui.request_focus(control.into()).unwrap();
+            let surface = ui.render_surface(Viewport::graphics(800, 480)).unwrap();
+            let frame = ui.current_frame().unwrap();
+            let selected = frame.get(&pane.into()).unwrap().area;
+            let inactive = frame.get(&other.into()).unwrap().area;
+            let accent = ui.visual.colors.accent.clone();
+            let has_outline = |area: crate::ratatui::layout::Rect| {
+                surface.nodes.iter().any(|n| matches!(n,
+                crate::native_surface::Primitive::Border { rect, color, .. } if rect.x == area.x && rect.y == area.y && rect.width == area.width && rect.height == area.height && color == &accent))
+            };
+            assert!(has_outline(selected));
+            assert!(!has_outline(inactive));
+            assert!(surface
+                .nodes
+                .iter()
+                .any(|n| matches!(n, crate::native_surface::Primitive::Path { .. })));
         }
     }
     #[test]

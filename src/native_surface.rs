@@ -1,5 +1,6 @@
 //! Bounded, reusable native surfaces. Coordinates are pixels local to the surface.
 //! Hosts place the surface; its owner retains layout and interaction semantics.
+pub mod icons;
 use serde::{Deserialize, Serialize};
 
 pub mod classic;

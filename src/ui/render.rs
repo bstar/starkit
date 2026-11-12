@@ -847,6 +847,42 @@ impl Runtime {
                 0,
             ),
         }
+        if let Some(name) = &p.icon {
+            if rect.width >= 36 && matches!(p.widget, Widget::Button { .. }) {
+                for node in &mut surface.nodes[node_start..] {
+                    if let crate::native_surface::Primitive::Text { rect, .. } = node {
+                        rect.x = rect.x.saturating_add(24);
+                        rect.width = rect.width.saturating_sub(24);
+                    }
+                }
+                let color = if p.primary && p.enabled {
+                    self.theme.bg
+                } else if p.navigation
+                    && self
+                        .registry
+                        .get(match &p.widget {
+                            Widget::Button { command } => command,
+                            _ => unreachable!(),
+                        })
+                        .is_some_and(|c| c.checked)
+                {
+                    self.theme.accent
+                } else {
+                    self.theme.dim
+                };
+                crate::native_surface::icons::draw(
+                    surface,
+                    PixelRect::new(
+                        rect.x + 10,
+                        rect.y + rect.height.saturating_sub(16) / 2,
+                        16,
+                        16,
+                    ),
+                    name,
+                    &color.to_hex(),
+                );
+            }
+        }
         for node in &mut surface.nodes[node_start..] {
             if let crate::native_surface::Primitive::Text { text, .. } = node {
                 if text.len() > 8192 {
@@ -858,8 +894,10 @@ impl Runtime {
                 }
             }
         }
-        if ((focused && !p.navigation)
-            || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p) && !self.native_flat)
+        if ((focused
+            && !p.navigation
+            && !(self.native_flat && matches!(p.widget, Widget::Custom { .. })))
+            || matches!(p.widget, Widget::Pane(_)) && pane_focused(frame, p))
             && rect.width > 2
             && rect.height > 2
         {

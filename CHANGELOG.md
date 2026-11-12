@@ -8,6 +8,17 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Added (0.21 workspace presentation and idle updates)
+
+- Opt-in persistent hosts can replace a newly installed executable only after
+  the app permits it and saves its UI state. Frontends reconnect to the same
+  session; active workers are never stopped by the framework.
+- Button icons use shared bounded vector paths, independent of Nerd Font glyphs
+  and available to existing native-path frontends.
+- Flat panes now highlight the ancestor pane of the focused control. Custom
+  content retains its pane highlight without a second interior focus rectangle.
+
+
 ### Added (0.20 anchored context menus)
 
 - Shared modal menus can anchor to their invocation point, clamped within cells
