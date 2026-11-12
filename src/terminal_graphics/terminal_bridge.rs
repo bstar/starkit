@@ -18,12 +18,43 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 pub struct Attachment {
     nonce: String,
     tty: Option<File>,
+    started: bool,
+    gone: Arc<AtomicBool>,
 }
 impl Drop for Attachment {
     fn drop(&mut self) {
         let _ = emit(&self.nonce, "stop", None);
+        // Kitty replies asynchronously, including when a host is hot-reloaded.
+        // Keep raw input ownership until that reply is consumed, otherwise its
+        // newline executes STAR_KIT_BRIDGE as a command in the waiting shell.
+        if self.started && !self.gone.load(Ordering::Acquire) {
+            let tty = self.tty.take().or_else(|| {
+                OpenOptions::new()
+                    .read(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+                    .open("/dev/tty")
+                    .ok()
+            });
+            if let Some(mut tty) = tty {
+                let _ = wait_for_close(&mut tty, &self.nonce, Duration::from_secs(2));
+            }
+        }
         let _ = crate::crossterm::terminal::disable_raw_mode();
     }
+}
+fn wait_for_close(tty: &mut File, nonce: &str, timeout: Duration) -> io::Result<bool> {
+    let expected = format!("STAR_KIT_BRIDGE {nonce} gone");
+    let deadline = Instant::now() + timeout;
+    let mut lines = Lines::default();
+    while Instant::now() < deadline {
+        // Do not read ahead into keys typed for the shell after the final reply.
+        match lines.next_bounded(tty, 1)? {
+            Some(line) if line == expected => return Ok(true),
+            Some(_) => {}
+            None => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
+    Ok(false)
 }
 fn emit(nonce: &str, op: &str, data: Option<&str>) -> Result<()> {
     let value =
@@ -61,6 +92,8 @@ pub fn probe() -> Result<Option<Attachment>> {
     let mut attachment = Attachment {
         nonce,
         tty: Some(tty),
+        started: false,
+        gone: Arc::new(AtomicBool::new(false)),
     };
     emit(&attachment.nonce, "probe", None)?;
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -82,6 +115,9 @@ struct Lines {
 }
 impl Lines {
     fn next(&mut self, tty: &mut File) -> io::Result<Option<String>> {
+        self.next_bounded(tty, 8192)
+    }
+    fn next_bounded(&mut self, tty: &mut File, limit: usize) -> io::Result<Option<String>> {
         loop {
             if let Some(end) = self.pending.iter().position(|&b| b == b'\n') {
                 let bytes = self.pending.drain(..=end).collect::<Vec<_>>();
@@ -92,7 +128,7 @@ impl Lines {
                     });
             }
             let mut chunk = [0; 8192];
-            match tty.read(&mut chunk) {
+            match tty.read(&mut chunk[..limit]) {
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -139,6 +175,7 @@ impl Attachment {
         let stopped = Arc::clone(&stop);
         let initial_cells = Arc::new(std::sync::atomic::AtomicU8::new(0));
         let detected_cells = initial_cells.clone();
+        let gone = self.gone.clone();
         let input = std::thread::spawn(move || {
             let prefix = format!("STAR_KIT_BRIDGE {nonce} ");
             let mut lines = Lines::default();
@@ -147,6 +184,7 @@ impl Attachment {
                     if let Some(line) = lines.next(&mut tty)? {
                         if let Some(data) = line.strip_prefix(&prefix) {
                             if data == "gone" {
+                                gone.store(true, Ordering::Release);
                                 break;
                             }
                             let message: ClientMessage = serde_json::from_str(data)?;
@@ -172,6 +210,7 @@ impl Attachment {
             result
         });
         let result = (|| -> Result<()> {
+            self.started = true;
             emit(&self.nonce, "start", None)?;
             let mut reader = BufReader::new(socket);
             while let Some(message) = read_message::<ServerMessage>(&mut reader)? {
@@ -217,6 +256,36 @@ impl Attachment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delayed_shutdown_reply_is_consumed_without_reading_the_next_shell_command() {
+        use std::os::fd::OwnedFd;
+        let (input, mut terminal) = UnixStream::pair().unwrap();
+        input.set_nonblocking(true).unwrap();
+        let mut tty = File::from(OwnedFd::from(input));
+        let sender = std::thread::spawn(move || {
+            terminal.write_all(b"STAR_KIT_BRIDGE other gone\n").unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            terminal.write_all(b"STAR_KIT_BRIDGE test ").unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            terminal.write_all(b"gone\nprintf shell-input\n").unwrap();
+            terminal
+        });
+        assert!(wait_for_close(&mut tty, "test", Duration::from_secs(1)).unwrap());
+        let _terminal = sender.join().unwrap();
+        let mut keys = [0; 128];
+        let count = tty.read(&mut keys).unwrap();
+        assert_eq!(&keys[..count], b"printf shell-input\n");
+    }
+    #[test]
+    fn missing_shutdown_reply_has_a_bounded_wait() {
+        use std::os::fd::OwnedFd;
+        let (input, _terminal) = UnixStream::pair().unwrap();
+        input.set_nonblocking(true).unwrap();
+        let mut tty = File::from(OwnedFd::from(input));
+        let started = Instant::now();
+        assert!(!wait_for_close(&mut tty, "test", Duration::from_millis(20)).unwrap());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
     #[test]
     fn bridge_lines_preserve_boundaries_and_report_closed_terminal() {
         let mut lines = Lines {

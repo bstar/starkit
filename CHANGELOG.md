@@ -8,6 +8,10 @@ On 0.x, an API change is a minor bump and a fix is a patch.
 
 ## [Unreleased]
 
+### Fixed (0.22.1 bridge shutdown)
+
+- Consume the asynchronous terminal bridge shutdown reply before returning input to the shell, including after UI updates. Preserve shell keys queued after the reply and bound missing-client waits.
+
 ### Added (0.22.0 candidate)
 
 - Opt-in physical 1 px flat pane borders, including focused outlines. Existing applications retain 2 px outlines.
